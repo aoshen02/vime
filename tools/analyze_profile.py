@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 vLLM Decode Profile Analyzer
-============================
+==============================
 Analyzes PyTorch profiler traces (.trace.json.gz) from vLLM decode workers.
 
 Usage:

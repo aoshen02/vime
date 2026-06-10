@@ -264,7 +264,7 @@ export SWE_BOOT_CONCURRENCY="${SWE_BOOT_CONCURRENCY:-6}"
 
 # --- trajectory fan-out ---
 # generate() emits one Sample per segment (reducer splits reward/K);
-# group_id is shared so the per-rollout-mean loss reducer still counts
+# rollout_id is shared so the per-rollout-mean loss reducer still counts
 # the trajectory once.
 # --rollout-max-response-len caps one model turn. The custom generate function
 # uses --rollout-max-context-len as the multi-turn prompt+response budget.
