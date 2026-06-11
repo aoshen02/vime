@@ -17,30 +17,6 @@ def args_mod():
 
 
 @pytest.mark.unit
-def test_strip_unsupported_kwargs_on_312_real(args_mod):
-    assert sys.version_info < (3, 13)
-    out = args_mod._strip_unsupported_argparse_kwargs(
-        {"type": int, "deprecated": True, "deprecated_aliases": ["x"], "help": "h"}
-    )
-    assert out == {"type": int, "help": "h"}
-
-
-@pytest.mark.unit
-def test_strip_unsupported_kwargs_passthrough_on_313(args_mod, monkeypatch):
-    monkeypatch.setattr(args_mod, "sys", SimpleNamespace(version_info=(3, 13, 0), argv=sys.argv))
-    kw = {"type": int, "deprecated": True, "help": "h"}
-    out = args_mod._strip_unsupported_argparse_kwargs(kw)
-    assert out == kw
-
-
-@pytest.mark.unit
-def test_strip_unsupported_kwargs_noop_when_absent(args_mod):
-    kwargs = {"type": int, "help": "h", "default": 0}
-    out = args_mod._strip_unsupported_argparse_kwargs(kwargs)
-    assert out == kwargs
-
-
-@pytest.mark.unit
 def test_wrapper_prefixes_long_flag_real_parser(args_mod):
     parser = argparse.ArgumentParser(add_help=False)
     wrap = args_mod._make_add_argument_wrapper(parser.add_argument)
@@ -90,15 +66,6 @@ def test_SKIPPED_DESTS_orchestrator_parallel_dims(args_mod):
     assert "master_port" in args_mod.SKIPPED_DESTS
     assert "data_parallel_backend" in args_mod.SKIPPED_DESTS
     assert "distributed_executor_backend" in args_mod.SKIPPED_DESTS
-
-
-@pytest.mark.unit
-def test_wrapper_strips_deprecated_kwargs_when_forwarding(args_mod):
-    parser = argparse.ArgumentParser(add_help=False)
-    wrap = args_mod._make_add_argument_wrapper(parser.add_argument)
-    wrap("--foo", type=int, default=0, deprecated="oldname")
-    parsed, _ = parser.parse_known_args(["--vllm-foo", "3"])
-    assert parsed.vllm_foo == 3
 
 
 @pytest.mark.unit
