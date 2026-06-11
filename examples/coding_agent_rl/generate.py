@@ -13,8 +13,8 @@ Wire-up:
        delegating segment-to-``Sample`` fan-out to ``vime.agent.trajectory``.
 
 All sandbox-side details live in ``sandbox.py``; the LLM plumbing
-(Anthropic <-> vLLM ``/inference/v1/generate``, token capture, 3-kind segment
-split) uses ``vime.agent.adapters.AnthropicAdapter``.
+(Anthropic <-> vLLM /inference/v1/generate, token capture, 3-kind segment split) uses
+``vime.agent.adapters.AnthropicAdapter``.
 
 Dataset row ``metadata`` schema::
 
