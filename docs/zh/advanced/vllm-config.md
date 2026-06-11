@@ -290,7 +290,7 @@ python train.py \
 ```bash
 --router-policy round_robin     # 简单轮询
 --router-policy consistent_hash # 多轮会话亲和
---router-policy cache_aware     # 缓存感知路由
+--router-policy power_of_two    # 在 worker 间做负载均衡
 ```
 
 ### 多轮 Agent 的会话亲和路由
