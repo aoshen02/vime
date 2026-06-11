@@ -11,9 +11,8 @@ Since vime may contain temporary patches for vllm/megatron, to avoid potential e
 
 **vime** supports multiple NVIDIA GPU hardware platforms:
 
-- **GB200 / GB300**
+- **GB/B200, 300 Series**
 - **H100 / H200**
-- **A100**
 
 **Important Notes**:
 - Latest Docker images are compatible with both B-series and H-series GPUs without additional configuration
