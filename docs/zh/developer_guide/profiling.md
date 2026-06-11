@@ -100,8 +100,6 @@ curl http://127.0.0.1:3521/workers
 
 脚本通过router的`/workers`列表，对所有worker调用`/start_profile`或`/stop_profile`。
 
-**说明：** 当前 vLLM 路径下，请通过 `--vllm-profiler-config` 配置 profiling；`tools/profile_rollout.py` 仅负责批量转发 `start_profile` / `stop_profile`。
-
 ### 启动Profiling
 
 ```bash

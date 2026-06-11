@@ -100,8 +100,6 @@ Returns each worker's `url` and `is_healthy`.
 
 The script reads the router's `/workers` list and calls `/start_profile` or `/stop_profile` on every worker.
 
-**Note:** For the current vLLM path, configure profiling via `--vllm-profiler-config`; `tools/profile_rollout.py` only fans out `start_profile` / `stop_profile`.
-
 ### Start Profiling
 
 ```bash
