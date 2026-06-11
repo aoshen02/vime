@@ -290,7 +290,6 @@ You can configure the routing policy:
 ```bash
 --router-policy round_robin     # Simple round-robin
 --router-policy consistent_hash # Session affinity for multi-turn
---router-policy power_of_two    # Load balancing across workers
 ```
 
 ### Session-Affinity Routing for Multi-Turn Agents
