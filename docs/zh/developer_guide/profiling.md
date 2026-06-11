@@ -126,7 +126,7 @@ python tools/profile_rollout.py \
 在sleep_rollout等待期间，执行步骤如下：
 
 1. `profile_rollout.py --action start`
-2. 向router或**直连worker**发送少量completion请求（通常3～4条即可，trace会很大）
+2. 向router或**直连worker**发送少量completion请求（通常2～4条即可，trace会很大）
 3. 如果依赖自动落盘，要注意 `max_iterations` 的停止条件是 `> N`。例如 `max_iterations=3` 时，需要发 4 条请求；否则请手动执行 `profile_rollout.py --action stop`
 4. 在`torch_profiler_dir`查看trace
 

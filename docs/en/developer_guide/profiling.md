@@ -126,7 +126,7 @@ python tools/profile_rollout.py \
 While `sleep_rollout` is waiting:
 
 1. `profile_rollout.py --action start`
-2. Send a few completion requests to the router or **directly to a worker** (3-4 is usually enough; traces get large)
+2. Send a few completion requests to the router or **directly to a worker** (2-4 is usually enough; traces get large)
 3. If relying on auto-flush, remember that `max_iterations` stops after `> N` steps. For example, `max_iterations=3` needs 4 requests; otherwise call `profile_rollout.py --action stop` manually.
 4. Inspect traces under `torch_profiler_dir`
 
