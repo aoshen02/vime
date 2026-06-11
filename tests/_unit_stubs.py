@@ -18,8 +18,8 @@ Patterns
 * **Scoped stubs** (``save_sys_modules`` / ``restore_sys_modules``): pop, install,
   import, then restore inside a module-scoped fixture so collection stays clean.
 
-Import via ``import _unit_stubs`` (``tests/`` is on ``sys.path`` via
-``pyproject.toml`` ``pythonpath`` or the script directory for ``python tests/…``).
+Import via ``import _unit_stubs`` after prepending ``tests/`` to ``sys.path``
+(each test file bootstraps this; CI runs ``python tests/…`` or ``python tests/utils/…``).
 """
 
 from __future__ import annotations

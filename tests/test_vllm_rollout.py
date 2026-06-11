@@ -5,9 +5,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import sys
 from argparse import Namespace
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock
+
+_tests_root = Path(__file__).resolve().parent
+if str(_tests_root) not in sys.path:
+    sys.path.insert(0, str(_tests_root))
 
 import _unit_stubs
 import numpy as np
