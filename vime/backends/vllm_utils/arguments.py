@@ -1,51 +1,28 @@
 """vLLM rollout backend argument definitions.
 
-- Wholesale-imports ``AsyncEngineArgs.add_cli_args(parser)`` with a wrapper that
-  prefixes every flag with ``--vllm-`` and every dest with ``vllm_``.
-- Adds a small set of vime-specific orchestration extras (router endpoint,
-  server concurrency) that are not part of vllm's native CLI.
-
-vllm is launched as a subprocess (``vllm serve``); we forward each
-``args.vllm_*`` value that differs from its vllm-side default via
-``get_vllm_cli_action_table()`` (consumed by ``vllm_engine.launch_server_process``).
+Wholesale-imports ``AsyncEngineArgs.add_cli_args`` prefixed ``--vllm-``/``vllm_``,
+adds vime orchestration extras, and provides ``get_vllm_cli_action_table`` for
+subprocess CLI forwarding (vLLM is launched as ``vllm serve``).
 """
 
 import argparse
-import logging
 import sys
 
 from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from vime.utils.http_utils import _wrap_ipv6
-
-logger = logging.getLogger(__name__)
-
-
-# argparse 3.13+ accepts ``deprecated`` / ``deprecated_aliases`` on add_argument;
-# vLLM may pass them while using BooleanOptionalAction on Python 3.12, which rejects them.
-# Strip these kwargs on older Python so AsyncEngineArgs.add_cli_args() doesn't crash.
-_ARGPARSE_UNSUPPORTED_KWARGS = frozenset({"deprecated", "deprecated_aliases"})
-
-
-def _strip_unsupported_argparse_kwargs(kwargs: dict) -> dict:
-    if sys.version_info >= (3, 13):
-        return kwargs
-    return {k: v for k, v in kwargs.items() if k not in _ARGPARSE_UNSUPPORTED_KWARGS}
 
 
 def _detect_user_provided_dests(parser, argv: list[str]) -> tuple[set[str], dict[str, str]]:
     """Return (user_provided, raw_values) extracted from ``argv``.
 
-    ``user_provided``: dests the user explicitly named on the command line. Lets
-    ``launch_server_process`` disambiguate "user accepted the parsed default"
-    from "user passed a value that happens to equal the parsed default"
-    (e.g. ``--vllm-gpu-memory-utilization 0.92`` to restore vllm's upstream value).
+    ``user_provided``: dests explicitly named on the CLI — used to distinguish "user
+    passed a value equaling the default" from "user accepted the parsed default".
 
-    ``raw_values``: per-dest mapping to the user's literal CLI string. Used when
-    forwarding dataclass-backed flags such as ``--vllm-compilation-config`` —
-    vllm's parser converts the JSON into a runtime object whose ``asdict()``
-    snapshot contains internal/normalized fields the subprocess parser rejects,
-    so we forward the original raw string instead.
+    ``raw_values``: literal CLI strings per dest — used to forward dataclass-backed
+    flags (e.g. ``--vllm-compilation-config``) verbatim instead of re-serializing
+    the parsed runtime object.
     """
     flag_to_dest: dict[str, str] = {}
     for action in parser._actions:
@@ -75,45 +52,33 @@ def _detect_user_provided_dests(parser, argv: list[str]) -> tuple[set[str], dict
     return user, raw
 
 
-# Dests already managed at vime / megatron level (orchestrator decides them)
-# or non-applicable to subprocess `vllm serve` mode.
+# Dests orchestrator-owned or non-applicable to subprocess `vllm serve` mode.
 SKIPPED_DESTS = [
-    # model identity: hf_checkpoint owns this
     "model",
     "served_model_name",
     "config",
-    # tokenizer: vime uses its own
     "tokenizer",
     "tokenizer_mode",
     "tokenizer_revision",
-    # security toggle: always-on for vime's curated checkpoints
     "trust_remote_code",
-    # seed: vime computes args.seed + rank
     "seed",
-    # dtype: vime --fp16 / training config owns this
     "dtype",
-    # tp_size is fully owned by the orchestrator (rollout_num_gpus_per_engine
-    # // pp_size) — see validate_args. pipeline_parallel_size and
-    # data_parallel_size remain user-controllable and auto-forward to the vllm
-    # subprocess when set.
+    # TP is orchestrator-owned; PP/DP remain user-controllable and auto-forward.
     "tensor_parallel_size",
-    # multi-node logical engine (orchestrator-owned)
     "nnodes",
     "node_rank",
     "master_addr",
     "master_port",
     "data_parallel_backend",
     "distributed_executor_backend",
-    # network: engine launcher decides per-engine port/host
     "port",
     "host",
-    # vime decides this based on training algo, not user CLI
     "enable_return_routed_experts",
 ]
 
 
 def add_vllm_router_arguments(parser):
-    """vime's vllm-router orchestration flags (where to reach the router; not in vllm-router's CLI)."""
+    """vime's vllm-router endpoint flags (host/port are orchestrator-owned, excluded from RouterArgs CLI)."""
     parser.add_argument(
         "--vllm-router-ip",
         type=str,
@@ -126,23 +91,16 @@ def add_vllm_router_arguments(parser):
         default=None,
         help="Port of the vllm router.",
     )
-    # Bare ``--router-request-timeout-secs`` (dest ``router_request_timeout_secs``):
-    # this is a genuine vllm-router knob (a RouterArgs field), so it shares the
-    # ``--router-*`` namespace with policy / cache_threshold / retries / … rather
-    # than vime's ``--vllm-router-*`` endpoint flags. Only --vllm-router-ip and
-    # --vllm-router-port keep the vllm_ prefix (RouterArgs excludes host/port from
-    # its CLI via exclude_host_port=True, so vime owns those two outright).
+    # Bare --router-* namespace: this is a real vllm-router knob (RouterArgs field);
+    # host/port use --vllm-router-* because RouterArgs excludes them (exclude_host_port=True).
     parser.add_argument(
         "--router-request-timeout-secs",
         type=int,
         default=14400,
         help="Timeout (seconds) for HTTP requests vime makes to the vllm router.",
     )
-    # dest is ``router_policy`` (NOT ``vllm_router_policy``): this is a real
-    # vllm-router knob, so it must flow into ``RouterArgs.from_cli_args(args,
-    # use_router_prefix=True)`` (which reads ``args.router_policy``) AND is read
-    # by ``vllm_rollout.generate`` to decide whether to send the ``x-session-id``
-    # header for consistent-hash session-affinity routing (routing replay).
+    # dest=router_policy (not vllm_router_policy): flows into RouterArgs.from_cli_args and
+    # is read by vllm_rollout.generate to decide whether to send x-session-id headers.
     parser.add_argument(
         "--vllm-router-policy",
         type=str,
@@ -151,22 +109,14 @@ def add_vllm_router_arguments(parser):
         choices=["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash"],
         help=(
             "vllm-router load-balancing policy. Defaults to 'consistent_hash' for "
-            "session-affinity routing replay (routes a sample's requests to the same "
-            "engine via the x-session-id header)."
+            "session-affinity routing replay via the x-session-id header."
         ),
     )
     return parser
 
 
 def _make_add_argument_wrapper(target_add_argument):
-    """Return a wrapper around `add_argument` that skips/prefixes flags + dest.
-
-    The wrapper:
-      - Drops the call entirely when the canonical dest is in SKIPPED_DESTS.
-      - Prefixes every flag (``-x``, ``--foo-bar``) with ``--vllm-``.
-      - Prefixes any explicit ``dest=`` with ``vllm_``.
-      - Forwards everything else unchanged to ``target_add_argument``.
-    """
+    """Return a wrapper that skips dests in SKIPPED_DESTS and prefixes flags/dest with ``vllm-``/``vllm_``."""
 
     def wrapper(*name_or_flags, **kwargs):
         # determine canonical dest for skip check
@@ -193,9 +143,6 @@ def _make_add_argument_wrapper(target_add_argument):
             if not new_kwargs["dest"].startswith("vllm_"):
                 new_kwargs["dest"] = f"vllm_{new_kwargs['dest']}"
 
-        # Strip argparse kwargs that Python <3.13 rejects (vLLM passes them on newer Python).
-        new_kwargs = _strip_unsupported_argparse_kwargs(new_kwargs)
-
         return target_add_argument(*new_flags, **new_kwargs)
 
     return wrapper
@@ -204,16 +151,12 @@ def _make_add_argument_wrapper(target_add_argument):
 def add_vllm_arguments(parser):
     """Register --vllm-* flags into parser.
 
-    Wholesale-imports ``AsyncEngineArgs.add_cli_args(parser)`` via a
-    monkey-patched ``parser.add_argument`` AND ``parser.add_argument_group``
-    wrapper that prefixes every flag with ``--vllm-`` and every dest with
-    ``vllm_``, skipping dests listed in ``SKIPPED_DESTS`` (orchestrator-owned
-    or non-applicable to subprocess mode).
-
-    Note: vllm's EngineArgs.add_cli_args creates argument groups
-    (``parser.add_argument_group(...)``) and adds args to them. We patch both
-    ``add_argument`` and ``add_argument_group`` so prefixing happens regardless
-    of which path the vllm code takes.
+    Wholesale-imports ``AsyncEngineArgs.add_cli_args`` via a monkey-patched
+    ``parser.add_argument`` / ``parser.add_argument_group`` wrapper that prefixes
+    every flag with ``--vllm-`` and every dest with ``vllm_``, skipping dests in
+    ``SKIPPED_DESTS``. Both are patched because vLLM creates argument groups.
+    Pass a ``FlexibleArgumentParser`` so vLLM's ``deprecated`` kwarg is handled
+    natively on Python 3.12.
     """
     parser = add_vllm_router_arguments(parser)
     parser.add_argument(
@@ -264,10 +207,6 @@ def add_vllm_arguments(parser):
 
     def patched_add_argument_group(*g_args, **g_kwargs):
         group = old_parser_add_argument_group(*g_args, **g_kwargs)
-        # Patch the group's add_argument so any flag added through it gets prefixed.
-        # _ArgumentGroup also has add_argument_group / add_mutually_exclusive_group,
-        # but vllm doesn't nest groups in practice; if it ever does, we'd patch them
-        # recursively here.
         group.add_argument = _make_add_argument_wrapper(group.add_argument)
         return group
 
@@ -277,23 +216,17 @@ def add_vllm_arguments(parser):
     parser.add_argument = old_parser_add_argument
     parser.add_argument_group = old_parser_add_argument_group
 
-    # NOTE: we deliberately do NOT call ``parser.set_defaults`` for vllm flags here, because
-    # argparse.set_defaults also mutates ``action.default`` — which would make
-    # ``_forward_vllm_cli_args`` think the user accepted the vllm-side default and skip
-    # forwarding. vime-preferred defaults that genuinely differ from vllm (e.g.
-    # weight_transfer_config based on colocate) are applied explicitly in
-    # ``vllm_engine.launch_server_process``.
+    # Deliberately no set_defaults for vllm flags: argparse.set_defaults mutates action.default,
+    # which would make _forward_vllm_cli_args skip forwarding values that equal the default.
+    # vime-preferred defaults are applied explicitly in vllm_engine.launch_server_process.
 
-    # PD disaggregation / multi-group config.
-    # The CLI surface is reserved so that rollout.py's
-    # `args.prefill_num_servers is not None` check is well-defined.
+    # PD disaggregation / multi-group config
     parser.add_argument(
         "--prefill-num-servers",
         type=int,
         default=None,
         help="Number of prefill servers for PD disaggregation.",
     )
-
     parser.add_argument(
         "--vllm-config",
         type=str,
@@ -310,24 +243,35 @@ def add_vllm_arguments(parser):
 
 
 def validate_args(args):
-    """vllm-specific validation."""
+    """vLLM-specific validation."""
     args.vllm_dp_size = args.vllm_data_parallel_size
     args.vllm_pp_size = args.vllm_pipeline_parallel_size
 
     if getattr(args, "vllm_router_ip", None):
         args.vllm_router_ip = _wrap_ipv6(args.vllm_router_ip)
 
+    assert not (
+        getattr(args, "prefill_num_servers", None) is not None and getattr(args, "rollout_external", False)
+    ), "prefill_num_servers cannot be set with --rollout-external-engine-addrs."
+
+    assert not (
+        getattr(args, "vllm_config", None) is not None and getattr(args, "rollout_external", False)
+    ), "vllm_config cannot be set with --rollout-external-engine-addrs."
+
+    assert not (
+        getattr(args, "vllm_config", None) is not None and getattr(args, "prefill_num_servers", None) is not None
+    ), "vllm_config and prefill_num_servers are mutually exclusive. Use server_groups in the YAML config instead."
+
 
 def vllm_parse_args():
-    """Parse vllm flags via an independent ArgumentParser + parse_known_args.
+    """Parse vLLM flags via an independent ArgumentParser + parse_known_args.
 
-    Returns an ``argparse.Namespace`` with all attrs prefixed ``vllm_``, plus:
+    Returns a Namespace with all attrs prefixed ``vllm_``, plus:
       - ``_vllm_user_provided``: set of dests the user named on argv
-      - ``_vllm_raw_values``: per-dest mapping to the user's literal CLI string
-        (used by ``launch_server_process`` to forward dataclass-backed flags
-        verbatim instead of re-serializing the parsed runtime object).
+      - ``_vllm_raw_values``: literal CLI strings per dest (for verbatim forwarding
+        of dataclass-backed flags like ``--vllm-compilation-config``)
     """
-    parser = argparse.ArgumentParser(add_help=False)
+    parser = FlexibleArgumentParser(add_help=False)
     add_vllm_arguments(parser)
 
     # Compute default vllm_tensor_parallel_size from CLI args
@@ -346,25 +290,18 @@ def vllm_parse_args():
     return args
 
 
-# Dests that are vime-specific orchestration (not part of `vllm serve` CLI).
-# Excluded from get_vllm_cli_action_table() so launch_server_process won't
-# try to forward them as command-line flags to the subprocess.
+# Dests that are vime orchestration flags (not part of `vllm serve` CLI) — excluded
+# from get_vllm_cli_action_table() so launch_server_process won't forward them.
 _VIME_ORCHESTRATION_DESTS = frozenset(
     {
         "vllm_router_ip",
         "vllm_router_port",
-        # bare dest: shares the --router-* namespace with the other vllm-router knobs.
         "router_request_timeout_secs",
-        # vllm-router routing policy: consumed by RouterArgs.from_cli_args when
-        # launching the router; never a `vllm serve` flag.
         "router_policy",
         "vllm_server_concurrency",
         "vllm_enable_deterministic_inference",
         "vllm_weight_sync_packed",
         "vllm_tool_call_parser",
-        # vime-only flags for fine-grained deployment; consumed in vime/ray/rollout.py
-        # (start_rollout_servers / _resolve_vllm_config) and must NOT be forwarded to
-        # the per-engine "vllm serve" subprocess.
         "vllm_config",
         "prefill_num_servers",
     }
@@ -377,23 +314,17 @@ _VLLM_CLI_ACTION_TABLE_CACHE: dict[str, tuple[str, argparse.Action]] | None = No
 def get_vllm_cli_action_table():
     """Build {vime_dest -> (primary_flag, action)} mapping for forwardable flags.
 
-    Used by ``vllm_engine.launch_server_process`` to forward only the
-    ``args.vllm_*`` values that differ from their vllm-side defaults to the
-    ``vllm serve`` subprocess as CLI flags.
+    Used by ``vllm_engine.launch_server_process`` to forward ``args.vllm_*`` values
+    that differ from vllm-side defaults to the ``vllm serve`` subprocess.
 
-    Excludes:
-      - vime orchestration extras (router endpoint, server concurrency)
-      - non-vllm-prefixed actions
-
-    Cached after first build — rebuilding the parser is expensive and the
-    set of vllm CLI flags doesn't change within a process. ``launch_server_process``
-    calls this twice on the hot path.
+    Excludes vime orchestration dests and non-vllm-prefixed actions. Cached after
+    first build — rebuilding the parser is expensive.
     """
     global _VLLM_CLI_ACTION_TABLE_CACHE
     if _VLLM_CLI_ACTION_TABLE_CACHE is not None:
         return _VLLM_CLI_ACTION_TABLE_CACHE
 
-    parser = argparse.ArgumentParser(add_help=False)
+    parser = FlexibleArgumentParser(add_help=False)
     add_vllm_arguments(parser)
 
     table: dict[str, tuple[str, argparse.Action]] = {}

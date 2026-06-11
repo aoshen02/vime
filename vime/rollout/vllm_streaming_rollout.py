@@ -272,16 +272,6 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                 [float(lp), int(tid)] for lp, tid in zip(new_response_log_probs, new_response_tokens, strict=True)
             ]
 
-        sample.tokens = base_tokens + new_response_tokens
-        sample.response = base_response + (
-            state.tokenizer.decode(new_response_tokens, skip_special_tokens=skip_decode) if new_response_tokens else ""
-        )
-        sample.response_length = base_response_length + len(new_response_tokens)
-        sample.rollout_log_probs = base_log_probs + new_response_log_probs
-        if base_loss_mask is not None:
-            assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
-            sample.loss_mask = base_loss_mask + [1] * len(new_response_tokens)
-
         sample.update_from_meta_info(args, meta)
         # MoE routing replay (when requested) ships on the terminal choice. Guard the
         # value (not just key presence): vLLM includes ``routed_experts: null`` when
