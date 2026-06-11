@@ -517,10 +517,7 @@ CUSTOM_ARGS=(
 
 ## Multi-Node Training for Large-Scale MOE Models
 
-For multi-node training, first prepare a multi-node execution environment. The
-example below uses a Ray cluster; Kubernetes or other cluster launchers can also
-be used as long as they provide the same runtime environment and network
-connectivity. For the Ray-based path, run the following on node 0:
+If you use Ray for multi-node training, one option is to start the cluster as follows:
 
 ```bash
 # Node0 (HEAD)
