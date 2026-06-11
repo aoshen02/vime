@@ -19,6 +19,10 @@
 - B 卡基本功能稳定，可作为开发和测试参考，但暂无 CI 保护
 - 两种硬件平台使用完全相同的安装和启动流程
 
+**GB Support Guard**：
+- 对于 GB 系列训练，请将 `--actor-num-gpus-per-node` 设为 `4`。
+- 为了启用 MNNVL，请设置 `NCCL_CUMEM_ENABLE=1`。
+
 ### 拉取并启动 Docker 容器
 
 请执行以下命令，拉取最新镜像并启动一个交互式容器：

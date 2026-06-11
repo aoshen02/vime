@@ -19,6 +19,10 @@ Since vime may contain temporary patches for vllm/megatron, to avoid potential e
 - Megatron backend on H-series GPUs has CI protection, thoroughly validated, recommended for production environments
 - B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection
 - Both hardware platforms use identical installation and startup procedures
+
+**GB Support Guard**:
+- For GB-series runs, set `--actor-num-gpus-per-node` to `4`.
+- To enable MNNVL, set `NCCL_CUMEM_ENABLE=1`.
 ### Pull and Start Docker Container
 
 Please execute the following commands to pull the latest image and start an interactive container:
