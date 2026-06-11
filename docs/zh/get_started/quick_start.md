@@ -10,16 +10,13 @@
 
 **vime** 支持多种 NVIDIA GPU 硬件平台：
 
-- **B200 系列**：完全支持，运行步骤与 H 系列完全相同
-- **H 系列 (H100/H200)**：官方支持，具有完整的 CI 测试保护，运行稳定可靠
+- **GB200 / GB300**
+- **H100 / H200**
+- **A100**
 
 **重要说明**：
-- 最新的 Docker 镜像对 B 卡和 H 卡通用，无需额外配置
-- Megatron 后端在 H 卡上具有 CI 保护，经过充分测试验证，推荐生产环境使用
-- B 卡基本功能稳定，可作为开发和测试参考，但暂无 CI 保护
-- 两种硬件平台使用完全相同的安装和启动流程
-
-- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](https://github.com/vllm-project/vime/blob/main/build_conda.sh)。
+- 最新的 Docker 镜像适用于这些受支持的 NVIDIA GPU 平台，无需额外配置
+- 安装和启动流程在这些受支持硬件上保持一致，统一使用 Docker 方式
 
 ### 拉取并启动 Docker 容器
 
@@ -525,7 +522,9 @@ CUSTOM_ARGS=(
 
 ## 大规模 MOE 模型的多机训练
 
-为了启动多机任务，首先需要启动一个 ray 集群，即在 node 0 运行：
+启动多机训练前，需要先准备好多机执行环境。下面以 Ray 集群为例；
+也可以使用 Kubernetes 或其他集群启动方式，只要能提供一致的运行环境和网络连通性。
+如果使用 Ray 方式，可以在 node 0 运行：
 
 ```bash
 # Node0（HEAD）
@@ -536,7 +535,7 @@ ray start --head --node-ip-address ${MASTER_ADDR} \
 ray start --address=${MASTER_ADDR}:6379 --num-gpus 8
 ```
 
-在 ray 集群启动后，可以在 node 0 提交任务，例如：
+在 Ray 集群启动后，可以在 node 0 提交任务，例如：
 
 ```bash
 ray job submit --address="http://127.0.0.1:8265" \

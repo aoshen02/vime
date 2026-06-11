@@ -11,16 +11,13 @@ Since vime may contain temporary patches for vllm/megatron, to avoid potential e
 
 **vime** supports multiple NVIDIA GPU hardware platforms:
 
-- **B200 Series**: Fully supported with identical setup steps as H-series GPUs
-- **H-Series (H100/H200)**: Official support with comprehensive CI testing and stable performance
+- **GB200 / GB300**
+- **H100 / H200**
+- **A100**
 
 **Important Notes**:
-- Latest Docker images are compatible with both B-series and H-series GPUs without additional configuration
-- Megatron backend on H-series GPUs has CI protection, thoroughly validated, recommended for production environments
-- B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection
-- Both hardware platforms use identical installation and startup procedures
-
-- For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/vllm-project/vime/blob/main/build_conda.sh).
+- Latest Docker images are compatible with these supported NVIDIA GPU platforms without extra setup
+- Installation and startup follow the same Docker-based workflow across supported hardware
 
 ### Pull and Start Docker Container
 
@@ -520,7 +517,10 @@ CUSTOM_ARGS=(
 
 ## Multi-Node Training for Large-Scale MOE Models
 
-To start a multi-node task, you need to first start a Ray cluster. On node 0, run:
+For multi-node training, first prepare a multi-node execution environment. The
+example below uses a Ray cluster; Kubernetes or other cluster launchers can also
+be used as long as they provide the same runtime environment and network
+connectivity. For the Ray-based path, run the following on node 0:
 
 ```bash
 # Node0 (HEAD)
