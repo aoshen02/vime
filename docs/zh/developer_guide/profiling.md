@@ -100,6 +100,8 @@ curl http://127.0.0.1:3521/workers
 
 脚本通过router的`/workers`列表，对所有worker调用`/start_profile`或`/stop_profile`。
 
+**当前 vLLM 行为说明：** 在 vime + vLLM 这条路径里，`/start_profile` **不会**读取请求 body。可以把 `tools/profile_rollout.py` 理解成一个“批量 start/stop”的辅助工具。真正控制 `torch_profiler_dir`、`max_iterations` 等 profiler 行为的，仍然是 train 启动时传入的 `--vllm-profiler-config`。因此，这个工具里的 `--output-dir`、`--num-steps` 等运行时参数，在当前 vLLM API 路径下并不会生效。
+
 ### 启动Profiling
 
 ```bash
@@ -124,8 +126,8 @@ python tools/profile_rollout.py \
 在sleep_rollout等待期间，执行步骤如下：
 
 1. `profile_rollout.py --action start`
-2. 向router或**直连worker**发送少量completion请求（2～4条即可，trace会很大）
-3. （可选）`profile_rollout.py --action stop`；或等待`max_iterations`触发自动落盘
+2. 向router或**直连worker**发送少量completion请求（通常3～4条即可，trace会很大）
+3. 如果依赖自动落盘，要注意 `max_iterations` 的停止条件是 `> N`。例如 `max_iterations=3` 时，需要发 4 条请求；否则请手动执行 `profile_rollout.py --action stop`
 4. 在`torch_profiler_dir`查看trace
 
 请求示例（`model`使用HF checkpoint路径）：
@@ -162,7 +164,7 @@ python tools/analyze_profile.py --profile-dir /root/logs/vllm_profile --all-rank
 | 现象 | 处理 |
 |------|------|
 | `POST /start_profile` 404 | 用JSON传`--vllm-profiler-config`；重启job |
-| start成功但目录为空 | 确认curl打到worker且返回200；适当增大`max_iterations`或补发推理 |
+| start成功但目录为空 | 确认curl打到worker且返回200；若 `max_iterations=3`，请发 4 条请求，或手动执行 `stop_profile` |
 | router 503 | 确认当前job的router端口；改直连worker |
 | stop很慢或超时 | 增大`VLLM_RPC_TIMEOUT`；减少请求条数 |
 
@@ -290,16 +292,15 @@ run_profiling_session() {
   echo "=== 1/3 start_profile (all workers via router) ==="
   python tools/profile_rollout.py --router-url "${router_url}" --action start
 
-  echo "=== 2/3 send completions (direct to worker; 3 requests) ==="
-  for i in 1 2 3; do
-    curl -sS -X POST "${worker_url}/v1/completions" \
+  echo "=== 2/3 send completions (direct to worker; 4 requests so max_iterations=3 can auto-flush) ==="
+  for i in 1 2 3 4; do
+    response="$(curl -sS -X POST "${worker_url}/v1/completions" \
       -H "Content-Type: application/json" \
-      -d "{\"model\":\"${model}\",\"prompt\":\"Hello ${i}\",\"max_tokens\":32}" \
-      | head -c 400
-    echo
+      -d "{\"model\":\"${model}\",\"prompt\":\"Hello ${i}\",\"max_tokens\":32}")"
+    printf '%s\n' "${response:0:400}"
   done
 
-  echo "=== 3/3 list trace files (max_iterations=3 auto-stop; add --action stop if needed) ==="
+  echo "=== 3/3 list trace files (max_iterations=3 auto-stop uses > N; add --action stop if needed) ==="
   sleep 2
   find "${PROFILE_DIR}" -type f \( -name '*.json*' -o -name 'profiler_out_*' \) | sort
   echo "Open *.trace.json.gz in https://ui.perfetto.dev/ or run:"

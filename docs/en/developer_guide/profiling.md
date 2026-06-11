@@ -100,6 +100,8 @@ Returns each worker's `url` and `is_healthy`.
 
 The script reads the router's `/workers` list and calls `/start_profile` or `/stop_profile` on every worker.
 
+**Current vLLM behavior note:** in the vime + vLLM path, `/start_profile` does **not** read the request body. Treat `tools/profile_rollout.py` as a fan-out helper for start/stop only. Configure `torch_profiler_dir`, `max_iterations`, and other profiler behavior through `--vllm-profiler-config` at train startup. The tool's runtime flags such as `--output-dir` and `--num-steps` are therefore not effective for the current vLLM API path.
+
 ### Start Profiling
 
 ```bash
@@ -124,8 +126,8 @@ python tools/profile_rollout.py \
 While `sleep_rollout` is waiting:
 
 1. `profile_rollout.py --action start`
-2. Send a few completion requests to the router or **directly to a worker** (2–4 is enough; traces get large)
-3. (Optional) `profile_rollout.py --action stop`; or wait for `max_iterations` to auto-flush
+2. Send a few completion requests to the router or **directly to a worker** (3-4 is usually enough; traces get large)
+3. If relying on auto-flush, remember that `max_iterations` stops after `> N` steps. For example, `max_iterations=3` needs 4 requests; otherwise call `profile_rollout.py --action stop` manually.
 4. Inspect traces under `torch_profiler_dir`
 
 Example request (`model` is the HF checkpoint path):
@@ -162,7 +164,7 @@ python tools/analyze_profile.py --profile-dir /root/logs/vllm_profile --all-rank
 | Symptom | Fix |
 |------|------|
 | `POST /start_profile` 404 | Pass `--vllm-profiler-config` as JSON; restart the job |
-| Start OK but empty output dir | Confirm curl hits a worker and returns 200; increase `max_iterations` or send more requests |
+| Start OK but empty output dir | Confirm curl hits a worker and returns 200; if `max_iterations=3`, send 4 requests or call `stop_profile` manually |
 | Router 503 | Confirm the current job's router port; connect directly to a worker |
 | Slow or timed-out stop | Increase `VLLM_RPC_TIMEOUT`; reduce request count |
 
@@ -290,16 +292,15 @@ run_profiling_session() {
   echo "=== 1/3 start_profile (all workers via router) ==="
   python tools/profile_rollout.py --router-url "${router_url}" --action start
 
-  echo "=== 2/3 send completions (direct to worker; 3 requests) ==="
-  for i in 1 2 3; do
-    curl -sS -X POST "${worker_url}/v1/completions" \
+  echo "=== 2/3 send completions (direct to worker; 4 requests so max_iterations=3 can auto-flush) ==="
+  for i in 1 2 3 4; do
+    response="$(curl -sS -X POST "${worker_url}/v1/completions" \
       -H "Content-Type: application/json" \
-      -d "{\"model\":\"${model}\",\"prompt\":\"Hello ${i}\",\"max_tokens\":32}" \
-      | head -c 400
-    echo
+      -d "{\"model\":\"${model}\",\"prompt\":\"Hello ${i}\",\"max_tokens\":32}")"
+    printf '%s\n' "${response:0:400}"
   done
 
-  echo "=== 3/3 list trace files (max_iterations=3 auto-stop; add --action stop if needed) ==="
+  echo "=== 3/3 list trace files (max_iterations=3 auto-stop uses > N; add --action stop if needed) ==="
   sleep 2
   find "${PROFILE_DIR}" -type f \( -name '*.json*' -o -name 'profiler_out_*' \) | sort
   echo "Open *.trace.json.gz in https://ui.perfetto.dev/ or run:"
