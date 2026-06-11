@@ -90,7 +90,6 @@ def validate_args(args):
         )
 
 
-
 def _hf_validate_args(args, hf_config):
     def equal(x, y):
         return x == y
