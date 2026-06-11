@@ -100,7 +100,7 @@ Returns each worker's `url` and `is_healthy`.
 
 The script reads the router's `/workers` list and calls `/start_profile` or `/stop_profile` on every worker.
 
-**Current vLLM behavior note:** in the vime + vLLM path, `/start_profile` does **not** read the request body. Treat `tools/profile_rollout.py` as a fan-out helper for start/stop only. Configure `torch_profiler_dir`, `max_iterations`, and other profiler behavior through `--vllm-profiler-config` at train startup. The tool's runtime flags such as `--output-dir` and `--num-steps` are therefore not effective for the current vLLM API path.
+**Note:** For the current vLLM path, configure profiling via `--vllm-profiler-config`; `tools/profile_rollout.py` only fans out `start_profile` / `stop_profile`.
 
 ### Start Profiling
 

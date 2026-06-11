@@ -100,7 +100,7 @@ curl http://127.0.0.1:3521/workers
 
 脚本通过router的`/workers`列表，对所有worker调用`/start_profile`或`/stop_profile`。
 
-**当前 vLLM 行为说明：** 在 vime + vLLM 这条路径里，`/start_profile` **不会**读取请求 body。可以把 `tools/profile_rollout.py` 理解成一个“批量 start/stop”的辅助工具。真正控制 `torch_profiler_dir`、`max_iterations` 等 profiler 行为的，仍然是 train 启动时传入的 `--vllm-profiler-config`。因此，这个工具里的 `--output-dir`、`--num-steps` 等运行时参数，在当前 vLLM API 路径下并不会生效。
+**说明：** 当前 vLLM 路径下，请通过 `--vllm-profiler-config` 配置 profiling；`tools/profile_rollout.py` 仅负责批量转发 `start_profile` / `stop_profile`。
 
 ### 启动Profiling
 
