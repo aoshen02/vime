@@ -74,6 +74,11 @@
         {'test_file': 'test_loss_cp_invariance.py', 'num_gpus': 0},
         {'test_file': 'test_sample.py', 'num_gpus': 0},
         {'test_file': 'utils/test_hf_checkpoint_saver.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_vllm_arguments.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_vllm_engine.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_update_weight_from_tensor.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_update_weight_from_distributed.py', 'num_gpus': 0},
+        {'test_file': 'test_vllm_rollout.py', 'num_gpus': 0},
       ],
     },
 
@@ -178,7 +183,7 @@ jobs:
         shell: bash
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors cloudpickle
 <% if config.get('extra_pip_deps') %>
           pip install << config.extra_pip_deps >>
 <% endif %>
