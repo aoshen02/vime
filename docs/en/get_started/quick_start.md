@@ -11,7 +11,7 @@ Since vime may contain temporary patches for vllm/megatron, to avoid potential e
 
 **vime** supports multiple NVIDIA GPU hardware platforms:
 
-- **GB/B200, 300 Series**
+- **GB200 / GB300 / B200 / 300 Series**
 - **H100 / H200**
 
 **Important Notes**:
