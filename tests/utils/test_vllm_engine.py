@@ -426,8 +426,7 @@ def test_response_json_http_error_adds_response_text_note():
     response = _MockResponse(json_data={"error": "bad"}, text="server exploded", status_code=500)
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         mod._response_json(response)
-    if hasattr(exc_info.value, "__notes__"):
-        assert "response.text='server exploded'" in exc_info.value.__notes__
+    assert "response.text='server exploded'" in exc_info.value.__notes__
 
 
 @pytest.mark.unit

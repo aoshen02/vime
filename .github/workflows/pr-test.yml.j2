@@ -54,6 +54,7 @@
       'label': 'run-ci-cpu-unittest',
       'always': True,
       'cpu': True,
+      'python_version': '3.11',
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0},
         {'test_file': 'test_value_temperature.py', 'num_gpus': 0},
@@ -176,7 +177,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '<< config.get("python_version", "3.10") >>'
           cache: 'pip'
 
       - name: Install dependencies
