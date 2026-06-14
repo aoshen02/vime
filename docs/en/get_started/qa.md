@@ -66,18 +66,3 @@
 13. **Gradient becomes NaN or Inf during training.**
 
     You can try setting the `--no-check-for-nan-in-loss-and-grad` flag to skip the corresponding training steps.
-
-14. **When should I enable EPLB?**
-
-    If the total number of GPUs is not a multiple or divisor of the total number of experts, enable vLLM's EPLB (Expert Parallelism Load Balancer) and configure redundant experts via `--vllm-eplb-config`. For example, in a 24-GPU scenario:
-
-    ```bash
-    VLLM_ARGS=(
-      --rollout-num-gpus-per-engine 24
-      --vllm-gpu-memory-utilization 0.7
-      --vllm-data-parallel-size 3
-      --vllm-enable-expert-parallel
-      --vllm-enable-eplb
-      --vllm-eplb-config '{"num_redundant_experts": 16}'
-    )
-    ```

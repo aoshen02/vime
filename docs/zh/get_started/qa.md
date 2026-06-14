@@ -66,18 +66,3 @@
 1. **训练出现 grad NaN 或者 Inf 的情况**
 
    可以通过设置 `--no-check-for-nan-in-loss-and-grad` 来尝试跳过对应的训练步。
-
-1. **什么时候需要开启 EPLB？**
-
-   当总卡数既不能被 expert 总数整除，也不是其约数时，可以开启 vLLM 的 EPLB（Expert Parallelism Load Balancer），并通过 `--vllm-eplb-config` 配置冗余 expert。比如在 24 卡场景下：
-
-   ```bash
-   VLLM_ARGS=(
-      --rollout-num-gpus-per-engine 24
-      --vllm-gpu-memory-utilization 0.7
-      --vllm-data-parallel-size 3
-      --vllm-enable-expert-parallel
-      --vllm-enable-eplb
-      --vllm-eplb-config '{"num_redundant_experts": 16}'
-   )
-   ```
