@@ -146,3 +146,18 @@ Default batch: `rollout-batch-size=4`, `n-samples-per-prompt=2`, `global-batch-s
 - **Worker cannot join Ray / NCCL failures**: check `MASTER_ADDR`, container `/etc/hosts` (hostname must not map to `127.0.0.1`), `NCCL_SOCKET_IFNAME` / `GLOO_SOCKET_IFNAME`.
 - **`Not enough samples X for global_batch_size Y`**: keep `global-batch-size` equal to `rollout-batch-size × n-samples-per-prompt`.
 - **GPU memory full but no processes**: restart the container or run `ray stop --force` to clear stale vLLM contexts.
+
+#### EPLB
+
+When the total number of GPUs is not a multiple or divisor of the total number of experts, enable vLLM's EPLB (Expert Parallelism Load Balancer) and configure redundant experts via `--vllm-eplb-config`. For example, in a 24-GPU scenario:
+
+   ```bash
+   VLLM_ARGS=(
+      --rollout-num-gpus-per-engine 24
+      --vllm-gpu-memory-utilization 0.7
+      --vllm-data-parallel-size 3
+      --vllm-enable-expert-parallel
+      --vllm-enable-eplb
+      --vllm-eplb-config '{"num_redundant_experts": 16}'
+   )
+   ```
