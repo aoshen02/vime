@@ -145,3 +145,18 @@ NUM_ROLLOUT=2 ENABLE_R3=0 bash scripts/run-qwen3-30B-A3B.sh
 - **Worker 无法加入 Ray / NCCL 失败**：检查 `MASTER_ADDR`、容器 `/etc/hosts`（hostname 勿指向 `127.0.0.1`）、`NCCL_SOCKET_IFNAME` / `GLOO_SOCKET_IFNAME`。
 - **`Not enough samples X for global_batch_size Y`**：同步调整 `global-batch-size` 与 `rollout-batch-size × n-samples-per-prompt`。
 - **GPU 显存占满但无进程**：重启容器或 `ray stop --force` 清理残留 vLLM 上下文。
+
+#### EPLB
+
+当总卡数并不能被 expert 总数整除时，可以开启 vLLM 的 EPLB（Expert Parallelism Load Balancer），通过 `--vllm-eplb-config` 配置冗余 expert。例如对于 24 卡的场景：
+
+   ```bash
+   VLLM_ARGS=(
+      --rollout-num-gpus-per-engine 24
+      --vllm-gpu-memory-utilization 0.7
+      --vllm-data-parallel-size 3
+      --vllm-enable-expert-parallel
+      --vllm-enable-eplb
+      --vllm-eplb-config '{"num_redundant_experts": 16}'
+   )
+   ```
