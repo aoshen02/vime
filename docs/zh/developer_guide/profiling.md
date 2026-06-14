@@ -9,7 +9,7 @@
 - 从日志确认router/worker地址
 - start_profile
 - 发送少量推理请求
--（可选）stop_profile；或达到max_iterations后自动落盘
+-（可选）stop_profile；或达到max_iterations后自动写入 trace
 - 在torch_profiler_dir查看trace文件
 
 
@@ -44,10 +44,10 @@ vLLM只有在启动时配置了`--profiler-config`，才会注册`/start_profile
 |------|------|
 | `profiler` | `"torch"` 或 `"cuda"` |
 | `torch_profiler_dir` | trace输出目录（绝对路径） |
-| `max_iterations` | worker记录超过N步后自动stop并落盘（条件为`> N`） |
+| `max_iterations` | worker记录超过N步后自动stop并写入 trace（条件为`> N`） |
 | `ignore_frontend` | 建议`true`，仅profile worker，降低前端开销 |
 
-**防止`stop_profile`时RPC超时：** vLLM APIServer与EngineCore/worker之间通过内部RPC通信。手动调用`stop_profile`触发trace落盘可能耗时数分钟，而默认`VLLM_RPC_TIMEOUT`仅**10秒**（10000 ms），容易导致flush中断或trace不完整。Profiling时建议设为**30分钟**（1800000 ms）。
+**防止`stop_profile`时RPC超时：** vLLM APIServer与EngineCore/worker之间通过内部RPC通信。手动调用`stop_profile`把 trace 写出来可能耗时数分钟，而默认`VLLM_RPC_TIMEOUT`仅**10秒**（10000 ms），容易导致flush中断或trace不完整。Profiling时建议设为**30分钟**（1800000 ms）。
 
 该变量须在**启动train、拉起vLLM之前**传入Ray worker环境（仅在本机shell `export`不一定会进入Ray job）。在`ray job submit`的`runtime-env-json`中写入，例如：
 
@@ -111,7 +111,7 @@ python tools/profile_rollout.py \
 
 ### 停止Profiling（可选）
 
-若在`--vllm-profiler-config`中设置了`max_iterations`，worker在记录足够步数后会**自动stop并落盘**，实践中发完推理后常可直接在`torch_profiler_dir`看到trace，**不必**再手动`stop_profile`。需要提前结束采集时再执行：
+若在`--vllm-profiler-config`中设置了`max_iterations`，worker在记录足够步数后会**自动stop并写入 trace**，实践中发完推理后常可直接在`torch_profiler_dir`看到trace，**不必**再手动`stop_profile`。需要提前结束采集时再执行：
 
 ```bash
 python tools/profile_rollout.py \
@@ -125,7 +125,7 @@ python tools/profile_rollout.py \
 
 1. `profile_rollout.py --action start`
 2. 向router或**直连worker**发送少量completion请求（通常2～4条即可，trace会很大）
-3. 如果依赖自动落盘，要注意 `max_iterations` 的停止条件是 `> N`。例如 `max_iterations=3` 时，需要发 4 条请求；否则请手动执行 `profile_rollout.py --action stop`
+3. 如果依赖自动写入 trace，要注意 `max_iterations` 的停止条件是 `> N`。例如 `max_iterations=3` 时，需要发 4 条请求；否则请手动执行 `profile_rollout.py --action stop`
 4. 在`torch_profiler_dir`查看trace
 
 请求示例（`model`使用HF checkpoint路径）：
