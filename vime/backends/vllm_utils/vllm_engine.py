@@ -876,6 +876,13 @@ class VLLMEngine(RayActor):
         """
         return self._make_request("finish_weight_update", {})
 
+    def vime_apply_fp8_scales(self) -> dict:
+        """``POST /collective_rpc`` → ``vime_apply_fp8_scales`` on the worker extension."""
+        return self._make_request(
+            "collective_rpc",
+            {"method": "vime_apply_fp8_scales", "kwargs": {}},
+        )
+
     def check_weights(self, action: str):
         """No vLLM ``weights_checker`` route; return a placeholder dict."""
         del action

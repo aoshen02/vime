@@ -305,6 +305,9 @@ class UpdateWeightFromTensor:
         # vLLM #39212: exit weight-update mode.
         if self._ipc_engine is not None and rank == self._ipc_gather_src:
             ray.get(self._ipc_engine.finish_weight_update.remote())
+            # Patch FP8 expert scale_inv that layerwise reload silently dropped.
+            if self.quantization_config and self.quantization_config.get("quant_method") == "fp8":
+                ray.get(self._ipc_engine.vime_apply_fp8_scales.remote())
         dist.barrier(group=get_gloo_group())
 
         # int4/fp4 post_process
@@ -381,6 +384,68 @@ def _send_to_colocated_engine(
         refs.append(ipc_engine.update_weights_from_tensor.remote(**merged, weight_version=str(weight_version)))
 
     return refs, weight_refs
+
+
+# ---------------------------------------------------------------------------
+# FP8 expert scale patching (workaround for vLLM layerwise reload bug)
+# ---------------------------------------------------------------------------
+
+
+def _apply_fp8_expert_scales(model: torch.nn.Module, scales: list[tuple[str, torch.Tensor]]) -> None:
+    """Copy pre-quantized FP8 expert scale_inv tensors into FusedMoE buffers.
+
+    HF-format names like ``model.layers.0.mlp.experts.3.gate_proj.weight_scale_inv``
+    are mapped to the fused ``model.layers.0.mlp.experts.w13_weight_scale_inv[expert_id]``
+    buffer using the same gate/up→w13 / down→w2 convention as FusedMoE.weight_loader.
+    """
+    import logging
+    import re
+
+    logger = logging.getLogger("vime.fp8_scale_patch")
+
+    fused_moe_buffers: dict[str, torch.Tensor] = {}
+    for name, module in model.named_modules():
+        for bname, buf in module._buffers.items():
+            if buf is not None and "weight_scale_inv" in bname:
+                fused_moe_buffers[f"{name}.{bname}"] = buf
+        for pname, param in module._parameters.items():
+            if param is not None and "weight_scale_inv" in pname:
+                fused_moe_buffers[f"{name}.{pname}"] = param
+
+    if not fused_moe_buffers:
+        return
+
+    pattern = re.compile(
+        r"^(model\.layers\.\d+\.mlp\.(?:shared_expert\.)?experts)\."
+        r"(\d+)\.(gate_proj|up_proj|down_proj)\.weight_scale_inv$"
+    )
+    patched = 0
+    for name, scale in scales:
+        m = pattern.match(name)
+        if not m:
+            continue
+        prefix, expert_str, proj = m.groups()
+        expert_id = int(expert_str)
+        if proj in ("gate_proj", "up_proj"):
+            fused_name = f"{prefix}.w13_weight_scale_inv"
+        else:
+            fused_name = f"{prefix}.w2_weight_scale_inv"
+
+        target = fused_moe_buffers.get(fused_name)
+        if target is None:
+            continue
+
+        scale_dev = scale.to(target.device)
+        if proj in ("gate_proj", "up_proj"):
+            n_slice = target.shape[-2] // 2
+            offset = 0 if proj == "gate_proj" else n_slice
+            target.data[expert_id, offset:offset + scale_dev.shape[0]] = scale_dev
+        else:
+            target.data[expert_id] = scale_dev
+        patched += 1
+
+    if patched:
+        logger.info("Patched %d FP8 expert scale_inv tensors after layerwise reload", patched)
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +553,34 @@ class vLLMColocateWorkerExtension:
                     param = model.get_parameter(name)
                     param.copy_(weight)
 
+        # Stash FP8 scale_inv tensors for post-finalize patching.
+        # vLLM's layerwise reload silently drops FP8 expert scale_inv during
+        # load_weights (numel accounting counts them but the weight_loader
+        # never receives them, leaving uninitialized NaN in scale buffers).
+        # We stash the trainer-side pre-quantized scales and apply them after
+        # finish_weight_update calls finalize_layerwise_reload.
+        if self._is_checkpoint_format:
+            for name, weight in weights:
+                if "weight_scale_inv" in name:
+                    if not hasattr(self, "_pending_fp8_scales"):
+                        self._pending_fp8_scales = []
+                    self._pending_fp8_scales.append((name, weight.clone()))
+
         # Ensure the receiver has finished consuming the IPC tensors before
         # the sender drops its reference on the next barrier.
         torch.accelerator.synchronize()
+
+    def vime_apply_fp8_scales(self) -> None:
+        """Apply stashed FP8 scale_inv tensors after layerwise finalize.
+
+        Called by the trainer AFTER finish_weight_update (which runs
+        finalize_layerwise_reload). vLLM's layerwise reload drops FP8 expert
+        scale_inv during load_weights, leaving NaN in scale buffers. This
+        copies the correct trainer-produced scales into FusedMoE buffers.
+        """
+        scales = getattr(self, "_pending_fp8_scales", None)
+        if not scales:
+            return
+        model = self.model_runner.model
+        _apply_fp8_expert_scales(model, scales)
+        self._pending_fp8_scales = []
