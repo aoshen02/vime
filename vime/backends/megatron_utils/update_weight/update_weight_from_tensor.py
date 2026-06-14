@@ -368,10 +368,8 @@ def _send_to_colocated_engine(
     local_info, weight_refs = _build_ipc_update_info_from_named_tensors(hf_named_tensors)
     payload = _serialize_ipc_update_info(local_info)
 
-    # all_gather_object is monkey-patched for ReloadableProcessGroup; gather_object
-    # is not (it fails after a Megatron reload).
-    gathered_payloads = [None] * slot_size
-    dist.all_gather_object(gathered_payloads, payload, group=ipc_gather_group)
+    gathered_payloads = [None] * slot_size if dist.get_rank() == ipc_gather_src else None
+    dist.gather_object(payload, object_gather_list=gathered_payloads, dst=ipc_gather_src, group=ipc_gather_group)
 
     refs = []
     if dist.get_rank() == ipc_gather_src:
