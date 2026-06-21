@@ -8,7 +8,7 @@
 
 ## Why
 
-Slime's default sync broadcasts every parameter every step. The cost scales linearly with model size and dominates the sync phase, even though only a few percent of weights change between consecutive RL steps. Delta sync keeps a pinned-CPU snapshot of the last broadcast and ships only the positions whose bytes differ.
+Vime's default sync broadcasts every parameter every step. The cost scales linearly with model size and dominates the sync phase, even though only a few percent of weights change between consecutive RL steps. Delta sync keeps a pinned-CPU snapshot of the last broadcast and ships only the positions whose bytes differ.
 
 The motivating use case is **training/inference disaggregation** — running the trainer and the rollout engines in *different datacenters* over a shared filesystem with bandwidth on the order of 100s of MB/s, where a full broadcast is infeasible but a sparse delta (~3% density, ~5 GB for a 355B model) is. The same delta machinery also runs over NCCL inside a single datacenter, where it serves as the validation baseline that proves the wire encoding and apply logic are correct.
 
@@ -79,4 +79,4 @@ Selective overwrite has no arithmetic — the receiver writes the trainer's exac
 
 ## Why Not Colocated
 
-Colocated weight sync uses CUDA IPC: only a memory handle (~64 B) crosses processes. Delta encoding's "bytes saved on the wire" benefit is zero, while the bookkeeping (snapshot + diff + sparse encode) is pure overhead. Slime rejects `--update-weight-mode delta --colocate` at argparse time.
+Colocated weight sync uses CUDA IPC: only a memory handle (~64 B) crosses processes. Delta encoding's "bytes saved on the wire" benefit is zero, while the bookkeeping (snapshot + diff + sparse encode) is pure overhead. Vime rejects `--update-weight-mode delta --colocate` at argparse time.

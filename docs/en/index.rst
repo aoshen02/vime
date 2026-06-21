@@ -44,6 +44,7 @@ vime is built on `slime <https://github.com/THUDM/slime>`_, the RL framework beh
    advanced/vllm-config.md
    advanced/megatron-config.md
    advanced/arch-support-beyond-megatron.md
+   advanced/delta-weight-sync.md
 
 .. toctree::
    :maxdepth: 1
