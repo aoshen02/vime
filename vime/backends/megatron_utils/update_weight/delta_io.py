@@ -1,13 +1,5 @@
 """Wire structs for delta weight sync.
 
-Ported from slime, which defines these in the sglang ``io_struct`` module (and
-ships them via ``docker/patch/.../sglang.patch``). vime has no sglang dependency,
-so the structs live here and are shared by both ends of the wire:
-
-  - the trainer encoder (``update_weight_from_distributed_delta.py``), and
-  - the receiver decoder (``delta_receiver.py``, mixed into the vLLM worker via
-    ``vLLMColocateWorkerExtension``).
-
 Three ``DeltaEncoding`` variants differ only in how the changed-position blob is
 packed; ``DeltaParam`` slices the shared (positions, values) bucket per param;
 ``DeltaSpec`` is the per-bucket decoding manifest that travels as JSON alongside
