@@ -51,7 +51,7 @@ You can download required models and datasets from platforms like Hugging Face, 
 
 ```bash
 # Download model weights (Qwen3-4B)
-hf download zai-org/Qwen3-4B --local-dir /root/Qwen3-4B
+hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
 
 # Download training dataset (dapo-math-17k)
 hf download --repo-type dataset zhuzilin/dapo-math-17k \

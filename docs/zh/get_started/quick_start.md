@@ -50,7 +50,7 @@ pip install -e . --no-deps
 
 ```bash
 # 下载模型权重 (Qwen3-4B)
-hf download zai-org/Qwen3-4B --local-dir /root/Qwen3-4B
+hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
 
 # 下载训练数据集 (dapo-math-17k)
 hf download --repo-type dataset zhuzilin/dapo-math-17k \
