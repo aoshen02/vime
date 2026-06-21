@@ -1718,6 +1718,11 @@ def vime_validate_args(args):
                 "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
                 "(snapshot + diff + sparse encode) is pure overhead."
             )
+        if args.update_weight_transport == "disk" and not args.update_weight_delta_dir:
+            raise ValueError(
+                "--update-weight-transport=disk requires --update-weight-delta-dir to point at "
+                "a filesystem shared between the trainer and the rollout engines."
+            )
 
     if args.megatron_to_hf_mode == "bridge":
         if (
