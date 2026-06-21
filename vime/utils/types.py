@@ -53,6 +53,8 @@ class Sample:
     # metadata used during training, e.g., what loss to use for this sample.
     train_metadata: dict | None = None
 
+    rollout_id: int | None = None
+
     # Session ID for consistent hashing routing (used when router policy is consistent_hashing)
     session_id: str | None = None
 
