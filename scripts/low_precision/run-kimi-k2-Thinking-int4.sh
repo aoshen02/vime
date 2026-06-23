@@ -165,7 +165,7 @@ RUNTIME_ENV_JSON="{
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 /root/vime/train.py \
+   -- python3 /personal/vime/vime/train.py \
    --actor-num-nodes 32 \
    --actor-num-gpus-per-node 8 \
    --colocate \
