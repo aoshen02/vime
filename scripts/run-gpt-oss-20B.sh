@@ -20,7 +20,7 @@
 #   Use tools/convert_gpt_oss_to_fused.py to convert if needed.
 
 # for rerun the task
-pkill -9 -f "vllm serve"
+pkill -9 vllm
 sleep 3
 ray stop --force
 pkill -9 ray
