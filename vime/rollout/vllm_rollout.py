@@ -15,6 +15,7 @@ import numpy as np
 import vllm_router  # noqa: F401 — ensures vllm-router is importable on startup
 from tqdm import tqdm
 
+from vime.backends.vllm_utils.server_control import abort_inflight_requests
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
 from vime.utils.async_utils import run
@@ -38,6 +39,9 @@ __all__ = ["generate_rollout", "get_model_url"]
 logger = logging.getLogger(__name__)
 
 _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
+
+# Re-sweep interval while draining; bounds how long a late straggler can run.
+_ABORT_RESWEEP_INTERVAL_S = 3.0
 
 
 def _coerce_flat_int_token_ids(ids: Any) -> list[int]:
@@ -518,35 +522,36 @@ async def generate_and_rm_group(
 
 
 async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
-    aborted_samples: list[list[Sample]] = []
+    aborted_samples = []
 
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
 
-    urls: list[str] = []
-    paused_workers = False
+    loop = asyncio.get_running_loop()
     if state.pendings:
         base = f"http://{args.vllm_router_ip}:{args.vllm_router_port}"
-        try:
-            response = await get(f"{base}/workers")
-            urls = [worker["url"] for worker in response["workers"]]
-        except Exception:
-            response = await get(f"{base}/list_workers")
-            urls = list(response["urls"])
+        response = await get(f"{base}/workers")
+        urls = [worker["url"] for worker in response["workers"]]
 
-        logger.info(f"Abort request for {urls}")
-        pause_tasks = [post(f"{url.rstrip('/')}/pause?mode=abort", {}, max_retries=3) for url in urls]
-        pause_results = await asyncio.gather(*pause_tasks, return_exceptions=True)
-        for url, result in zip(urls, pause_results, strict=False):
-            if isinstance(result, Exception):
-                logger.warning(f"Failed to abort worker at {url}: {result}")
-        paused_workers = True
+        # Delete-type abort: drop in-flight requests without pausing the scheduler.
+        await abort_inflight_requests(urls)
+        last_sweep = loop.time()
 
     # make sure all the pending tasks are finished
     count = 0
     while state.pendings:
-        done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
+        done, state.pendings = await asyncio.wait(
+            state.pendings,
+            timeout=_ABORT_RESWEEP_INTERVAL_S,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # Re-sweep on a fixed interval to truncate late stragglers (e.g. a
+        # multi-turn turn-2 fired after the initial abort), regardless of drain.
+        if loop.time() - last_sweep >= _ABORT_RESWEEP_INTERVAL_S:
+            await abort_inflight_requests(urls)
+            last_sweep = loop.time()
 
         if not args.partial_rollout:
             continue
@@ -562,15 +567,6 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
 
     if args.partial_rollout:
         logger.info(f"Collected {count} partial samples into the data buffer")
-
-    state.pendings = set()
-    if paused_workers:
-        logger.info("rollout: resuming workers after abort drain: %s", urls)
-        resume_tasks = [post(f"{url.rstrip('/')}/resume", {}, max_retries=3) for url in urls]
-        resume_results = await asyncio.gather(*resume_tasks, return_exceptions=True)
-        for url, result in zip(urls, resume_results, strict=False):
-            if isinstance(result, Exception):
-                logger.warning("Failed to resume worker at %s: %s", url, result)
 
     return aborted_samples
 

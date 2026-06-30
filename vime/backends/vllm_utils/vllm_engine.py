@@ -207,32 +207,23 @@ class VLLMEngine(RayActor):
             return
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
-            import vllm_router
-            from packaging.version import parse
-
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            if parse(vllm_router.__version__) <= parse("0.2.1"):
-                assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/add_worker?url={worker_url}",
-                )
-            else:
-                payload = {
-                    "url": worker_url,
-                    "worker_type": self.worker_type,
-                }
-                if self.worker_type == "prefill":
-                    bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
-                    if bootstrap_port is None:
-                        raise RuntimeError(
-                            f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
-                            "cannot register it to the PD router."
-                        )
-                    payload["bootstrap_port"] = bootstrap_port
-                response = requests.post(
-                    f"http://{self.router_ip}:{self.router_port}/workers",
-                    json=payload,
-                )
+            payload = {
+                "url": worker_url,
+                "worker_type": self.worker_type,
+            }
+            if self.worker_type == "prefill":
+                bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                if bootstrap_port is None:
+                    raise RuntimeError(
+                        f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
+                        "cannot register it to the PD router."
+                    )
+                payload["bootstrap_port"] = bootstrap_port
+            response = requests.post(
+                f"http://{self.router_ip}:{self.router_port}/workers",
+                json=payload,
+            )
             response.raise_for_status()
 
     def _make_request(self, endpoint: str, payload: dict | None = None):

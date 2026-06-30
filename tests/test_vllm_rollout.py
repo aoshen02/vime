@@ -542,5 +542,87 @@ def test_eval_rollout_passk_requests_do_not_share_session_ids(patch_generate_sta
     assert result[dataset_cfg.name]["samples"][0].session_id != result[dataset_cfg.name]["samples"][1].session_id
 
 
+@pytest.mark.unit
+def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monkeypatch):
+    from vime.backends.vllm_utils import server_control
+
+    state = _PatchedGenerateState(_rollout_args())
+    monkeypatch.setattr(mod, "GenerateState", lambda args: state)
+
+    aborted = asyncio.Event()
+    posted_paths: list[str] = []
+
+    async def fake_get(url):
+        return {"workers": [{"url": "http://w0:9000"}]}
+
+    async def fake_post(url, payload, max_retries=60, headers=None):
+        posted_paths.append(url)
+        if url.endswith("/abort_requests"):
+            aborted.set()
+        return {}
+
+    monkeypatch.setattr(mod, "get", fake_get)
+    # abort() drives the delete-type sweep through the server_control helper.
+    monkeypatch.setattr(server_control, "post", fake_post)
+
+    sample = Sample(index=0, prompt="p")
+
+    async def pending_group():
+        # Delete-type abort makes the in-flight /generate return on its own.
+        await aborted.wait()
+        sample.status = Sample.Status.ABORTED
+        return [sample]
+
+    async def run_abort():
+        state.pendings = {asyncio.create_task(pending_group())}
+        return await asyncio.wait_for(mod.abort(_rollout_args(), rollout_id=0), timeout=5.0)
+
+    aborted_samples = asyncio.run(run_abort())
+
+    # Only /abort_requests is posted -- never /pause or /resume.
+    assert posted_paths and all(u.endswith("/abort_requests") for u in posted_paths)
+    assert state.pendings == set()
+    # partial_rollout is off by default, so drained groups are discarded, not returned.
+    assert aborted_samples == []
+
+
+@pytest.mark.unit
+def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_state, monkeypatch):
+    from vime.backends.vllm_utils import server_control
+
+    args = _rollout_args(partial_rollout=True)
+    state = _PatchedGenerateState(args)
+    monkeypatch.setattr(mod, "GenerateState", lambda a: state)
+
+    aborted = asyncio.Event()
+
+    async def fake_get(url):
+        return {"workers": [{"url": "http://w0:9000"}]}
+
+    async def fake_post(url, payload, max_retries=60, headers=None):
+        if url.endswith("/abort_requests"):
+            aborted.set()
+        return {}
+
+    monkeypatch.setattr(mod, "get", fake_get)
+    monkeypatch.setattr(server_control, "post", fake_post)
+
+    sample = Sample(index=0, prompt="p")
+    sample.response = "partial"
+
+    async def pending_group():
+        await aborted.wait()
+        return [sample]
+
+    async def run_abort():
+        state.pendings = {asyncio.create_task(pending_group())}
+        return await asyncio.wait_for(mod.abort(args, rollout_id=7), timeout=5.0)
+
+    aborted_samples = asyncio.run(run_abort())
+
+    assert aborted_samples == [[sample]]
+    assert sample.metadata["start_rollout_id"] == 7
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
