@@ -104,7 +104,14 @@ async def batched_async_rm(
     if args.custom_rm_path is not None:
         # Ensure the custom reward function is implemented in batch mode
         rm_function = load_function(args.custom_rm_path)
-        return await rm_function(args, samples, **kwargs)
-    tasks = [async_rm(args, sample, **kwargs) for sample in samples]
-    rewards = await asyncio.gather(*tasks)
+        rewards = await rm_function(args, samples, **kwargs)
+    else:
+        tasks = [async_rm(args, sample, **kwargs) for sample in samples]
+        rewards = await asyncio.gather(*tasks)
+    rewards = list(rewards)
+    if len(rewards) != len(samples):
+        rm_name = getattr(args, "custom_rm_path", None) or getattr(args, "rm_type", None) or "batched_async_rm"
+        raise ValueError(
+            f"batched reward model {rm_name!r} returned {len(rewards)} rewards for {len(samples)} samples"
+        )
     return rewards
