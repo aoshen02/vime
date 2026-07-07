@@ -243,6 +243,80 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--trajectory-source",
+                choices=["generated", "transfer_queue"],
+                default="generated",
+                help="Source of rollout samples consumed by RolloutManager.",
+            )
+            parser.add_argument(
+                "--tq-ray-address",
+                type=str,
+                default="ray://172.16.1.248:20001",
+                help="Ray Client endpoint for the shared TransferQueue service.",
+            )
+            parser.add_argument(
+                "--tq-service-config-path",
+                type=str,
+                default=(
+                    "/mnt/data1/yibo/vime-workspace/services/"
+                    "transfer_queue/client_config.pkl"
+                ),
+            )
+            parser.add_argument(
+                "--tq-partition-prefix",
+                type=str,
+                default="train",
+            )
+            parser.add_argument("--tq-run-id", type=str, default=None)
+            parser.add_argument("--tq-policy-version", type=str, default=None)
+            parser.add_argument(
+                "--tq-task-name",
+                type=str,
+                default="vime-trainer",
+            )
+            parser.add_argument("--tq-dp-rank", type=int, default=0)
+            parser.add_argument(
+                "--tq-consumer-batch-size",
+                type=int,
+                default=None,
+            )
+            parser.add_argument(
+                "--tq-consumer-micro-batch-size",
+                type=int,
+                default=1,
+            )
+            parser.add_argument(
+                "--tq-poll-interval",
+                type=float,
+                default=0.2,
+            )
+            parser.add_argument(
+                "--tq-manage-rollout-servers",
+                action="store_true",
+                default=False,
+                help=(
+                    "Start VIME-managed rollout servers while consuming "
+                    "TransferQueue trajectories, so the normal VIME "
+                    "update_weights path still updates rollout vLLM engines."
+                ),
+            )
+            parser.add_argument(
+                "--tq-allow-missing-rewards",
+                action="store_false",
+                dest="tq_require_rewards",
+                default=True,
+            )
+            parser.add_argument(
+                "--tq-include-loss-mask",
+                action="store_true",
+                default=False,
+            )
+            parser.add_argument(
+                "--tq-include-routed-experts",
+                action="store_true",
+                default=False,
+            )
+            parser.add_argument(
                 "--rollout-temperature",
                 type=float,
                 default=1.0,
@@ -1165,6 +1239,12 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--debug-random-model-init",
+                action="store_true",
+                default=False,
+                help="Initialize training weights randomly; only valid with --debug-train-only.",
+            )
+            parser.add_argument(
                 "--dump-details",
                 type=str,
                 default=None,
@@ -1758,6 +1838,11 @@ def vime_validate_args(args):
     assert not (args.debug_rollout_only and args.debug_train_only), (
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
     )
+    if args.debug_random_model_init and not args.debug_train_only:
+        raise ValueError(
+            "--debug-random-model-init requires --debug-train-only; "
+            "production training must load an explicit checkpoint."
+        )
 
     # always true on offload for colocate at the moment.
     if args.colocate:
@@ -1799,6 +1884,29 @@ def vime_validate_args(args):
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
+
+    if args.trajectory_source == "transfer_queue":
+        if not args.tq_run_id:
+            raise ValueError("--tq-run-id is required for TransferQueue")
+        if not args.tq_policy_version:
+            raise ValueError(
+                "--tq-policy-version is required for TransferQueue"
+            )
+        if args.num_rollout is None:
+            raise ValueError(
+                "--num-rollout must be explicit for TransferQueue sources"
+            )
+        if args.tq_consumer_batch_size is None:
+            args.tq_consumer_batch_size = (
+                args.rollout_batch_size * args.n_samples_per_prompt
+            )
+        if args.tq_manage_rollout_servers and args.debug_train_only:
+            raise ValueError(
+                "--tq-manage-rollout-servers cannot be used with "
+                "--debug-train-only"
+            )
+    elif args.tq_consumer_batch_size is None:
+        args.tq_consumer_batch_size = 1
 
     if args.num_steps_per_rollout is not None:
         global_batch_size = args.rollout_batch_size * args.n_samples_per_prompt // args.num_steps_per_rollout

@@ -20,6 +20,7 @@ GPU_MEMORY_TYPE_KV_CACHE = "kv_cache"
 GPU_MEMORY_TYPE_WEIGHTS = "weights"
 GPU_MEMORY_TYPE_CUDA_GRAPH = "cuda_graph"
 from vime.rollout.base_types import call_rollout_fn
+from vime.rollout.trajectory_source import TransferQueueSampleSource
 from vime.utils import logging_utils
 from vime.utils.dp_schedule import build_dp_schedule
 from vime.utils.health_monitor import RolloutHealthMonitor
@@ -358,11 +359,23 @@ class RolloutManager:
         self.pg = pg
         self.args = args
 
-        data_source_cls = load_function(self.args.data_source_path)
-        self.data_source = data_source_cls(args)
-
-        self.generate_rollout = load_function(self.args.rollout_function_path)
-        self.eval_generate_rollout = load_function(self.args.eval_function_path)
+        self.trajectory_sample_source = None
+        if self.args.trajectory_source == "transfer_queue":
+            self.data_source = None
+            self.generate_rollout = None
+            self.eval_generate_rollout = None
+            self.trajectory_sample_source = TransferQueueSampleSource.from_args(
+                args
+            )
+        else:
+            data_source_cls = load_function(self.args.data_source_path)
+            self.data_source = data_source_cls(args)
+            self.generate_rollout = load_function(
+                self.args.rollout_function_path
+            )
+            self.eval_generate_rollout = load_function(
+                self.args.eval_function_path
+            )
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
@@ -371,14 +384,38 @@ class RolloutManager:
             self.custom_convert_samples_to_train_data_func = load_function(
                 self.args.custom_convert_samples_to_train_data_path
             )
-        logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
-        logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
+        if self.args.trajectory_source == "generated":
+            logger.info(
+                "import %s as generate_rollout function.",
+                self.args.rollout_function_path,
+            )
+            logger.info(
+                "import %s as eval_generate_rollout function.",
+                self.args.eval_function_path,
+            )
+        else:
+            logger.info("Using TransferQueue as the trajectory source.")
 
-        if self.args.debug_train_only:
+        # TransferQueue changes the sample source, not necessarily rollout ownership.
+        # Closed-loop runs keep VIME-managed rollout servers so the existing
+        # update_weights path can push trained actor weights back into vLLM.
+        should_start_rollout_servers = (
+            not self.args.debug_train_only
+            and (
+                self.args.trajectory_source == "generated"
+                or getattr(self.args, "tq_manage_rollout_servers", False)
+            )
+        )
+        if not should_start_rollout_servers:
             self.servers: dict[str, RolloutServer] = {}
         else:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
+            if self.args.trajectory_source == "transfer_queue":
+                logger.info(
+                    "Started rollout servers for TransferQueue closed-loop "
+                    "training; weight updates use the normal VIME path."
+                )
 
         init_tracking(args, primary=False)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
@@ -436,6 +473,8 @@ class RolloutManager:
     def dispose(self):
         for monitor in self._health_monitors:
             monitor.stop()
+        if self.trajectory_sample_source is not None:
+            self.trajectory_sample_source.close()
         logging_utils.finish_tracking(self.args)
 
     @property
@@ -476,6 +515,10 @@ class RolloutManager:
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
 
     def get_num_rollout_per_epoch(self):
+        if self.args.trajectory_source == "transfer_queue":
+            raise ValueError(
+                "TransferQueue requires an explicit --num-rollout"
+            )
         assert self.args.rollout_global_dataset
         return len(self.data_source) // self.args.rollout_batch_size
 
@@ -495,6 +538,8 @@ class RolloutManager:
         return self._split_train_data_by_dp(data)
 
     def eval(self, rollout_id):
+        if self.args.trajectory_source == "transfer_queue":
+            return
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
@@ -506,9 +551,13 @@ class RolloutManager:
         _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
+        if self.args.trajectory_source == "transfer_queue":
+            return
         self.data_source.save(rollout_id)
 
     def load(self, rollout_id=None):
+        if self.args.trajectory_source == "transfer_queue":
+            return
         self.data_source.load(rollout_id)
 
     def offload(self):
@@ -583,8 +632,22 @@ class RolloutManager:
                     f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
                 )
             metrics = None
+        elif self.args.trajectory_source == "transfer_queue":
+            assert self.trajectory_sample_source is not None
+            sample_count = (
+                self.args.rollout_batch_size
+                * self.args.n_samples_per_prompt
+            )
+            data = self.trajectory_sample_source.take(sample_count)
+            metrics = {"transfer_queue/samples": len(data)}
         else:
-            data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
+            data = call_rollout_fn(
+                self.generate_rollout,
+                self.args,
+                rollout_id,
+                self.data_source,
+                evaluation=False,
+            )
             metrics = data.metrics
             data = data.samples
             # Enforce the rollout_id contract before flattening: any list[Sample]
