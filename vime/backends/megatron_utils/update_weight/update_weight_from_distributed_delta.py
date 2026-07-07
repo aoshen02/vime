@@ -503,6 +503,7 @@ class UpdateWeightFromDistributedDelta(UpdateWeightFromDistributed):
         self.encoding = DeltaEncoding(args.update_weight_encoding)
         self.delta_state = DeltaState()
         self._snapshot_seeded = False
+        self.update_weight_metrics: dict[str, float] = {}
         # DELTAS_ZSTD shares the gap encoder; zstd is applied at file-write time.
         self._encode = encode_indices if self.encoding is DeltaEncoding.INDICES else encode_deltas
 
