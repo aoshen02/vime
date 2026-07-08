@@ -31,7 +31,7 @@ bash scripts/run-qwen3-30B-A3B.sh
 
 Here, we will briefly introduce the MoE-related parts in the [run-qwen3-30B-A3B.sh](https://github.com/vllm-project/vime/blob/main/scripts/run-qwen3-30B-A3B.sh) script.
 
-1.  To support running Qwen3-30B-A3B in an 8xH800 environment, we need to enable Megatron's CPU Adam to save GPU memory. The corresponding configuration is:
+1.  To support running Qwen3-30B-A3B in an 8xH100 environment, we need to enable Megatron's CPU Adam to save GPU memory. The corresponding configuration is:
 
     ```bash
     OPTIMIZER_ARGS=(

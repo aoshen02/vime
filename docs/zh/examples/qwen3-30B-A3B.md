@@ -30,7 +30,7 @@ bash scripts/run-qwen3-30B-A3B.sh
 
 这里我们简单介绍一下脚本 [run-qwen3-30B-A3B.sh](https://github.com/vllm-project/vime/blob/main/scripts/run-qwen3-30B-A3B.sh) 中与 MoE 相关的部分。
 
-1. 为了支持在 8xH800 环境中运行 Qwen3-30B-A3B，我们需要开启 megatron 的 CPU Adam 以节省显存，对应配置为：
+1. 为了支持在 8xH100 环境中运行 Qwen3-30B-A3B，我们需要开启 megatron 的 CPU Adam 以节省显存，对应配置为：
 
    ```bash
    OPTIMIZER_ARGS=(
