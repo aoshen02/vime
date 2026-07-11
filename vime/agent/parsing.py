@@ -19,6 +19,7 @@ class ParsedModelOutput:
     reasoning: str
     text: str
     tool_uses: list[dict[str, Any]]
+    ill_formed: bool = False
 
 
 def parse_model_output(
@@ -46,11 +47,18 @@ def parse_model_output(
         if not reasoning and "</think>" in body_text:
             reasoning, body_text = body_text.split("</think>", 1)
 
+<<<<<<< ours (vime current)
     body_text, tool_uses = parse_tool_uses(body_text, tools_schema, tool_parser_name, tokenizer)
+||||||| base (slime@a897e1f4 translated)
+    body_text, tool_uses = parse_tool_uses(body_text, tools_schema, tool_parser_name)
+=======
+    body_text, tool_uses, ill_formed = parse_tool_uses(body_text, tools_schema, tool_parser_name)
+>>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     return ParsedModelOutput(
         reasoning=reasoning,
         text=(body_text or "").strip(),
         tool_uses=tool_uses,
+        ill_formed=ill_formed,
     )
 
 
@@ -58,11 +66,19 @@ def parse_tool_uses(
     body_text: str,
     tools_schema: list[dict] | None,
     tool_parser_name: str | None,
+<<<<<<< ours (vime current)
     tokenizer,
 ) -> tuple[str, list[dict[str, Any]]]:
+||||||| base (slime@a897e1f4 translated)
+) -> tuple[str, list[dict[str, Any]]]:
+=======
+) -> tuple[str, list[dict[str, Any]], bool]:
+>>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     """Parse tool calls from body text and return visible text plus tool uses."""
     tool_uses: list[dict[str, Any]] = []
+    ill_formed = False
     if tool_parser_name and tools_schema:
+<<<<<<< ours (vime current)
         from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
         from vllm.tool_parsers import ToolParserManager
 
@@ -81,11 +97,49 @@ def parse_tool_uses(
                 except json.JSONDecodeError:
                     args = {"_raw_arguments": call.function.arguments}
                 tool_uses.append({"name": call.function.name or "tool", "input": args})
+||||||| base (slime@a897e1f4 translated)
+        from vllm.srt.entrypoints.openai.protocol import Function, Tool
+        from vllm.srt.function_call.function_call_parser import FunctionCallParser
+
+        sg_tools = [Tool(type="function", function=Function(**d["function"])) for d in tools_schema]
+        parser = FunctionCallParser(tools=sg_tools, tool_call_parser=tool_parser_name)
+        calls = []
+        if parser.has_tool_call(body_text):
+            try:
+                body_text, calls = parser.parse_non_stream(body_text)
+            except Exception:
+                logger.exception("[agent.parsing] vllm tool-call parsing failed; falling back")
+        for c in calls:
+            try:
+                args = json.loads(c.parameters or "{}")
+            except json.JSONDecodeError:
+                args = {"_raw_arguments": c.parameters}
+            tool_uses.append({"name": c.name or "tool", "input": args})
+=======
+        from vllm.srt.entrypoints.openai.protocol import Function, Tool
+        from vllm.srt.function_call.function_call_parser import FunctionCallParser
+
+        sg_tools = [Tool(type="function", function=Function(**d["function"])) for d in tools_schema]
+        parser = FunctionCallParser(tools=sg_tools, tool_call_parser=tool_parser_name)
+        calls = []
+        if parser.has_tool_call(body_text):
+            try:
+                body_text, calls = parser.parse_non_stream(body_text)
+            except Exception:
+                logger.exception("[agent.parsing] vllm tool-call parsing failed; falling back")
+        for c in calls:
+            try:
+                args = json.loads(c.parameters or "{}")
+            except json.JSONDecodeError:
+                args = {"_raw_arguments": c.parameters}
+                ill_formed = True
+            tool_uses.append({"name": c.name or "tool", "input": args})
+>>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
     if not tool_uses and tools_schema:
         body_text, tool_uses = parse_xml_tool_uses(body_text, tools_schema)
 
-    return body_text, tool_uses
+    return body_text, tool_uses, ill_formed
 
 
 def parse_xml_tool_uses(body_text: str, tools_schema: list[dict]) -> tuple[str, list[dict[str, Any]]]:

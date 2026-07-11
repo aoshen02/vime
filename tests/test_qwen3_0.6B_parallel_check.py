@@ -59,8 +59,17 @@ def execute():
     vllm_args = (
         "--rollout-num-gpus-per-engine 2 "
         "--rollout-num-gpus 8 "
+<<<<<<< ours (vime current)
         "--vllm-gpu-memory-utilization 0.8 "
         "--vllm-max-cudagraph-capture-size 16 "
+||||||| base (slime@a897e1f4 translated)
+        "--vllm-mem-fraction-static 0.8 "
+        "--vllm-cuda-graph-max-bs 16 "
+=======
+        "--vllm-mem-fraction-static 0.8 "
+        "--vllm-cuda-graph-max-bs 16 "
+        "--vllm-disable-piecewise-cuda-graph "
+>>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     )
 
     ci_args = "--ci-test "
