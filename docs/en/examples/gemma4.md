@@ -29,7 +29,7 @@ sharded by the conversion topology.
 
 ```bash
 cd /root
-git clone https://github.com/THUDM/vime.git
+git clone https://github.com/vllm-project/vime.git
 cd vime
 pip install -e . --no-deps
 

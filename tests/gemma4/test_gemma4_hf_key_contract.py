@@ -7,9 +7,7 @@ import torch
 
 
 def _load_convert_module():
-    repo_path = pathlib.Path(__file__).resolve().parents[2] / (
-        "vime/backends/megatron_utils/megatron_to_hf/gemma4.py"
-    )
+    repo_path = pathlib.Path(__file__).resolve().parents[2] / ("vime/backends/megatron_utils/megatron_to_hf/gemma4.py")
     spec = importlib.util.spec_from_file_location("_gemma4_key_contract_converter", repo_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

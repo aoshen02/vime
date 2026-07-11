@@ -123,8 +123,8 @@ fi
 
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine "${ROLLOUT_TP_SIZE:-8}"
-   --vllm-mem-fraction-static "${VLLM_MEM_FRACTION_STATIC:-0.20}"
-   --vllm-cuda-graph-max-bs "${VLLM_CUDA_GRAPH_MAX_BS:-1}"
+   --vllm-gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION:-0.20}"
+   --vllm-max-cudagraph-capture-size "${VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE:-1}"
    --vllm-max-running-requests "${VLLM_MAX_RUNNING_REQUESTS:-4}"
 )
 
