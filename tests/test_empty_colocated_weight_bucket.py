@@ -141,9 +141,7 @@ def _load_update_weight_module(monkeypatch):
 
     module_name = "vime.backends.megatron_utils.update_weight.update_weight_from_tensor"
     sys.modules.pop(module_name, None)
-    module_path = (
-        REPO_ROOT / "vime" / "backends" / "megatron_utils" / "update_weight" / "update_weight_from_tensor.py"
-    )
+    module_path = REPO_ROOT / "vime" / "backends" / "megatron_utils" / "update_weight" / "update_weight_from_tensor.py"
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, module_name, module)
@@ -152,52 +150,43 @@ def _load_update_weight_module(monkeypatch):
     return module, dist_state
 
 
-def test_empty_colocated_bucket_still_participates_in_gather(monkeypatch):
-    module, dist_state = _load_update_weight_module(monkeypatch)
-    dist_state.gathered = lambda local: [local, []]
-    engine = _FakeEngine()
+def test_empty_colocated_bucket_does_not_hide_remote_weights(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+    empty = {"names": [], "dtype_names": [], "shapes": [], "ipc_handles": []}
+    remote = {
+        "names": ["expert.weight"],
+        "dtype_names": ["bfloat16"],
+        "shapes": [[4, 8]],
+        "ipc_handles": [{"gpu-1": ("remote",)}],
+    }
 
-    refs, long_lived_tensors = module._send_to_colocated_engine(
-        [],
-        ipc_engine=engine,
-        ipc_gather_src=0,
-        ipc_gather_group=object(),
-        weight_version=3,
-    )
-
-    assert dist_state.local_object == []
-    assert refs == []
-    assert long_lived_tensors == []
-    assert engine.update_weights_from_tensor.calls == []
+    assert module._merge_ipc_update_infos([empty, remote]) == remote
 
 
-def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
-    module, dist_state = _load_update_weight_module(monkeypatch)
-    remote_serialized_bucket = {"flattened_tensor": ("remote",), "metadata": ("remote_weight",)}
-    dist_state.gathered = lambda local: [local, [remote_serialized_bucket]]
-    engine = _FakeEngine()
+def test_colocated_bucket_merges_handles_by_parameter_name(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+    first = {
+        "names": ["shared.weight"],
+        "dtype_names": ["float16"],
+        "shapes": [[2, 2]],
+        "ipc_handles": [{"gpu-0": ("first",)}],
+    }
+    second = {
+        "names": ["expert.weight", "shared.weight"],
+        "dtype_names": ["bfloat16", "float16"],
+        "shapes": [[4, 8], [2, 2]],
+        "ipc_handles": [{"gpu-1": ("expert",)}, {"gpu-1": ("second",)}],
+    }
 
-    refs, long_lived_tensors = module._send_to_colocated_engine(
-        [],
-        ipc_engine=engine,
-        ipc_gather_src=0,
-        ipc_gather_group=object(),
-        weight_version=7,
-    )
-
-    assert refs == ["ref-1"]
-    assert len(long_lived_tensors) == 1
-    empty_bucket = long_lived_tensors[0]
-    assert empty_bucket["metadata"] == []
-    assert empty_bucket["flattened_tensor"] == {"size": 0, "dtype": "uint8", "device": "cuda:0"}
-
-    assert engine.update_weights_from_tensor.calls == [
-        {
-            "serialized_named_tensors": [empty_bucket, remote_serialized_bucket],
-            "load_format": "flattened_bucket",
-            "weight_version": "7",
-        }
-    ]
+    assert module._merge_ipc_update_infos([first, second]) == {
+        "names": ["shared.weight", "expert.weight"],
+        "dtype_names": ["float16", "bfloat16"],
+        "shapes": [[2, 2], [4, 8]],
+        "ipc_handles": [
+            {"gpu-0": ("first",), "gpu-1": ("second",)},
+            {"gpu-1": ("expert",)},
+        ],
+    }
 
 
 if __name__ == "__main__":

@@ -14,9 +14,7 @@ def _load_convert_module():
         return importlib.import_module("vime.backends.megatron_utils.megatron_to_hf.gemma4")
     except ImportError:
         pass
-    repo_path = pathlib.Path(__file__).resolve().parents[2] / (
-        "vime/backends/megatron_utils/megatron_to_hf/gemma4.py"
-    )
+    repo_path = pathlib.Path(__file__).resolve().parents[2] / ("vime/backends/megatron_utils/megatron_to_hf/gemma4.py")
     if not repo_path.exists():
         pytest.skip(f"convert_gemma4_to_hf source not found at {repo_path}")
     spec = importlib.util.spec_from_file_location("_gemma4_conv_under_test", repo_path)

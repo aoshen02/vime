@@ -327,25 +327,10 @@ class VLLMEngine(RayActor):
             )
         return self._weight_version
 
-<<<<<<< ours (vime current)
     def set_weight_version(self, new_version: str):
         self._weight_version = str(new_version)
 
     def release_memory_occupation(self, level: int = 2):
-||||||| base (slime@a897e1f4 translated)
-    def set_weight_version(self, new_version: str):
-        """Bump the engine's recorded weight version without changing weights.
-
-        Used by the delta-update path when a sync produced no bytes (e.g. an
-        all-zero diff): we still need the engine's version to track the
-        updater's, otherwise the CI version-equality check will trip.
-        """
-        return self._make_request("update_weight_version", {"new_version": str(new_version)})
-
-    def release_memory_occupation(self):
-=======
-    def release_memory_occupation(self):
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
         self.flush_cache()
         response = requests.post(f"http://{self.server_host}:{self.server_port}/sleep", params={"level": level})
         response.raise_for_status()
@@ -366,7 +351,6 @@ class VLLMEngine(RayActor):
         del action
         return {"ok": True, "supported": False}
 
-<<<<<<< ours (vime current)
     def init_weight_transfer_engine(self, payload: dict) -> dict:
         return self._make_request("init_weight_transfer_engine", payload)
 
@@ -388,59 +372,6 @@ class VLLMEngine(RayActor):
             e.add_note(f"{response.text=}")
             raise
         return response.json()
-||||||| base (slime@a897e1f4 translated)
-    def update_weights_from_disk(
-        self,
-        model_path: str,
-        load_format: str | None = None,
-        weight_version: str | None = None,
-        files: list[str] | None = None,
-    ):
-        """Reload weights from *model_path* without restarting the engine.
-
-        Standard HF reload: ``model_path`` is the checkpoint directory.
-        Delta (``load_format="delta"``): ``model_path`` is the parent of the
-        per-sync version subdir and ``files`` is the basenames within it to read +
-        apply. Each delta call is independent — sender owns batching, sync
-        boundaries, cleanup.
-        """
-        payload: dict = {"model_path": model_path}
-        if load_format is not None:
-            payload["load_format"] = load_format
-        if weight_version is not None:
-            payload["weight_version"] = weight_version
-        if files is not None:
-            payload["files"] = files
-        return self._make_request("update_weights_from_disk", payload)
-=======
-    def pull_weights(self, target_version: int):
-        """Have the engine sync every host it spans to target_version: each host pulls the
-        published weights (a full checkpoint copied as-is, or deltas verified per-tensor and
-        applied onto the local checkpoint) into its local checkpoint dir. The engine reloads
-        it afterwards via update_weights_from_disk."""
-        return self._make_request(
-            "pull_weights",
-            {
-                "local_checkpoint_dir": self.args.update_weight_local_checkpoint_dir,
-                "source_dir": self.args.update_weight_disk_dir,
-                "target_version": target_version,
-            },
-        )
-
-    def update_weights_from_disk(
-        self,
-        model_path: str,
-        load_format: str | None = None,
-        weight_version: str | None = None,
-    ):
-        """Reload weights from the checkpoint at *model_path* without restarting the engine."""
-        payload: dict = {"model_path": model_path}
-        if load_format is not None:
-            payload["load_format"] = load_format
-        if weight_version is not None:
-            payload["weight_version"] = weight_version
-        return self._make_request("update_weights_from_disk", payload)
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         del group_name, backend
@@ -468,17 +399,8 @@ class VLLMEngine(RayActor):
         group_name,
         *,
         flush_cache=False,
-<<<<<<< ours (vime current)
         weight_version: str,
         packed: bool = True,
-||||||| base (slime@a897e1f4 translated)
-        weight_version: str | None = None,
-        load_format: str | None = None,
-        delta=None,
-=======
-        weight_version: str | None = None,
-        load_format: str | None = None,
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     ):
         del group_name
         if flush_cache:
@@ -490,70 +412,21 @@ class VLLMEngine(RayActor):
             "shapes": [list(s) for s in shapes],
             "packed": bool(packed),
         }
-<<<<<<< ours (vime current)
         result = self._make_request("update_weights", {"update_info": update_info})
         self._weight_version = str(weight_version)
         return result
-||||||| base (slime@a897e1f4 translated)
-        if weight_version is not None:
-            payload["weight_version"] = weight_version
-        if load_format is not None:
-            payload["load_format"] = load_format
-        if delta is not None:
-            # DeltaSpec → JSON string. Receiver reconstructs via DeltaEncoding(...) +
-            # DeltaParam(**p); avoids depending on FastAPI's nested-dataclass coercion.
-            import json
-            from dataclasses import asdict
-
-            payload["delta"] = json.dumps(
-                {
-                    "encoding": delta.encoding.value,
-                    "params": [asdict(p) for p in delta.params],
-                    "checksum": delta.checksum,
-                }
-            )
-        return self._make_request(
-            "update_weights_from_distributed",
-            payload,
-        )
-=======
-        if weight_version is not None:
-            payload["weight_version"] = weight_version
-        if load_format is not None:
-            payload["load_format"] = load_format
-        return self._make_request(
-            "update_weights_from_distributed",
-            payload,
-        )
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
     def pause_generation(self):
-<<<<<<< ours (vime current)
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/pause",
             params={"mode": "keep", "clear_cache": "false"},
             json={},
         )
-||||||| base (slime@a897e1f4 translated)
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
-=======
-        if self.node_rank != 0:
-            return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
         response.raise_for_status()
         return response
 
     def continue_generation(self):
-<<<<<<< ours (vime current)
         response = requests.post(f"http://{self.server_host}:{self.server_port}/resume", json={})
-||||||| base (slime@a897e1f4 translated)
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
-=======
-        if self.node_rank != 0:
-            return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
         response.raise_for_status()
         return response
 
@@ -562,38 +435,8 @@ class VLLMEngine(RayActor):
         restore_weights_before_load: bool = False,
         post_process_quantization: bool = False,
     ):
-<<<<<<< ours (vime current)
         del restore_weights_before_load, post_process_quantization
         return {"ok": True, "noop": True}
-||||||| base (slime@a897e1f4 translated)
-        """
-        Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
-        Note: The model should be on GPUs rather than CPU for this functionality to work properly.
-        If you encounter issues, ensure your model is loaded on GPU devices rather than CPU.
-        """
-
-        return self._make_request(
-            "post_process_weights",
-            {
-                "restore_weights_before_load": restore_weights_before_load,
-                "post_process_quantization": post_process_quantization,
-            },
-        )
-=======
-        """
-        Run post-load weight processing on the vLLM server.
-
-        This is used for restore-before-load and post-load quantization hooks.
-        """
-
-        return self._make_request(
-            "post_process_weights",
-            {
-                "restore_weights_before_load": restore_weights_before_load,
-                "post_process_quantization": post_process_quantization,
-            },
-        )
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
     def start_profile(
         self,
@@ -605,43 +448,11 @@ class VLLMEngine(RayActor):
         with_stack: bool | None = None,
         record_shapes: bool | None = None,
     ):
-<<<<<<< ours (vime current)
         response = requests.post(f"http://{self.server_host}:{self.server_port}/start_profile", json={})
-||||||| base (slime@a897e1f4 translated)
-        response = requests.post(
-            f"http://{self.server_host}:{self.server_port}/start_profile",
-            json={
-                "output_dir": output_dir,
-                "start_step": start_step,
-                "num_steps": num_steps,
-                "activities": activities,
-                "profile_by_stage": profile_by_stage,
-                "with_stack": with_stack,
-                "record_shapes": record_shapes,
-            },
-        )
-=======
-        if self.node_rank != 0:
-            return
-        response = requests.post(
-            f"http://{self.server_host}:{self.server_port}/start_profile",
-            json={
-                "output_dir": output_dir,
-                "start_step": start_step,
-                "num_steps": num_steps,
-                "activities": activities,
-                "profile_by_stage": profile_by_stage,
-                "with_stack": with_stack,
-                "record_shapes": record_shapes,
-            },
-        )
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
         response.raise_for_status()
         return response
 
     def stop_profile(self):
-        if self.node_rank != 0:
-            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
         response.raise_for_status()
         return response

@@ -15,13 +15,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-<<<<<<< ours (vime current)
-||||||| base (slime@a897e1f4 translated)
-import uuid
-=======
 import time
-import uuid
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 from collections.abc import Callable
 from typing import Any
 
@@ -341,7 +335,7 @@ class BaseAdapter:
         s = self.store.setdefault(sid, Session())
         task = asyncio.current_task()
         self.inflight.setdefault(sid, set()).add(task)
-        t0 = time.monotonic()
+        started_at = time.monotonic()
         try:
             translated, tools_schema = self._translate(body)
             prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
@@ -361,21 +355,17 @@ class BaseAdapter:
 
             in_tok, out_tok = len(prompt_ids), len(turn.output_ids)
             stream = body.get("stream") is True or "text/event-stream" in request.headers.get("Accept", "")
-
-            # Flush the response before recording the trajectory: a client that
-            # disconnected during generation makes _respond raise here, and we
-            # must not record a turn the client never received.
             try:
                 response = await self._respond(request, body, reply, in_tok, out_tok, stream)
-            except (ConnectionResetError, asyncio.CancelledError) as e:
+            except (ConnectionResetError, asyncio.CancelledError) as error:
                 self.logger.warning(
                     "[%s] sid=%s client disconnected before response flush: %s after %.1fs",
                     self.log_prefix,
                     sid,
-                    type(e).__name__,
-                    time.monotonic() - t0,
+                    type(error).__name__,
+                    time.monotonic() - started_at,
                 )
-                if isinstance(e, asyncio.CancelledError):
+                if isinstance(error, asyncio.CancelledError):
                     raise
                 return web.Response(status=499, text="client disconnected")
 

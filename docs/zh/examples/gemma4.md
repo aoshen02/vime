@@ -26,7 +26,7 @@ mask、反向传播和在线权重更新，不引入任务特定的 runtime 变�
 
 ```bash
 cd /root
-git clone https://github.com/THUDM/vime.git
+git clone https://github.com/vllm-project/vime.git
 cd vime
 pip install -e . --no-deps
 

@@ -17,14 +17,7 @@ from ray.actor import ActorHandle
 from tqdm import tqdm
 from vllm.distributed.weight_transfer.nccl_engine import NCCLTrainerSendWeightsArgs, NCCLWeightTransferEngine
 
-<<<<<<< ours (vime current)
 from vime.utils.distributed_utils import get_gloo_group
-||||||| base (slime@a897e1f4 translated)
-from vime.utils.distributed_utils import get_gloo_group, init_process_group
-=======
-from vime.utils.distributed_utils import get_gloo_group, init_process_group
-from vime.utils.http_utils import _wrap_ipv6
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers
@@ -249,21 +242,17 @@ class UpdateWeightFromDistributed:
         if buffer:
             yield buffer
 
-    def _iter_expert_chunks(self) -> Iterator[list[tuple[str, torch.Tensor]]]:
+    def _iter_expert_chunks(
+        self,
+        params: Iterator[tuple[str, torch.Tensor]] | None = None,
+    ) -> Iterator[list[tuple[str, torch.Tensor]]]:
         """
         Yield one HF chunk per EP-weighted batch of expert params: TP gather +
         buffer until threshold, then EP gather + HF convert.
         """
-<<<<<<< ours (vime current)
         if params is None:
             params = ((n, p) for n, p in named_params_and_buffers(self.args, self.model) if ".experts." in n)
 
-||||||| base (slime@a897e1f4 translated)
-        if params is None:
-            params = ((n, p) for n, p in named_params_and_buffers(self.args, self.model) if ".experts." in n)
-=======
-        params = ((n, p) for n, p in named_params_and_buffers(self.args, self.model) if ".experts." in n)
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
         buffer_size = 0
         batch: list[tuple[str, torch.Tensor]] = []
         for name, param in params:
@@ -327,15 +316,8 @@ class UpdateWeightFromDistributed:
         self,
         converted_named_tensors: list[tuple[str, torch.Tensor]],
         pbar: tqdm | None = None,
-<<<<<<< ours (vime current)
         *,
         packed: bool = False,
-||||||| base (slime@a897e1f4 translated)
-        load_format: str | None = None,
-        delta: DeltaSpec | None = None,
-=======
-        load_format: str | None = None,
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
@@ -350,14 +332,7 @@ class UpdateWeightFromDistributed:
             self.weight_version,
             self.rollout_engines,
             converted_named_tensors,
-<<<<<<< ours (vime current)
             packed=packed,
-||||||| base (slime@a897e1f4 translated)
-            load_format=load_format,
-            delta=delta,
-=======
-            load_format=load_format,
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
         )
 
         ray.get(refs)
@@ -406,7 +381,6 @@ def connect_rollout_engines_from_distributed(
         )
         for i, engine in enumerate(rollout_engines)
     ]
-<<<<<<< ours (vime current)
 
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
@@ -419,21 +393,6 @@ def connect_rollout_engines_from_distributed(
         world_size,
         device,
         os.environ.get("CUDA_VISIBLE_DEVICES", ""),
-||||||| base (slime@a897e1f4 translated)
-    model_update_groups = init_process_group(
-        backend="nccl",
-        init_method=f"tcp://{master_address}:{master_port}",
-        world_size=world_size,
-        rank=0,
-        group_name=group_name,
-=======
-    model_update_groups = init_process_group(
-        backend="nccl",
-        init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
-        world_size=world_size,
-        rank=0,
-        group_name=group_name,
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     )
     model_update_groups = NCCLWeightTransferEngine.trainer_init(
         {
@@ -479,26 +438,14 @@ def update_weights_from_distributed(
     weight_version: int,
     rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
-<<<<<<< ours (vime current)
     *,
     packed: bool = False,
-||||||| base (slime@a897e1f4 translated)
-    load_format: str | None = None,
-    delta: DeltaSpec | None = None,
-=======
-    load_format: str | None = None,
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 ) -> list[ObjectRef]:
     """
     Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines).
-<<<<<<< ours (vime current)
 
     The *group* is a vLLM ``PyNcclCommunicator`` from ``trainer_init``
     in the Megatron trainer process.
-||||||| base (slime@a897e1f4 translated)
-    Delta sync passes ``load_format="delta"`` + ``delta`` (DeltaSpec).
-=======
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     """
     refs = [
         engine.update_weights_from_distributed.remote(
@@ -507,14 +454,7 @@ def update_weights_from_distributed(
             shapes=[param.shape for _, param in converted_named_tensors],
             group_name=group_name,
             weight_version=str(weight_version),
-<<<<<<< ours (vime current)
             packed=packed,
-||||||| base (slime@a897e1f4 translated)
-            load_format=load_format,
-            delta=delta,
-=======
-            load_format=load_format,
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
         )
         for engine in rollout_engines
     ]

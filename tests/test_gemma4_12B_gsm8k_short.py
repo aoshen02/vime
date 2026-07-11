@@ -90,8 +90,8 @@ def execute():
 
     vllm_args = (
         "--rollout-num-gpus-per-engine 2 "
-        "--vllm-mem-fraction-static 0.75 "
-        "--vllm-cuda-graph-max-bs 16 "
+        "--vllm-gpu-memory-utilization 0.75 "
+        "--vllm-max-cudagraph-capture-size 16 "
         "--vllm-enable-metrics "
     )
 

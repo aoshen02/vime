@@ -37,15 +37,11 @@ RUN ln -sf /usr/bin/python3 /usr/local/bin/python
 
 # ====================================== Python dependencies ============================================
 
-# The vLLM base image may include FA4.  The validated TE 2.16 CP stack uses
-# FA2 + FA3, so remove FA4 explicitly to avoid backend selection conflicts.
+# The validated TransformerEngine 2.16 context-parallel stack uses FA2 + FA3.
 RUN pip uninstall -y flash-attn-4 flash_attn_4 || true
-
-# The compilation is slow, thus should be put at top
 RUN MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
 
-# The compilation is slow, thus should be put at top.  This FA3 commit uses the
-# window_size_left/window_size_right API required by TransformerEngine 2.16 CP.
+# This FA3 commit provides the window_size_left/window_size_right API used by TE 2.16.
 RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
     cd flash-attention/ && git checkout 002cce0a1068f8c07dfccb5a1d232b9a3276947c && git submodule update --init && \
     cd hopper/ && \
@@ -76,16 +72,8 @@ RUN apt-get update && \
 
 # TE does not publish a cu13 wheel; build from source when ENABLE_CUDA_13=1.
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
-<<<<<<< ours (vime current)
-      pip install nvidia-mathdx pybind11 ninja wheel packaging && \
-      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.10; \
-||||||| base (slime@a897e1f4 translated)
-      pip install nvidia-mathdx==26.6.0 && \
-      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.10; \
-=======
-      pip install nvidia-mathdx==26.6.0 && \
+      pip install nvidia-mathdx==26.6.0 pybind11 ninja wheel packaging && \
       pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.16; \
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
     else \
       pip -v install --no-build-isolation "transformer_engine[pytorch]==2.16.1"; \
     fi
@@ -111,36 +99,12 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --ignore-installed PyJWT && \
     pip install -r /tmp/requirements.txt
 
-<<<<<<< ours (vime current)
 # https://github.com/pytorch/pytorch/issues/168167
 # cu130 base already ships nvidia-cudnn-cu13 9.19.0; only cu129 needs the pin.
 RUN if [ "${ENABLE_CUDA_13}" != "1" ]; then \
       pip install nvidia-cudnn-cu12==9.16.0.29; \
     fi
-||||||| base (slime@a897e1f4 translated)
-# Temporarily install another sgl-kernel version for GB300 without rebuilding the whole image
-RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
-    SGL_KERNEL_VERSION=0.3.17.post2 && \
-    python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
-  fi
 
-# https://github.com/pytorch/pytorch/issues/168167
-RUN pip install nvidia-cudnn-cu12==9.16.0.29
-
-# reinstall numpy 1.x for megatron
-RUN pip install "numpy<2"
-=======
-# Temporarily install another sgl-kernel version for GB300 without rebuilding the whole image
-RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
-    SGL_KERNEL_VERSION=0.3.17.post2 && \
-    python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
-  fi
-
-# reinstall numpy 1.x for megatron
-RUN pip install "numpy<2"
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-
-<<<<<<< ours (vime current)
 # reinstall numpy 1.x for megatron; pin scipy<1.18 alongside it. vime's vllm/vllm-openai
 # base ships NO scipy, so unpinned it pulls scipy>=1.18, which hard-requires numpy>=2 and
 # uses np.long (removed in numpy>=1.24) -> AttributeError against the numpy<2 above ->
@@ -148,13 +112,6 @@ RUN pip install "numpy<2"
 # compatible) natively, so slime needs no scipy pin -- this is a vime base-image divergence.
 # Real boundary is 1.18 (slime runs 1.17.1 fine), not the earlier 1.14 guess.
 RUN pip install "numpy<2" "scipy<1.18"
-||||||| base (slime@a897e1f4 translated)
-RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-1117d05/vllm_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
-RUN python -c "import vllm_router; assert 'vime' in vllm_router.__version__"
-=======
-RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/vllm_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
-RUN python -c "import vllm_router; assert 'vime' in vllm_router.__version__"
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
 RUN rm -rf /root/.cache/pip /root/flash-attention
 
@@ -168,7 +125,6 @@ RUN cd Megatron-LM && \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \
       exit 1; \
     fi && \
-<<<<<<< ours (vime current)
     rm megatron.patch && \
     pip install -e .
 
@@ -181,57 +137,6 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     cd "$VLLM_SITE" && \
     git apply -v --allow-empty /tmp/vllm.patch && \
     rm /tmp/vllm.patch
-||||||| base (slime@a897e1f4 translated)
-    rm megatron.patch
-
-# TODO temporarily skip patching for GB200/GB300 (and require users to bring their own vllm version). should add back later.
-ARG ENABLE_VLLM_PATCH=1
-COPY docker/patch/${PATCH_VERSION}/vllm.patch /sgl-workspace/vllm/
-RUN if [ "$ENABLE_VLLM_PATCH" = "1" ]; then \
-  cd /sgl-workspace/vllm && \
-  git update-index --refresh && \
-  git apply vllm.patch --3way && \
-  if grep -R -n '^<<<<<<< ' .; then \
-    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-    exit 1; \
-  fi && \
-  rm vllm.patch; \
-fi
-
-COPY docker/patch/${PATCH_VERSION}/vllm-top_p.patch /sgl-workspace/vllm/
-RUN if [ "$ENABLE_VLLM_PATCH" = "1" ]; then \
-  cd /sgl-workspace/vllm && \
-  git update-index --refresh && \
-  git apply vllm-top_p.patch --3way && \
-  if grep -R -n '^<<<<<<< ' .; then \
-    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-    exit 1; \
-  fi && \
-  rm vllm-top_p.patch; \
-fi
-=======
-    rm megatron.patch
-
-# TODO temporarily skip patching for GB200/GB300 (and require users to bring their own vllm version). should add back later.
-ARG ENABLE_VLLM_PATCH=1
-COPY docker/patch/${PATCH_VERSION}/vllm.patch \
-     docker/patch/${PATCH_VERSION}/vllm-top_p.patch \
-     docker/patch/${PATCH_VERSION}/vllm-release_hicache.patch \
-     docker/patch/${PATCH_VERSION}/vllm-pull_weights.patch \
-     /sgl-workspace/vllm/
-RUN if [ "$ENABLE_VLLM_PATCH" = "1" ]; then \
-  cd /sgl-workspace/vllm && \
-  git update-index --refresh && \
-  for patch in vllm.patch vllm-top_p.patch vllm-release_hicache.patch vllm-pull_weights.patch; do \
-    git apply --3way "$patch" || exit 1; \
-    if git grep -n '^<<<<<<< ' -- .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-      exit 1; \
-    fi; \
-  done && \
-  rm vllm.patch vllm-top_p.patch vllm-release_hicache.patch vllm-pull_weights.patch; \
-fi
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
 # ====================================== Install main package ============================================
 

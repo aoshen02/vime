@@ -106,22 +106,31 @@ def _deserialize_ipc_update_info(payload: str) -> dict[str, list]:
 
 
 def _merge_ipc_update_infos(infos: Sequence[dict[str, list]]) -> dict[str, list]:
-    """Merge per-rank IPC payloads so each weight has handles for every GPU UUID in the slot."""
+    """Merge per-rank IPC payloads, including empty or uneven expert buckets."""
     if not infos:
         raise ValueError("no IPC update_info payloads to merge")
-    base = infos[0]
-    merged_handles: list[dict[str, tuple]] = []
-    num_params = len(base["names"])
-    for i in range(num_params):
-        combined: dict[str, tuple] = {}
-        for info in infos:
-            combined.update(info["ipc_handles"][i])
-        merged_handles.append(combined)
+
+    merged: dict[str, tuple[str, list[int], dict[str, tuple]]] = {}
+    for info in infos:
+        for name, dtype_name, shape, handles in zip(
+            info["names"], info["dtype_names"], info["shapes"], info["ipc_handles"], strict=True
+        ):
+            if name not in merged:
+                merged[name] = (dtype_name, shape, dict(handles))
+                continue
+            merged_dtype, merged_shape, merged_handles = merged[name]
+            if dtype_name != merged_dtype or shape != merged_shape:
+                raise ValueError(
+                    f"inconsistent IPC metadata for {name}: "
+                    f"{(merged_dtype, merged_shape)} != {(dtype_name, shape)}"
+                )
+            merged_handles.update(handles)
+
     return {
-        "names": base["names"],
-        "dtype_names": base["dtype_names"],
-        "shapes": base["shapes"],
-        "ipc_handles": merged_handles,
+        "names": list(merged),
+        "dtype_names": [metadata[0] for metadata in merged.values()],
+        "shapes": [metadata[1] for metadata in merged.values()],
+        "ipc_handles": [metadata[2] for metadata in merged.values()],
     }
 
 
@@ -359,7 +368,6 @@ def _send_to_colocated_engine(
     if ipc_gather_group is None:
         return [], None
 
-<<<<<<< ours (vime current)
     slot_size = dist.get_world_size(ipc_gather_group)
     if slot_size <= 1:
         local_info, weight_refs = _build_ipc_update_info_from_named_tensors(hf_named_tensors)
@@ -371,77 +379,9 @@ def _send_to_colocated_engine(
 
     gathered_payloads = [None] * slot_size if dist.get_rank() == ipc_gather_src else None
     dist.gather_object(payload, object_gather_list=gathered_payloads, dst=ipc_gather_src, group=ipc_gather_group)
-||||||| base (slime@a897e1f4 translated)
-    long_live_tensors = []
-
-    if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors}
-    else:
-        converted_named_tensors_by_dtypes = {}
-        for name, tensor in hf_named_tensors:
-            dtype = tensor.dtype
-            if dtype not in converted_named_tensors_by_dtypes:
-                converted_named_tensors_by_dtypes[dtype] = []
-            converted_named_tensors_by_dtypes[dtype].append((name, tensor))
-
-    serialized_tensors = []
-    for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
-        flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-        metadata = flattened_tensor_bucket.get_metadata()
-        flattened_tensor_data = {
-            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-            "metadata": metadata,
-        }
-        long_live_tensors.append(flattened_tensor_data)
-        serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
-
-    serialized_named_tensors = (
-        [None] * dist.get_world_size(ipc_gather_group) if ipc_gather_src == dist.get_rank() else None
-    )
-    dist.gather_object(
-        serialized_tensors,
-        object_gather_list=serialized_named_tensors,
-        dst=ipc_gather_src,
-        group=ipc_gather_group,
-    )
-=======
-    long_live_tensors = []
-
-    if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors} if hf_named_tensors else {}
-    else:
-        converted_named_tensors_by_dtypes = {}
-        for name, tensor in hf_named_tensors:
-            dtype = tensor.dtype
-            if dtype not in converted_named_tensors_by_dtypes:
-                converted_named_tensors_by_dtypes[dtype] = []
-            converted_named_tensors_by_dtypes[dtype].append((name, tensor))
-
-    serialized_tensors = []
-    for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
-        flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-        metadata = flattened_tensor_bucket.get_metadata()
-        flattened_tensor_data = {
-            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-            "metadata": metadata,
-        }
-        long_live_tensors.append(flattened_tensor_data)
-        serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
-
-    serialized_named_tensors = (
-        [None] * dist.get_world_size(ipc_gather_group) if ipc_gather_src == dist.get_rank() else None
-    )
-    dist.gather_object(
-        serialized_tensors,
-        object_gather_list=serialized_named_tensors,
-        dst=ipc_gather_src,
-        group=ipc_gather_group,
-    )
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
 
     refs = []
     if dist.get_rank() == ipc_gather_src:
-<<<<<<< ours (vime current)
         if any(p is None for p in gathered_payloads):
             raise RuntimeError(f"Missing IPC payloads in slot {ipc_gather_src}; got {gathered_payloads!r}")
         slot_infos = [_deserialize_ipc_update_info(p) for p in gathered_payloads]
@@ -449,47 +389,3 @@ def _send_to_colocated_engine(
         refs.append(ipc_engine.update_weights_from_tensor.remote(**merged, weight_version=str(weight_version)))
 
     return refs, weight_refs
-||||||| base (slime@a897e1f4 translated)
-        # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
-        num_dtypes = len(serialized_named_tensors[0])
-        for i in range(num_dtypes):
-            kwargs = {
-                "serialized_named_tensors": [tensors[i] for tensors in serialized_named_tensors],
-                "load_format": "flattened_bucket",
-                "weight_version": str(weight_version),
-            }
-            refs.append(ipc_engine.update_weights_from_tensor.remote(**kwargs))
-
-    return refs, long_live_tensors
-=======
-        num_buckets = max(len(tensors) for tensors in serialized_named_tensors)
-        empty_serialized_tensor = None
-        for i in range(num_buckets):
-            serialized_tensors_for_dtype = []
-            for tensors in serialized_named_tensors:
-                if i < len(tensors):
-                    serialized_tensors_for_dtype.append(tensors[i])
-                    continue
-
-                if empty_serialized_tensor is None:
-                    empty_tensor_data = _empty_flattened_tensor_data()
-                    long_live_tensors.append(empty_tensor_data)
-                    empty_serialized_tensor = MultiprocessingSerializer.serialize(empty_tensor_data, output_str=True)
-                serialized_tensors_for_dtype.append(empty_serialized_tensor)
-
-            kwargs = {
-                "serialized_named_tensors": serialized_tensors_for_dtype,
-                "load_format": "flattened_bucket",
-                "weight_version": str(weight_version),
-            }
-            refs.append(ipc_engine.update_weights_from_tensor.remote(**kwargs))
-
-    return refs, long_live_tensors
-
-
-def _empty_flattened_tensor_data():
-    return {
-        "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=torch.cuda.current_device()),
-        "metadata": [],
-    }
->>>>>>> theirs (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
