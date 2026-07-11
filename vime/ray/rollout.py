@@ -154,14 +154,14 @@ class ServerGroup:
             self.num_new_engines = 0
             return [], port_cursors
 
-        num_gpu_per_engine = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
+        num_gpus_per_engine_on_node = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
 
         pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
         validate_server_group_gpu_indices(
             worker_type=self.worker_type,
             gpu_offset=self.gpu_offset,
             num_gpus_per_engine=self.num_gpus_per_engine,
-            num_gpu_per_engine=num_gpu_per_engine,
+            num_gpus_per_engine_on_node=num_gpus_per_engine_on_node,
             num_engines=len(self.all_engines),
             num_available_gpus=len(reordered_gpu_ids),
             rollout_num_gpus=self.args.rollout_num_gpus,
@@ -180,7 +180,7 @@ class ServerGroup:
             num_cpus = num_gpus
 
             # Get the base GPU ID from placement group using gpu_offset.
-            gpu_index = self.gpu_offset + i * num_gpu_per_engine
+            gpu_index = self.gpu_offset + i * num_gpus_per_engine_on_node
             base_gpu_id = int(reordered_gpu_ids[gpu_index])
 
             scheduling_strategy = PlacementGroupSchedulingStrategy(
