@@ -12,9 +12,11 @@ NUM_GPUS = 0
 
 
 @pytest.mark.unit
-def test_missing_top_p_replay_data_raises():
-    with pytest.raises(RuntimeError, match="cannot match rollout sampling"):
-        get_rollout_top_p_logprob_kwargs(Namespace(rollout_top_p=0.95), {})
+def test_missing_top_p_replay_data_warns_and_falls_back():
+    with pytest.warns(RuntimeWarning, match="full-vocabulary"):
+        kwargs = get_rollout_top_p_logprob_kwargs(Namespace(rollout_top_p=0.95), {})
+
+    assert kwargs == {}
 
 
 def _set_cp(monkeypatch, *, size: int, rank: int) -> None:
