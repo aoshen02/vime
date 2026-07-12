@@ -453,6 +453,22 @@ Stabilize MoE RL training by recording and replaying expert routing decisions to
 | `--use-routing-replay` | Forward-backward routing consistency in training. ([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. Supported by vime's default `vllm_rollout` path. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
+---
+
+### 19. Disk Weight-Sync Post-Write Hook (`--custom-update-weight-post-write-path`)
+
+**Signature**:
+```python
+def hook(args, version_dir: str, rollout_engines) -> None
+```
+
+**Purpose**: Called on each trainer rank after a disk weight sync's files are written
+(`--update-weight-transport disk`, full or delta mode), before the engines read them. Use it to
+publish writes on a non-POSIX shared filesystem. The read-side counterpart is
+`--vllm-custom-pull-weights-pre-read-hook <import.path>` with signature
+`hook(source_dir: str, target_version: int)`; it runs in each rollout-host Ray actor before
+reading the published weights. See [Delta Weight Sync](../advanced/delta-weight-sync.md).
+
 ## Testing Custom Function Paths
 
 vime also provides CPU-only contract tests for customization interfaces. These tests resolve components through import-path strings, so they can validate both built-in hooks and user-defined implementations passed through the same CLI arguments used by training.

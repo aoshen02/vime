@@ -319,8 +319,6 @@ class VLLMEngine(RayActor):
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
-        if self.node_rank != 0:
-            return
         if self._weight_version is None:
             raise RuntimeError(
                 "VLLMEngine.get_weight_version called before any successful " "weight transfer recorded a version."
@@ -360,8 +358,28 @@ class VLLMEngine(RayActor):
     def finish_weight_update(self) -> dict:
         return self._make_request("finish_weight_update", {})
 
-    def update_weights_from_disk(self, model_path: str, load_format: str | None = None):
+    def pull_weights(self, target_version: int):
+        from vime.backends.vllm_utils.local_checkpoint import pull
+
+        pull(
+            local_checkpoint_dir=self.args.update_weight_local_checkpoint_dir,
+            base_dir=self.args.hf_checkpoint,
+            source_dir=self.args.update_weight_disk_dir,
+            target_version=target_version,
+            pre_read_hook=getattr(self.args, "vllm_custom_pull_weights_pre_read_hook", None),
+        )
+
+    def update_weights_from_disk(
+        self,
+        model_path: str,
+        load_format: str | None = None,
+        weight_version: str | None = None,
+    ):
         del load_format
+        if self.node_rank != 0:
+            if weight_version is not None:
+                self._weight_version = str(weight_version)
+            return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/collective_rpc",
             json={"method": "reload_weights", "kwargs": {"weights_path": model_path, "is_checkpoint_format": True}},
@@ -371,6 +389,8 @@ class VLLMEngine(RayActor):
         except requests.exceptions.HTTPError as e:
             e.add_note(f"{response.text=}")
             raise
+        if weight_version is not None:
+            self._weight_version = str(weight_version)
         return response.json()
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
@@ -417,6 +437,8 @@ class VLLMEngine(RayActor):
         return result
 
     def pause_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/pause",
             params={"mode": "keep", "clear_cache": "false"},
@@ -426,6 +448,8 @@ class VLLMEngine(RayActor):
         return response
 
     def continue_generation(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/resume", json={})
         response.raise_for_status()
         return response

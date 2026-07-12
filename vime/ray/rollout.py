@@ -22,6 +22,7 @@ GPU_MEMORY_TYPE_WEIGHTS = "weights"
 GPU_MEMORY_TYPE_CUDA_GRAPH = "cuda_graph"
 from vime.rollout.base_types import call_rollout_fn
 from vime.utils import logging_utils
+from vime.utils.data import get_source
 from vime.utils.dp_schedule import build_dp_schedule
 from vime.utils.health_monitor import RolloutHealthMonitor
 from vime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
@@ -543,9 +544,14 @@ class RolloutManager:
         etc.) are automatically excluded.
         """
         srv = self._get_updatable_server()
-        engines = srv.engines if srv else []
-        gpu_counts = srv.engine_gpu_counts if srv else []
-        gpu_offsets = srv.engine_gpu_offsets if srv else []
+        if srv and self.args.update_weight_transport == "disk" and self.args.update_weight_local_checkpoint_dir:
+            engines = srv.all_engines
+            gpu_counts = []
+            gpu_offsets = []
+        else:
+            engines = srv.engines if srv else []
+            gpu_counts = srv.engine_gpu_counts if srv else []
+            gpu_offsets = srv.engine_gpu_offsets if srv else []
         num_new = srv.num_new_engines if srv else 0
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
 
@@ -611,12 +617,19 @@ class RolloutManager:
         self.health_monitoring_pause()
         srv = self._get_updatable_server()
         if self.rollout_id == -1 or srv is None:
-            engines = srv.engines if srv else []
-            gpu_counts = srv.engine_gpu_counts if srv else []
-            gpu_offsets = srv.engine_gpu_offsets if srv else []
+            if srv and self.args.update_weight_transport == "disk" and self.args.update_weight_local_checkpoint_dir:
+                engines = srv.all_engines
+                gpu_counts = []
+                gpu_offsets = []
+            else:
+                engines = srv.engines if srv else []
+                gpu_counts = srv.engine_gpu_counts if srv else []
+                gpu_offsets = srv.engine_gpu_offsets if srv else []
             return engines, self.rollout_engine_lock, (srv.num_new_engines if srv else 0), gpu_counts, gpu_offsets
 
         srv.recover()
+        if self.args.update_weight_transport == "disk" and self.args.update_weight_local_checkpoint_dir:
+            return srv.all_engines, self.rollout_engine_lock, srv.num_new_engines, [], []
         return (
             srv.engines,
             self.rollout_engine_lock,
@@ -831,6 +844,9 @@ class RolloutManager:
         if samples[0].teacher_log_probs is not None:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
+        if samples[0].metadata is not None:
+            train_data["source_names"] = [get_source(sample) for sample in samples]
+
         return train_data
 
     def set_train_parallel_config(self, config: dict):
@@ -880,6 +896,7 @@ class RolloutManager:
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",
                 "rollout_routed_experts",
+                "source_names",
                 "prompt",
                 "teacher_log_probs",
             ]:

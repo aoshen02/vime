@@ -34,6 +34,9 @@ def vllm_args() -> SimpleNamespace:
     return SimpleNamespace(
         rollout_external=True,
         hf_checkpoint="/tmp/model",
+        update_weight_disk_dir="/shared/weights",
+        update_weight_local_checkpoint_dir="/local/weights",
+        vllm_custom_pull_weights_pre_read_hook=None,
         vllm_router_ip=None,
         vllm_router_port=None,
         num_gpus_per_node=8,
@@ -409,11 +412,10 @@ def test_get_weight_version_raises_when_unset(vllm_engine):
 
 
 @pytest.mark.unit
-def test_get_weight_version_worker_rank_returns_none_without_raise(vllm_engine):
-    """Worker ranks short-circuit (matches the class-wide idiom)."""
+def test_get_weight_version_worker_rank_returns_recorded_version(vllm_engine):
     vllm_engine.node_rank = 1
-    vllm_engine._weight_version = None
-    assert vllm_engine.get_weight_version() is None
+    vllm_engine._weight_version = "7"
+    assert vllm_engine.get_weight_version() == "7"
 
 
 @pytest.mark.unit
@@ -575,9 +577,39 @@ def test_update_weights_from_disk_posts_collective_rpc(vllm_engine, monkeypatch)
 
     monkeypatch.setattr(mod.requests, "post", fake_post)
 
-    assert vllm_engine.update_weights_from_disk("/tmp/model") == {"reloaded": True}
+    assert vllm_engine.update_weights_from_disk("/tmp/model", weight_version="8") == {"reloaded": True}
     assert seen[0][0] == "http://127.0.0.1:8765/collective_rpc"
     assert seen[0][3]["method"] == "reload_weights"
+    assert vllm_engine.get_weight_version() == "8"
+
+
+@pytest.mark.unit
+def test_update_weights_from_disk_worker_rank_records_version_without_http(vllm_engine, monkeypatch):
+    vllm_engine.node_rank = 1
+    monkeypatch.setattr(mod.requests, "post", lambda *args, **kwargs: pytest.fail("unexpected HTTP request"))
+
+    assert vllm_engine.update_weights_from_disk("/tmp/model", weight_version="9") is None
+    assert vllm_engine.get_weight_version() == "9"
+
+
+@pytest.mark.unit
+def test_pull_weights_runs_host_local_receiver(vllm_engine, monkeypatch):
+    from vime.backends.vllm_utils import local_checkpoint
+
+    calls = []
+    monkeypatch.setattr(local_checkpoint, "pull", lambda **kwargs: calls.append(kwargs))
+
+    vllm_engine.pull_weights(target_version=3)
+
+    assert calls == [
+        {
+            "local_checkpoint_dir": "/local/weights",
+            "base_dir": "/tmp/model",
+            "source_dir": "/shared/weights",
+            "target_version": 3,
+            "pre_read_hook": None,
+        }
+    ]
 
 
 @pytest.mark.unit

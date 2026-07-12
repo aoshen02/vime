@@ -135,22 +135,27 @@ class MegatronTrainRayActor(TrainRayActor):
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
-        if self.args.colocate:
-            assert (
-                self.args.update_weight_mode == "full"
-            ), "--update-weight-mode=delta is not supported with --colocate"
-            update_weight_cls = UpdateWeightFromTensor
-        elif self.args.update_weight_mode == "delta":
-            from .update_weight.update_weight_from_distributed_delta import UpdateWeightFromDistributedDelta
+        update_weight_mode = self.args.update_weight_mode
+        update_weight_transport = self.args.update_weight_transport
 
-            update_weight_cls = UpdateWeightFromDistributedDelta
+        if update_weight_mode == "delta":
+            assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
+            assert (
+                update_weight_transport == "disk"
+            ), "--update-weight-mode=delta requires --update-weight-transport=disk"
+            from .update_weight.update_weight_from_disk_delta import UpdateWeightFromDiskDelta
+
+            update_weight_cls = UpdateWeightFromDiskDelta
+        elif update_weight_transport == "disk":
+            update_weight_cls = UpdateWeightFromDisk
+        elif self.args.colocate:
+            update_weight_cls = UpdateWeightFromTensor
         else:
-            assert self.args.update_weight_mode == "full"
-            if self.args.update_weight_transport == "disk":
-                update_weight_cls = UpdateWeightFromDisk
-            else:
-                assert self.args.update_weight_transport == "nccl"
-                update_weight_cls = UpdateWeightFromDistributed
+            assert update_weight_mode == "full"
+            assert (
+                update_weight_transport == "nccl"
+            ), f"unsupported weight sync mode/transport: {update_weight_mode!r}/{update_weight_transport!r}"
+            update_weight_cls = UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,

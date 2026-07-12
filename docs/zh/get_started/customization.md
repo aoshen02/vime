@@ -455,6 +455,21 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 | `--use-routing-replay` | 训练中前向-反向路由一致性。([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。vime 默认的 `vllm_rollout` 路径支持该功能。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
+---
+
+### 19. Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
+
+**签名**：
+```python
+def hook(args, version_dir: str, rollout_engines) -> None
+```
+
+**用途**：在 disk 权重同步（`--update-weight-transport disk`，full 或 delta）的文件写完之后、
+engine 读取之前，在每个训练 rank 上调用，用于发布非 POSIX 共享文件系统上的写入。读取侧对应
+`--vllm-custom-pull-weights-pre-read-hook <import.path>`，签名为
+`hook(source_dir: str, target_version: int)`；它在每个 rollout-host Ray actor 读取权重前运行。
+完整机制见 [Delta 权重同步](../advanced/delta-weight-sync.md)。
+
 ## 自定义函数路径的测试
 
 vime 现在也提供了一组 CPU 契约测试，用于校验这些 customization 接口。测试会通过字符串形式的导入路径来动态加载组件，因此既能回归仓库内置 hook，也能验证用户通过和训练时完全相同的 CLI 参数传入的自定义实现。

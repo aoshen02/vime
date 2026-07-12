@@ -173,55 +173,12 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
     args = types.SimpleNamespace(
         update_weight_transport="disk",
         update_weight_disk_dir=None,
-        update_weight_delta_dir=None,
+        update_weight_mode="full",
+        update_weight_local_checkpoint_dir=None,
     )
 
     with pytest.raises(ValueError, match="update-weight-disk-dir"):
-        module._resolve_update_weight_disk_dir(args)
-
-
-@pytest.mark.unit
-def test_update_weight_disk_dir_normalizes_delta_alias(monkeypatch):
-    module = load_vime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
-        update_weight_transport="disk",
-        update_weight_disk_dir=None,
-        update_weight_delta_dir="/shared/delta",
-    )
-
-    with pytest.warns(UserWarning, match="will be removed in a future release"):
-        module._resolve_update_weight_disk_dir(args)
-
-    assert args.update_weight_disk_dir == "/shared/delta"
-    assert args.update_weight_delta_dir == "/shared/delta"
-
-
-@pytest.mark.unit
-def test_update_weight_disk_dir_backfills_legacy_delta_field(monkeypatch):
-    module = load_vime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
-        update_weight_transport="disk",
-        update_weight_disk_dir="/shared/updates",
-        update_weight_delta_dir=None,
-    )
-
-    module._resolve_update_weight_disk_dir(args)
-
-    assert args.update_weight_disk_dir == "/shared/updates"
-    assert args.update_weight_delta_dir == "/shared/updates"
-
-
-@pytest.mark.unit
-def test_update_weight_disk_dir_rejects_conflicting_alias(monkeypatch):
-    module = load_vime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
-        update_weight_transport="disk",
-        update_weight_disk_dir="/shared/full",
-        update_weight_delta_dir="/shared/delta",
-    )
-
-    with pytest.raises(ValueError, match="deprecated alias"):
-        module._resolve_update_weight_disk_dir(args)
+        module._validate_update_weight_args(args)
 
 
 def make_vime_validate_args(**overrides):
@@ -302,7 +259,7 @@ def make_vime_validate_args(**overrides):
         freeze_params_name_list=None,
         update_weight_transport="nccl",
         update_weight_disk_dir=None,
-        update_weight_delta_dir=None,
+        update_weight_local_checkpoint_dir=None,
         update_weight_mode="full",
     )
     values.update(overrides)
@@ -353,18 +310,58 @@ def test_vime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkeyp
 
 
 @pytest.mark.unit
-def test_update_weight_delta_disabled(monkeypatch):
+def test_update_weight_delta_requires_disk_transport(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
-    for transport, colocate in (("nccl", False), ("tensor", False), ("nccl", True)):
-        args = types.SimpleNamespace(
-            update_weight_mode="delta",
-            update_weight_transport=transport,
-            update_weight_disk_dir=None,
-            update_weight_delta_dir=None,
-            colocate=colocate,
-        )
-        with pytest.raises(NotImplementedError, match="unverified on vime"):
-            module._validate_update_weight_args(args)
+    args = make_vime_validate_args(
+        update_weight_mode="delta",
+        update_weight_transport="nccl",
+        update_weight_local_checkpoint_dir="/local/ckpt",
+    )
+
+    with pytest.raises(ValueError, match="requires --update-weight-transport=disk"):
+        module.vime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_rejects_colocate(monkeypatch):
+    module = load_vime_arguments_module(monkeypatch)
+    args = make_vime_validate_args(
+        update_weight_mode="delta",
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/delta",
+        update_weight_local_checkpoint_dir="/local/ckpt",
+        colocate=True,
+    )
+
+    with pytest.raises(ValueError, match="not supported with --colocate"):
+        module.vime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_requires_local_checkpoint_dir(monkeypatch):
+    module = load_vime_arguments_module(monkeypatch)
+    args = make_vime_validate_args(
+        update_weight_mode="delta",
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/delta",
+    )
+
+    with pytest.raises(ValueError, match="requires --update-weight-local-checkpoint-dir"):
+        module.vime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_local_checkpoint_rejects_external_vllm_engines(monkeypatch):
+    module = load_vime_arguments_module(monkeypatch)
+    args = make_vime_validate_args(
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/weights",
+        update_weight_local_checkpoint_dir="/local/ckpt",
+        rollout_external_engine_addrs=["external:8000"],
+    )
+
+    with pytest.raises(ValueError, match="not supported with external vLLM engines"):
+        module.vime_validate_args(args)
 
 
 if __name__ == "__main__":

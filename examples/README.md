@@ -11,5 +11,10 @@ These examples provide concrete examples to leverage vime in your own RL workflo
 - **[low_precision](./low_precision)**: Examples of FP8 training and inference for improved throughput and stability.
 - **[mem_agent](./mem_agent)**: MemAgent long-context RL — chunk-wise memory update, HotpotQA GRPO training, and RULER-HQA evaluation.
 - **[multi_agent](./multi_agent)**: Example of running multi-agent RL with `vime`.
+- **[on_policy_distillation](./on_policy_distillation)**: Example implementation for on-policy distillation, extending the reinforcement learning pipeline to support teacher–student distillation directly within on-policy training.
+- **[delta_weight_sync](./delta_weight_sync)**: Non-colocated disk weight sync that ships only changed bytes through a shared filesystem.
+- **[reproducibility](./reproducibility)**: Guides on achieving bitwise experiment reproduction using deterministic modes.
+- **[retool](./retool)**: Demonstrates the retool functionality for tool-enabled language model generation.
+- **[search-r1](./search-r1)**: A minimal reproduction of Search-R1, featuring multi-turn conversation and tool-calling.
 - **[tau-bench](./tau-bench)**: Multi-turn tool-use agent training in tau-bench environments.
 - **[train_infer_mismatch_helper](./train_infer_mismatch_helper)**: Algorithmic methods for rollout correction (e.g., TIS, MIS).
