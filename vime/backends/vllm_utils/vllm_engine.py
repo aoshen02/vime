@@ -663,10 +663,7 @@ def _compute_server_args(
 
 
 def _vllm_server_field_names() -> frozenset[str]:
-    """Valid vLLM server-arg field names: ``AsyncEngineArgs`` ∪ ``FrontendArgs``. vLLM has no
-    single ``ServerArgs`` class (sglang does); their union is the faithful translation. Single
-    source of truth for ``--vllm-*`` flag generation and ``--vllm-config`` override validation.
-    """
+    """Return the vLLM fields accepted by CLI generation and config overrides."""
     from vllm.engine.arg_utils import AsyncEngineArgs
     from vllm.entrypoints.openai.cli_args import FrontendArgs
 

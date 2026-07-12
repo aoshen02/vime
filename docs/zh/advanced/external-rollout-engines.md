@@ -90,7 +90,7 @@ delta update 面向大模型、跨集群或跨数据中心训推解耦。它不�
 --update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt
 ```
 
-Vime 当前通过 delta guard 拒绝该模式；机械同步的机制和完整性模型见 [Delta 权重同步](delta-weight-sync.md)。
+机制、编码、完整性校验以及共享文件系统可见性 hook 详见 [Delta 权重同步](delta-weight-sync.md)。
 
 ## 部署检查清单
 

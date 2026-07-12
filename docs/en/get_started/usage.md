@@ -145,7 +145,7 @@ Note:
   - By default, vLLM reads the maximum context length from the `config.json` in the Hugging Face checkpoint. You can use the `--vllm-max-model-len` parameter to override this value to support longer inference.
   - During co-located training and inference, although Megatron and vLLM will offload sequentially, they still need to leave some memory for each other. You need to adjust vLLM's total VRAM usage by reducing `--vllm-gpu-memory-utilization`.
   - vime supports passing through vllm-router parameters by adding a `router` prefix to the original parameter name. For example, vllm-router's `--balance-abs-threshold` parameter should be set as `--router-balance-abs-threshold`. vime uses `consistent_hash` routing by default. cache-aware routing is not supported for now. You can set `--router-balance-abs-threshold 0` to force balanced distribution, but this may affect prefix cache hit rate in multi-turn conversation scenarios.
-  - If vLLM engines are pre-launched by an external system, connect to them with `--rollout-external-engine-addrs host1:port host2:port`. When the trainer and engines cannot form an NCCL weight-update group, use `--update-weight-mode full --update-weight-transport disk --update-weight-disk-dir /shared/fs/updates`; vime writes a complete HF checkpoint and asks vLLM to hot-load it through `update_weights_from_disk`. Host-local delta apply requires Vime-launched engines in the same Ray cluster. See [External Rollout Engines Roadmap](../advanced/external-rollout-engines.md) and [Delta Weight Sync](../advanced/delta-weight-sync.md).
+  - If vLLM engines are pre-launched by an external system, connect to them with `--rollout-external-engine-addrs host1:port host2:port`. When the trainer and engines cannot form an NCCL weight-update group, use `--update-weight-mode full --update-weight-transport disk --update-weight-disk-dir /shared/fs/updates`; vime writes a complete HF checkpoint and asks vLLM to hot-load it through `update_weights_from_disk`. For large models or cross-cluster deployments, use `--update-weight-mode delta --update-weight-transport disk` instead. See [External Rollout Engines Roadmap](../advanced/external-rollout-engines.md) and [Delta Weight Sync](../advanced/delta-weight-sync.md).
 
 For details on some of vLLM's customizations and the principles behind how vime incorporates vLLM, please see the "How to Use vLLM" section.
 
@@ -189,7 +189,7 @@ If one run mixes multiple data sources, put `source_name` in the sample metadata
 }
 ```
 
-The recommended contract is to put the source identifier in `metadata["source_name"]`; vime also recognizes a dynamically set `sample.source` from custom data sources. When rollout samples are converted to training data, vime carries one `source_names` entry per sample to the training side. The source lookup order is dynamic `sample.source`, then `metadata["source_name"]`; if neither is set, the source is `"unknown"`.
+The recommended contract is to put the source identifier in `metadata["source_name"]`; vime also recognizes a dynamically set `sample.source` from custom data sources. When rollout samples are converted to training data, vime carries one `source_names` entry per sample to the training side. The source lookup order is dynamic `sample.source`, then `metadata["source_name"]`; if neither is set, the source is `"unknown"`. This is useful for custom rewards, filters, logging, and future per-source routing such as OPD teacher selection.
 
 ### Hyperparameters for RL Training
 

@@ -147,7 +147,7 @@ vLLM 的加载非常简单，只需要：
 - vLLM 默认会从 huggingface ckpt 中 `config.json` 读取模型的最大 context length，可以使用 `--vllm-max-model-len` 参数来对这个值进行覆盖，从而支持进行更长的推理；
 - 在训推一体的训练过程中，虽然 megatron 和 vLLM 会先后 offload，但是还是需要为对方留有一些空间，需要通过减小 `--vllm-gpu-memory-utilization` 来调整 vLLM 的显存占用总量。
 - vime 支持透传 vllm-router 的参数，方式是在原参数名前加上 `router` 前缀。例如，vllm-router 的 `--balance-abs-threshold` 参数需要设置为 `--router-balance-abs-threshold`。vime 默认使用 `consistent_hash` 路由策略。暂时不支持 cache-aware routing。可以通过设置 `--router-balance-abs-threshold 0` 来强制均衡分配，但这可能会影响多轮对话场景下 prefix cache 的命中率。
-- 如果 vLLM engine 已经由外部系统预启动，可以通过 `--rollout-external-engine-addrs host1:port host2:port` 连接。此时如果训练器和 engine 无法建立 NCCL 权重同步 group，可以使用 `--update-weight-mode full --update-weight-transport disk --update-weight-disk-dir /shared/fs/updates`，vime 会写完整 HF checkpoint 并调用 vLLM 的 `update_weights_from_disk` 热加载。host-local delta apply 要求 engine 由 Vime 在同一 Ray 集群内启动。详见 [External Rollout Engines 配置路线图](../advanced/external-rollout-engines.md) 和 [Delta 权重同步](../advanced/delta-weight-sync.md)。
+- 如果 vLLM engine 已经由外部系统预启动，可以通过 `--rollout-external-engine-addrs host1:port host2:port` 连接。此时如果训练器和 engine 无法建立 NCCL 权重同步 group，可以使用 `--update-weight-mode full --update-weight-transport disk --update-weight-disk-dir /shared/fs/updates`，vime 会写完整 HF checkpoint 并调用 vLLM 的 `update_weights_from_disk` 热加载；大模型或跨集群场景可进一步使用 `--update-weight-mode delta --update-weight-transport disk`。详见 [External Rollout Engines 配置路线图](../advanced/external-rollout-engines.md) 和 [Delta 权重同步](../advanced/delta-weight-sync.md)。
 
 对于一些 vLLM 的自定义以及 vime 引入 vLLM 的原理，请见 vLLM 使用方法一节。
 
@@ -179,7 +179,7 @@ vLLM 的加载非常简单，只需要：
 请注意，这里的 `step_loss_mask`（默认值为 1）字段为 SFT 阶段提供，若设置为 0，则会将该轮 `loss_mask` 设置为 0；若设置为 1，则使用正常 `loss_mask`。
 另外我们还提供了一个 metadata_key，默认为 `"metadata"`，读取后我们会把数据中的 metadata 加载进 vime，可能会对自定义数据生成或者自定义 reward model 有帮助。
 
-如果同一次训练混合了多个 data source，可以在 metadata 中写入 `source_name`：
+如果同一次训练混合了多个数据 source，可以在 metadata 中写入 `source_name`：
 
 ```json
 {
@@ -191,7 +191,7 @@ vLLM 的加载非常简单，只需要：
 }
 ```
 
-推荐把 source 标识放在 `metadata["source_name"]` 中；自定义 data source 如果已经动态设置了 `sample.source`，vime 也会识别。rollout 转换成训练数据时，vime 会为每个样本生成 `source_names` 并传到训练侧。source 的读取优先级为动态 `sample.source`、`metadata["source_name"]`，都不存在时为 `"unknown"`。
+推荐把 source 标识放在 `metadata["source_name"]` 中；自定义 data source 如果已经动态设置了 `sample.source`，vime 也会识别。rollout 转换成训练数据时，vime 会为每个样本生成 `source_names` 并传到训练侧。source 的读取优先级为动态 `sample.source`、`metadata["source_name"]`，都不存在时为 `"unknown"`。这可以用于自定义 reward、filter、日志统计，以及后续按 source 路由 OPD teacher 等需要分 source 处理的场景。
 
 ### RL 训练需要的超参
 

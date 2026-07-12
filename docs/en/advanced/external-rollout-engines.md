@@ -90,8 +90,7 @@ Delta update targets large-model training/inference disaggregation across cluste
 --update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt
 ```
 
-Vime currently rejects this mode through its delta guard. See [Delta Weight Sync](delta-weight-sync.md)
-for the mechanically synchronized mechanism and integrity model.
+See [Delta Weight Sync](delta-weight-sync.md) for the mechanism, encodings, integrity checks, and shared-filesystem visibility hooks.
 
 ## Deployment Checklist
 

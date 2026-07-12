@@ -30,7 +30,7 @@ delta 始终用 zstd（level 1）压缩；profiling 显示对这类数据它在 
 
 1. **Seed。** 第一次同步时，训练端为每个参数捕获一份 CPU snapshot——从 `--hf-checkpoint` seed，而这正是每个 rollout host 物化本地 checkpoint 的来源。此次不发布任何东西；这份 snapshot 就是下一次同步 diff 的基准。训练端同时发出 `target_version=0` 的 `/pull_weights`，让每个 host 现在就物化本地 base，与 snapshot 捕获重叠进行。
 2. **Publish。** 之后每次同步，训练端把每个 gather 出的 HF tensor 与 snapshot 做 diff，编码、压缩，写到 `--update-weight-disk-dir` 下的新版本目录 `weight_v{N:06d}/`。该目录是一份 canonical HF checkpoint——`model-NNNNN.safetensors` 文件装着压缩后的 diff tensor，外加 `model.safetensors.index.json`（tensor 名 → 文件）承载 apply 元数据——所以这个产物是可移植的，不绑定训练端的并行 layout。随后 snapshot 推进到新值，供下次 diff。
-3. **Pull。** 训练端对每个 engine 调用 `/pull_weights`。engine 内部把请求广播到每个节点的每个 rank；每个 host 把新版本的 delta 原地 apply 进它的本地 checkpoint（host 级文件锁把同 host 的多个 rank 合并成一次 apply）。apply 在 tensor 之间并行，并逐 tensor 校验（见“完整性”）；只有**每一个 host** 都持有校验通过的 checkpoint，该调用才报告成功。
+3. **Pull。** 训练端对每个 engine 调用 `/pull_weights`。engine 内部把请求广播到每个节点的每个 rank；每个 host 把新版本的 delta 原地 apply 进它的本地 checkpoint（host 级文件锁把同 host 的多个 rank 合并成一次 apply）。apply 在 tensor 之间并行，并逐 tensor 校验（见"完整性"）；只有**每一个 host** 都持有校验通过的 checkpoint，该调用才报告成功。
 
    `/pull_weights` 并不绑定 delta：每个发布的版本是自描述的。若某个版本是一份普通的完整 HF
    checkpoint（index 中没有 delta 元数据），pull 就直接整份拷贝——同时重置链条，因此晚加入的
