@@ -1,4 +1,3 @@
-import warnings
 from argparse import Namespace
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -45,13 +44,10 @@ def get_rollout_top_p_logprob_kwargs(args: Namespace, batch: dict[str, Any]) -> 
     top_p_token_ids = batch.get("rollout_top_p_token_ids")
     top_p_token_offsets = batch.get("rollout_top_p_token_offsets")
     if top_p_token_ids is None or top_p_token_offsets is None:
-        warnings.warn(
+        raise RuntimeError(
             "rollout_top_p != 1.0 but vLLM did not return the retained top-p token IDs; "
-            "falling back to full-vocabulary log-probability replay.",
-            RuntimeWarning,
-            stacklevel=2,
+            "top-p log-probability replay cannot match rollout sampling."
         )
-        return {}
     return {
         "top_p_token_ids": top_p_token_ids,
         "top_p_token_offsets": top_p_token_offsets,

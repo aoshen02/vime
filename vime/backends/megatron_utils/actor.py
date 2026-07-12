@@ -139,6 +139,9 @@ class MegatronTrainRayActor(TrainRayActor):
         update_weight_transport = self.args.update_weight_transport
 
         if update_weight_mode == "delta":
+            # Delta sync is disk-transport only: each engine's /pull_weights applies the published
+            # deltas into a host-local checkpoint on every host it spans, and the engines reload
+            # via vanilla update_weights_from_disk.
             assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
             assert (
                 update_weight_transport == "disk"

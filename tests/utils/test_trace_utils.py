@@ -22,6 +22,7 @@ def _load_trace_timeline_viewer_module():
     return module
 
 
+@pytest.mark.unit
 def test_build_vllm_meta_trace_attrs_keeps_standard_and_pd_fields():
     attrs = build_vllm_meta_trace_attrs(
         {

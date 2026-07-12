@@ -8,9 +8,11 @@ and points vime at both via ``--rollout-external-engine-addrs ...``.
 The first 4 GPUs train. vime queries ``/server_info`` on each engine to
 infer per-engine TP / GPU counts and registers them to its PD-enabled router.
 
-Weight sync uses ``--update-weight-mode full --update-weight-transport disk``
-because pre-launched workers cannot form an NCCL group with the trainer and
-Vime cannot execute host-local delta apply outside its Ray cluster.
+Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
+so the post-train sync writes sparse safetensors to a shared dir and the
+external engines load them via ``update_weights_from_disk(load_format=delta)``
+— that's the only sync path that actually works for pre-launched workers (no
+NCCL group between trainer and external engines).
 """
 
 import os
@@ -251,8 +253,8 @@ def execute():
                 )
             )
 
-    disk_dir_cm = tempfile.TemporaryDirectory(prefix="vime_external_pd_disk_")
-    disk_dir = disk_dir_cm.name
+    delta_dir_cm = tempfile.TemporaryDirectory(prefix="vime_external_pd_delta_")
+    delta_dir = delta_dir_cm.name
     try:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
@@ -290,6 +292,9 @@ def execute():
             "--use-kl-loss "
             "--kl-loss-coef 0.00 "
             "--kl-loss-type low_var_kl "
+            # Nonzero entropy coef guarantees a nonzero gradient even when all
+            # rewards in a group tie (advantages=0), so the delta sync writes
+            # real sparse files instead of an empty no-op.
             "--entropy-coef 0.01 "
             "--eps-clip 0.2 "
             "--eps-clip-high 0.28 "
@@ -310,11 +315,16 @@ def execute():
         all_addrs = [f"{external_host}:{port}" for port in (*PREFILL_PORTS, *DECODE_PORTS)]
         external_args = "--rollout-external-engine-addrs " + " ".join(all_addrs) + " "
 
-        disk_args = (
-            "--update-weight-mode full "
+        # External engines have no NCCL group with the trainer, so weight
+        # updates have to go through the disk-backed delta path: the trainer
+        # writes sparse safetensors per sync, the engines pull via
+        # update_weights_from_disk(load_format="delta", files=...).
+        delta_args = (
+            "--update-weight-mode delta "
             "--update-weight-transport disk "
-            f"--update-weight-disk-dir {disk_dir} "
-            "--update-weight-disk-keep-files "
+            "--update-weight-encoding deltas "
+            f"--update-weight-disk-dir {delta_dir} "
+            "--update-weight-delta-keep-files "
         )
 
         ci_args = "--ci-test "
@@ -337,7 +347,7 @@ def execute():
             f"{U.get_default_wandb_args(__file__)} "
             f"{perf_args} "
             f"{external_args} "
-            f"{disk_args} "
+            f"{delta_args} "
             f"{ci_args} "
             f"{misc_args} "
         )
@@ -353,15 +363,15 @@ def execute():
             },
         )
 
-        checkpoint_files = list(Path(disk_dir).glob("weight_v*/*.safetensors"))
-        assert checkpoint_files, f"No full disk checkpoint was written under {disk_dir}"
+        delta_files = list(Path(delta_dir).glob("weight_v*/*.safetensors"))
+        assert delta_files, f"No disk delta safetensors were written under {delta_dir}"
     finally:
         for p in processes:
             if p.poll() is None:
                 p.kill()
                 p.wait()
         U.exec_command("pkill -9 vllm; true")
-        disk_dir_cm.cleanup()
+        delta_dir_cm.cleanup()
 
 
 if __name__ == "__main__":

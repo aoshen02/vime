@@ -319,6 +319,8 @@ class VLLMEngine(RayActor):
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
+        if self.node_rank != 0:
+            return
         if self._weight_version is None:
             raise RuntimeError(
                 "VLLMEngine.get_weight_version called before any successful " "weight transfer recorded a version."
@@ -376,8 +378,6 @@ class VLLMEngine(RayActor):
     ):
         del load_format
         if self.node_rank != 0:
-            if weight_version is not None:
-                self._weight_version = str(weight_version)
             return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/collective_rpc",
@@ -471,11 +471,15 @@ class VLLMEngine(RayActor):
         with_stack: bool | None = None,
         record_shapes: bool | None = None,
     ):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/start_profile", json={})
         response.raise_for_status()
         return response
 
     def stop_profile(self):
+        if self.node_rank != 0:
+            return
         response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
         response.raise_for_status()
         return response

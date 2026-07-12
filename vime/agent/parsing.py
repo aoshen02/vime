@@ -25,7 +25,7 @@ class ParsedModelOutput:
 def parse_model_output(
     raw_output: str,
     *,
-    tokenizer,
+    tokenizer=None,
     tools_schema: list[dict] | None,
     tool_parser_name: str | None,
     reasoning_parser_name: str | None,

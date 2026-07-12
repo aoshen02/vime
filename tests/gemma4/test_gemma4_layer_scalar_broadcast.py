@@ -18,7 +18,6 @@ def _worker(rank: int, world_size: int, master_port: int, ckpt_dir: str, out_dir
     try:
         try:
             import megatron.core.transformer.transformer_layer as tl
-            import megatron.training  # noqa: F401
         except ModuleNotFoundError:
             from tests.gemma4._standalone_imports import install_mbridge_stubs, install_megatron_stubs
 

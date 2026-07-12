@@ -1742,8 +1742,7 @@ def _validate_update_weight_args(args) -> None:
 
     if args.update_weight_mode == "delta":
         raise NotImplementedError(
-            "--update-weight-mode=delta is unverified on vime+vLLM and is disabled; "
-            "use --update-weight-mode=full."
+            "--update-weight-mode=delta is unverified on vime+vLLM and is disabled; " "use --update-weight-mode=full."
         )
 
 

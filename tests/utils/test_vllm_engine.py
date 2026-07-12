@@ -34,8 +34,6 @@ def vllm_args() -> SimpleNamespace:
     return SimpleNamespace(
         rollout_external=True,
         hf_checkpoint="/tmp/model",
-        update_weight_disk_dir="/shared/weights",
-        update_weight_local_checkpoint_dir="/local/weights",
         vllm_router_ip=None,
         vllm_router_port=None,
         num_gpus_per_node=8,
@@ -411,10 +409,11 @@ def test_get_weight_version_raises_when_unset(vllm_engine):
 
 
 @pytest.mark.unit
-def test_get_weight_version_worker_rank_returns_recorded_version(vllm_engine):
+def test_get_weight_version_worker_rank_returns_none_without_raise(vllm_engine):
+    """Worker ranks short-circuit (matches the class-wide idiom)."""
     vllm_engine.node_rank = 1
-    vllm_engine._weight_version = "7"
-    assert vllm_engine.get_weight_version() == "7"
+    vllm_engine._weight_version = None
+    assert vllm_engine.get_weight_version() is None
 
 
 @pytest.mark.unit
@@ -583,31 +582,12 @@ def test_update_weights_from_disk_posts_collective_rpc(vllm_engine, monkeypatch)
 
 
 @pytest.mark.unit
-def test_update_weights_from_disk_worker_rank_records_version_without_http(vllm_engine, monkeypatch):
+def test_profile_worker_rank_skips_http(vllm_engine, monkeypatch):
     vllm_engine.node_rank = 1
     monkeypatch.setattr(mod.requests, "post", lambda *args, **kwargs: pytest.fail("unexpected HTTP request"))
 
-    assert vllm_engine.update_weights_from_disk("/tmp/model", weight_version="9") is None
-    assert vllm_engine.get_weight_version() == "9"
-
-
-@pytest.mark.unit
-def test_pull_weights_uses_mechanical_engine_endpoint(vllm_engine, monkeypatch):
-    calls = []
-    monkeypatch.setattr(vllm_engine, "_make_request", lambda endpoint, payload: calls.append((endpoint, payload)))
-
-    vllm_engine.pull_weights(target_version=3)
-
-    assert calls == [
-        (
-            "pull_weights",
-            {
-                "local_checkpoint_dir": "/local/weights",
-                "source_dir": "/shared/weights",
-                "target_version": 3,
-            },
-        )
-    ]
+    assert vllm_engine.start_profile() is None
+    assert vllm_engine.stop_profile() is None
 
 
 @pytest.mark.unit

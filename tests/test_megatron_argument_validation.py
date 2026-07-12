@@ -170,15 +170,10 @@ def test_allgather_cp_ignores_cp_size_one(monkeypatch):
 @pytest.mark.unit
 def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
-    args = types.SimpleNamespace(
-        update_weight_transport="disk",
-        update_weight_disk_dir=None,
-        update_weight_mode="full",
-        update_weight_local_checkpoint_dir=None,
-    )
+    args = make_vime_validate_args(update_weight_transport="disk", update_weight_disk_dir=None)
 
     with pytest.raises(ValueError, match="update-weight-disk-dir"):
-        module._validate_update_weight_args(args)
+        module.vime_validate_args(args)
 
 
 def make_vime_validate_args(**overrides):
@@ -255,6 +250,8 @@ def make_vime_validate_args(**overrides):
         rollout_max_context_len=None,
         rollout_max_prompt_len=None,
         train_backend="megatron",
+        release_train=False,
+        keep_old_actor=False,
         only_train_params_name_list=None,
         freeze_params_name_list=None,
         update_weight_transport="nccl",
@@ -312,15 +309,16 @@ def test_vime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkeyp
 @pytest.mark.unit
 def test_update_weight_delta_disabled(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
-    for transport, colocate in (("nccl", False), ("disk", False), ("nccl", True)):
-        args = make_vime_validate_args(
+    for transport, colocate in (("nccl", False), ("tensor", False), ("nccl", True)):
+        args = types.SimpleNamespace(
             update_weight_mode="delta",
             update_weight_transport=transport,
-            update_weight_disk_dir="/shared/delta" if transport == "disk" else None,
+            update_weight_disk_dir=None,
+            update_weight_delta_dir=None,
             colocate=colocate,
         )
         with pytest.raises(NotImplementedError, match="unverified on vime"):
-            module.vime_validate_args(args)
+            module._validate_update_weight_args(args)
 
 
 if __name__ == "__main__":
