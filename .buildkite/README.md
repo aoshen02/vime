@@ -8,7 +8,7 @@ build (PR and push to `main`):
 | Step | Purpose | Queue (machine) |
 |---|---|---|
 | `pre-commit` | pre-commit gate | `small_cpu_queue_premerge` (r6in.large) |
-| `plugin-contracts` | plugin contract tests (19 files) | `medium_cpu_queue_premerge` (r6in.4xlarge) |
+| `plugin-contracts` | plugin contracts and CPU tests (21 files) | `medium_cpu_queue_premerge` (r6in.4xlarge) |
 | `agent-adapter` | agent adapter tests (3 files) | `small_cpu_queue_premerge` |
 | `utils` | utils tests (`pytest tests/utils`) | `medium_cpu_queue_premerge` |
 
