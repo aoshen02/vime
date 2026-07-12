@@ -51,16 +51,6 @@ def add_vllm_arguments(parser):
             "AND exports ``VLLM_BATCH_INVARIANT=1`` to the vLLM subprocess."
         ),
     )
-    parser.add_argument(
-        "--vllm-custom-pull-weights-pre-read-hook",
-        type=str,
-        default=None,
-        help=(
-            "Import path of a hook(source_dir, target_version) called before a rollout host reads "
-            "published disk weights. POSIX shared filesystems need no hook; object-store-backed "
-            "mounts may need an explicit refresh."
-        ),
-    )
     _vllm_packed = parser.add_mutually_exclusive_group()
     _vllm_packed.add_argument(
         "--vllm-weight-sync-packed",

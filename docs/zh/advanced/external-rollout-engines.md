@@ -12,9 +12,9 @@ External rollout engine 指的是：vLLM engine 不由 vime 训练任务启动�
 | engine 仍由 vime 启动，但需要 PD 分离、多模型、异构 server group 或 per-group overrides | [vLLM Config](vllm-config.md) |
 | 训练器和 external engine 可以建立 NCCL group | 默认的 `--update-weight-mode full --update-weight-transport nccl` |
 | 训练器和 external engine 不能建立 NCCL group，但能共享同一路径的文件系统 | `--update-weight-mode full --update-weight-transport disk` |
-| 大模型跨集群或跨数据中心同步，full checkpoint 太重 | 在 Vime 的 Ray 集群内启动 vLLM，并使用 `--update-weight-mode delta --update-weight-transport disk` |
+| 大模型跨集群或跨数据中心同步，full checkpoint 太重 | `--update-weight-mode delta --update-weight-transport disk` |
 | rollout serving 想使用独立 vLLM 环境，甚至不同型号或不同厂家的 GPU | external engine + disk transport |
-| 想在同一数据中心内验证 delta apply | 使用 Vime 拉起的 engine 和 disk transport |
+| 想验证 delta wire/apply 逻辑，但仍在同一数据中心内 | `--update-weight-mode delta --update-weight-transport nccl` |
 | 需要 reference、reward、tool-side model 等冻结模型 | 优先用 [vLLM Config](vllm-config.md#3-多模型服务) 的 `update_weights: false` |
 
 ## External Engine 做了什么
@@ -67,7 +67,7 @@ full checkpoint update from disk 是 external 场景最简单的兜底路径：
 
 每次权重同步时，训练端会在 `--update-weight-disk-dir` 下写一个完整 HF checkpoint 目录，例如 `weight_v000123/`，然后通过 HTTP 调用每个 vLLM engine 的 `update_weights_from_disk`，让 engine 在不重启进程的情况下重新加载 checkpoint。
 
-external engine 不能使用 `--update-weight-local-checkpoint-dir`，因为 Vime 无法在 Ray 集群之外的机器上执行 host-local pull。external engine 应直接从共享目录 reload 完整 checkpoint。
+额外设置 `--update-weight-local-checkpoint-dir` 后，每个 engine 会先把发布的 checkpoint pull 到它覆盖的每个 host 的本地磁盘（`/pull_weights`，随 vime 的 vllm patch 提供），再从本地（如 NVMe）reload——共享文件系统每个 host 只读一次，而不是每个 rank 读一次；当共享目录是对象存储或 engine 跨多个节点时尤其重要。
 
 这个模式的优点是控制面简单：不要求训练器和 engine 建 NCCL group，只要求二者能看到同一个共享文件系统路径。缺点也直接：每次同步都写完整 actor 权重，对大模型和高频同步来说非常重。
 
@@ -81,9 +81,16 @@ external engine 不能使用 `--update-weight-local-checkpoint-dir`，因为 Vim
 
 ## Update With Delta
 
-delta update 面向大模型、跨集群或跨数据中心训推解耦。它不每次都写完整 checkpoint，而是在训练端保留上一次同步的 CPU snapshot，逐参数比对，只发布变化的字节。在 Vime 中，host-local apply 运行在与 Vime 启动的 rollout node 共置的 Ray actor 中，因此 external engine 暂不支持该模式。
+delta update 面向大模型、跨集群或跨数据中心训推解耦。它不每次都写完整 checkpoint，而是在训练端保留上一次同步的 CPU snapshot，逐参数比对，只发布变化的字节；每个 engine 的 `/pull_weights` 端点（随 vime 的 vllm patch 提供）把 delta apply 进 engine 覆盖的每个 host 的本地 checkpoint，再通过原生 `update_weights_from_disk` 端点 reload。vime 只调用 engine 的 HTTP 端点，所以多节点 external engine 与 vime 拉起的 engine 行为一致。
 
-Vime 管理的 engine 如何使用该机制，详见 [Delta 权重同步](delta-weight-sync.md)。
+```bash
+--update-weight-mode delta
+--update-weight-transport disk
+--update-weight-disk-dir /shared/fs/delta-updates
+--update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt
+```
+
+Vime 当前通过 delta guard 拒绝该模式；机械同步的机制和完整性模型见 [Delta 权重同步](delta-weight-sync.md)。
 
 ## 部署检查清单
 

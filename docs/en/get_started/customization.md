@@ -464,10 +464,16 @@ def hook(args, version_dir: str, rollout_engines) -> None
 
 **Purpose**: Called on each trainer rank after a disk weight sync's files are written
 (`--update-weight-transport disk`, full or delta mode), before the engines read them. Use it to
-publish writes on a non-POSIX shared filesystem. The read-side counterpart is
+publish the writes on a non-POSIX shared filesystem — e.g. upload pending writes to the
+backing object store — where another host cannot see the files without an explicit sync. The hook is called
+on every rank and must gate itself (e.g. once per container).
+
+The read-side counterpart runs inside the inference engine, on every host it spans, and is
+therefore an vllm server argument rather than a vime hook: pass
 `--vllm-custom-pull-weights-pre-read-hook <import.path>` with signature
-`hook(source_dir: str, target_version: int)`; it runs in each rollout-host Ray actor before
-reading the published weights. See [Delta Weight Sync](../advanced/delta-weight-sync.md).
+`hook(source_dir: str, target_version: int)` — called before `/pull_weights` reads the
+published weights (e.g. refresh the mount's view). See
+[Delta Weight Sync](../advanced/delta-weight-sync.md) for the full mechanism.
 
 ## Testing Custom Function Paths
 

@@ -1,8 +1,9 @@
 #!/bin/bash
 # Disk delta weight-sync demo on GLM-4.7-Flash (30B-A3B), non-colocated, 2 nodes x 8 GPU.
 # The trainer publishes per-tensor deltas to --update-weight-disk-dir as a canonical HF directory;
-# each rollout-host Ray actor applies them into --update-weight-local-checkpoint-dir, then the
-# engine reloads through the vanilla update_weights_from_disk path.
+# each engine's /pull_weights applies them into --update-weight-local-checkpoint-dir on every host
+# it spans, and the engine reloads via the vanilla update_weights_from_disk path.
+# Vime currently rejects --update-weight-mode delta; this script is upstream reference material.
 #
 # Prerequisites:
 #   - A 2-node (16-GPU) Ray cluster, this script run on the head node.

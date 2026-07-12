@@ -464,11 +464,15 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 def hook(args, version_dir: str, rollout_engines) -> None
 ```
 
-**用途**：在 disk 权重同步（`--update-weight-transport disk`，full 或 delta）的文件写完之后、
-engine 读取之前，在每个训练 rank 上调用，用于发布非 POSIX 共享文件系统上的写入。读取侧对应
-`--vllm-custom-pull-weights-pre-read-hook <import.path>`，签名为
-`hook(source_dir: str, target_version: int)`；它在每个 rollout-host Ray actor 读取权重前运行。
-完整机制见 [Delta 权重同步](../advanced/delta-weight-sync.md)。
+**用途**：在 disk 权重同步（`--update-weight-transport disk`，full 或 delta 模式）的文件写完之后、
+engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享文件系统上发布写入——例如 commit
+一个对象存储挂载——否则其他 host 无法看到这些文件。hook 会在每个 rank 上被调用，需要自行去重
+（例如每个容器只执行一次）。
+
+读取侧的对应 hook 运行在推理引擎内部、engine 覆盖的每个 host 上，因此它是一个 vllm server
+参数而不是 vime hook：传入 `--vllm-custom-pull-weights-pre-read-hook <import.path>`，签名为
+`hook(source_dir: str, target_version: int)`——在 `/pull_weights` 读取已发布权重之前调用
+（例如刷新挂载视图）。完整机制见 [Delta 权重同步](../advanced/delta-weight-sync.md)。
 
 ## 自定义函数路径的测试
 

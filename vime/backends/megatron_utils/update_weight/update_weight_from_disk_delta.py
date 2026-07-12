@@ -31,8 +31,9 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
     """
     Delta weight sync over a shared filesystem. PP-src ranks diff each gathered HF tensor against
     a CPU snapshot of the previous sync and publish the changes as a canonical HF checkpoint dir;
-    each rollout-host Ray actor applies the published version locally, then the engine reloads
-    the patched checkpoint through the ordinary update_weights_from_disk path.
+    each engine's /pull_weights fans the apply out to every host it spans, then the engine reloads
+    the patched local checkpoint via the ordinary update_weights_from_disk path. vime only ever
+    talks to one endpoint per engine, so multi-node serving and external engines need nothing extra.
     """
 
     def __init__(

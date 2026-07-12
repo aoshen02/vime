@@ -1741,26 +1741,9 @@ def _validate_update_weight_args(args) -> None:
         )
 
     if args.update_weight_mode == "delta":
-        if args.update_weight_transport != "disk":
-            raise ValueError(
-                "--update-weight-mode=delta requires --update-weight-transport=disk, "
-                f"got {args.update_weight_transport!r}."
-            )
-        if args.colocate:
-            raise ValueError(
-                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
-                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
-                "(snapshot + diff + sparse encode) is pure overhead."
-            )
-        if not args.update_weight_local_checkpoint_dir:
-            raise ValueError(
-                "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
-                "(a rollout-host-local NVMe directory)."
-            )
-    if args.update_weight_local_checkpoint_dir and getattr(args, "rollout_external_engine_addrs", None):
-        raise ValueError(
-            "--update-weight-local-checkpoint-dir is not supported with external vLLM engines: "
-            "Vime cannot run the host-local pull on machines outside its Ray cluster."
+        raise NotImplementedError(
+            "--update-weight-mode=delta is unverified on vime+vLLM and is disabled; "
+            "use --update-weight-mode=full."
         )
 
 

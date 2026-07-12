@@ -3,8 +3,12 @@
 Non-colocated weight sync that ships only the **changed bytes** between two syncs instead of a
 full checkpoint, for training/inference disaggregation across clusters or datacenters. The
 trainer publishes per-tensor deltas to a shared filesystem as a canonical HF checkpoint
-directory; each rollout-host Ray actor applies them into a host-local checkpoint, and the
-engines reload through the ordinary `update_weights_from_disk` path.
+directory; each engine's `/pull_weights` applies them into a host-local checkpoint on every
+host it spans, and the engines reload through the ordinary `update_weights_from_disk` path —
+vime only ever talks to one endpoint per engine.
+
+Vime currently rejects `--update-weight-mode delta` with a `NotImplementedError`; this example
+is retained as mechanically synchronized upstream reference material.
 
 See [Delta Weight Sync](../../docs/en/advanced/delta-weight-sync.md) for the full mechanism,
 encodings, integrity checks, and shared-filesystem visibility hooks.
@@ -30,7 +34,7 @@ at `--update-weight-disk-dir`):
 
 - `--update-weight-disk-dir` — shared directory the trainer writes deltas to and the hosts read.
 - `--update-weight-local-checkpoint-dir` — host-local full HF checkpoint the delta patches in
-  place; materialized from the engine's model path on the first pull.
+  place; materialized from the engine's model path on the first `/pull_weights`.
 - `--update-weight-delta-encoding` — `xor` (smallest/fastest) or `overwrite` (idempotent).
 - `--update-weight-delta-checksum` — `xxh3-128` (default), `blake3`, or `adler32`.
 

@@ -359,14 +359,13 @@ class VLLMEngine(RayActor):
         return self._make_request("finish_weight_update", {})
 
     def pull_weights(self, target_version: int):
-        from vime.backends.vllm_utils.local_checkpoint import pull
-
-        pull(
-            local_checkpoint_dir=self.args.update_weight_local_checkpoint_dir,
-            base_dir=self.args.hf_checkpoint,
-            source_dir=self.args.update_weight_disk_dir,
-            target_version=target_version,
-            pre_read_hook=getattr(self.args, "vllm_custom_pull_weights_pre_read_hook", None),
+        return self._make_request(
+            "pull_weights",
+            {
+                "local_checkpoint_dir": self.args.update_weight_local_checkpoint_dir,
+                "source_dir": self.args.update_weight_disk_dir,
+                "target_version": target_version,
+            },
         )
 
     def update_weights_from_disk(

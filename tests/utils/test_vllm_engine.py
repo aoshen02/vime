@@ -36,7 +36,6 @@ def vllm_args() -> SimpleNamespace:
         hf_checkpoint="/tmp/model",
         update_weight_disk_dir="/shared/weights",
         update_weight_local_checkpoint_dir="/local/weights",
-        vllm_custom_pull_weights_pre_read_hook=None,
         vllm_router_ip=None,
         vllm_router_port=None,
         num_gpus_per_node=8,
@@ -593,22 +592,21 @@ def test_update_weights_from_disk_worker_rank_records_version_without_http(vllm_
 
 
 @pytest.mark.unit
-def test_pull_weights_runs_host_local_receiver(vllm_engine, monkeypatch):
-    from vime.backends.vllm_utils import local_checkpoint
-
+def test_pull_weights_uses_mechanical_engine_endpoint(vllm_engine, monkeypatch):
     calls = []
-    monkeypatch.setattr(local_checkpoint, "pull", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(vllm_engine, "_make_request", lambda endpoint, payload: calls.append((endpoint, payload)))
 
     vllm_engine.pull_weights(target_version=3)
 
     assert calls == [
-        {
-            "local_checkpoint_dir": "/local/weights",
-            "base_dir": "/tmp/model",
-            "source_dir": "/shared/weights",
-            "target_version": 3,
-            "pre_read_hook": None,
-        }
+        (
+            "pull_weights",
+            {
+                "local_checkpoint_dir": "/local/weights",
+                "source_dir": "/shared/weights",
+                "target_version": 3,
+            },
+        )
     ]
 
 

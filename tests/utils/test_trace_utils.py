@@ -49,6 +49,21 @@ def test_build_vllm_meta_trace_attrs_keeps_standard_and_pd_fields():
 
 
 @pytest.mark.unit
+def test_build_vllm_meta_trace_attrs_reads_native_response_shape():
+    assert build_vllm_meta_trace_attrs(
+        {
+            "choices": [{"finish_reason": "length"}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 7, "cached_tokens": 3},
+        }
+    ) == {
+        "prompt_tokens": 12,
+        "completion_tokens": 7,
+        "cached_tokens": 3,
+        "finish_reason": "length",
+    }
+
+
+@pytest.mark.unit
 def test_trace_timeline_viewer_omits_virtual_pd_lanes_without_pd_attrs(tmp_path: Path):
     viewer = _load_trace_timeline_viewer_module()
     sample = Sample(index=0, prompt="hello")

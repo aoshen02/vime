@@ -12,8 +12,10 @@ import numpy as np
 # so a thread pool over tensors recovers the bandwidth one thread leaves idle.
 NUM_WORKERS = min(32, (os.cpu_count() or 8))
 
-# Trainer-side publish helpers for disk-level delta weight sync. The vLLM receive side lives in
-# vime.backends.vllm_utils.local_checkpoint and runs in one Ray actor on every rollout host.
+# Trainer-side (publish) helpers for disk-level delta weight sync. The receive side —
+# materializing the host-local checkpoint and applying published deltas in place — lives in
+# the engine behind its /pull_weights endpoint (vllm.srt.weight_sync.disk_delta), so it
+# runs on every host of a multi-node engine while vime only talks to one endpoint.
 
 
 def overwrite_encode(new: np.ndarray, changed_mask: np.ndarray) -> np.ndarray:

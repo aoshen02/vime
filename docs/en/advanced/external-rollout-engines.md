@@ -12,9 +12,9 @@ This page is a roadmap. Use it to decide when to use `--rollout-external-engine-
 | vime should still launch engines, but you need PD disaggregation, multi-model serving, heterogeneous server groups, or per-group overrides | [vLLM Config](vllm-config.md) |
 | Trainer and external engines can form an NCCL group | Default `--update-weight-mode full --update-weight-transport nccl` |
 | Trainer and external engines cannot form an NCCL group, but can see the same filesystem path | `--update-weight-mode full --update-weight-transport disk` |
-| Full checkpoints are too heavy for large-model cross-cluster or cross-DC sync | Run vLLM under Vime's Ray cluster and use `--update-weight-mode delta --update-weight-transport disk` |
+| Full checkpoints are too heavy for large-model cross-cluster or cross-DC sync | `--update-weight-mode delta --update-weight-transport disk` |
 | Rollout serving can use an independent vLLM environment, or even different GPU models/vendors | external engines + disk transport |
-| You want to validate delta apply inside one datacenter | Use Vime-launched engines with disk transport |
+| You want to validate delta wire/apply logic inside one datacenter | `--update-weight-mode delta --update-weight-transport nccl` |
 | You need frozen reference, reward, or tool-side models | Prefer `update_weights: false` in [vLLM Config](vllm-config.md#3-multi-model-serving) |
 
 ## What External Engine Does
@@ -67,7 +67,7 @@ Full-checkpoint update from disk is the simplest fallback path for external depl
 
 At every weight sync, the trainer writes a complete HF checkpoint directory under `--update-weight-disk-dir`, such as `weight_v000123/`, then calls each vLLM engine's `update_weights_from_disk` endpoint over HTTP so the engine reloads the checkpoint without a process restart.
 
-`--update-weight-local-checkpoint-dir` is intentionally unavailable with external engines because Vime cannot execute the host-local pull on machines outside its Ray cluster. External engines reload the full checkpoint directly from the shared directory.
+Adding `--update-weight-local-checkpoint-dir` makes each engine first pull the published checkpoint onto every host it spans (`/pull_weights`, shipped in vime's vllm patch) and reload from local disk (e.g. NVMe) — one shared-filesystem read per host instead of one per rank, which matters when the shared dir is object-store-backed or the engine spans several nodes.
 
 This mode has a simple control plane: it does not require an NCCL group between trainer and engines. It only requires both sides to see the same shared filesystem path. The tradeoff is size: every sync writes the full actor weights, which is expensive for large models or frequent updates.
 
@@ -81,9 +81,17 @@ This keeps the full-checkpoint directories after engines acknowledge the load.
 
 ## Update With Delta
 
-Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint every sync, the trainer keeps a CPU snapshot of the previous sync, diffs each parameter against it, and publishes only the changed bytes. In Vime, host-local apply runs in Ray actors colocated with Vime-launched rollout nodes, so this mode is not available for external engines.
+Delta update targets large-model training/inference disaggregation across clusters or datacenters. Instead of writing a full checkpoint every sync, the trainer keeps a CPU snapshot of the previous sync, diffs each parameter against it, and publishes only the changed bytes; each engine's `/pull_weights` endpoint (shipped in vime's vllm patch) applies the delta into a host-local checkpoint on every host the engine spans, and the engine reloads via the vanilla `update_weights_from_disk` endpoint. vime only calls the engine's HTTP endpoint, so multi-node external engines work the same as vime-launched ones.
 
-See [Delta Weight Sync](delta-weight-sync.md) for the Vime-managed engine path.
+```bash
+--update-weight-mode delta
+--update-weight-transport disk
+--update-weight-disk-dir /shared/fs/delta-updates
+--update-weight-local-checkpoint-dir /local/nvme/rollout-ckpt
+```
+
+Vime currently rejects this mode through its delta guard. See [Delta Weight Sync](delta-weight-sync.md)
+for the mechanically synchronized mechanism and integrity model.
 
 ## Deployment Checklist
 

@@ -165,7 +165,6 @@ def test_add_vllm_arguments_prefixes_regular_engine_flags(args_mod, monkeypatch)
     args_mod.add_vllm_arguments(parser)
     flags = {s for a in parser._actions for s in a.option_strings}
     assert "--vllm-server-concurrency" in flags
-    assert "--vllm-custom-pull-weights-pre-read-hook" in flags
     assert "--vllm-tool-call-parser" in flags
     assert "--vllm-weight-sync-packed" in flags
 
