@@ -125,7 +125,7 @@ VLLM_ARGS=(
    --rollout-num-gpus-per-engine "${ROLLOUT_TP_SIZE:-8}"
    --vllm-gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION:-0.20}"
    --vllm-max-cudagraph-capture-size "${VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE:-1}"
-   --vllm-max-running-requests "${VLLM_MAX_RUNNING_REQUESTS:-4}"
+   --vllm-max-num-seqs "${VLLM_MAX_NUM_SEQS:-4}"
 )
 
 MISC_ARGS=(

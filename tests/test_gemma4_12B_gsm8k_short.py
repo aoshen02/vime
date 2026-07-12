@@ -92,7 +92,6 @@ def execute():
         "--rollout-num-gpus-per-engine 2 "
         "--vllm-gpu-memory-utilization 0.75 "
         "--vllm-max-cudagraph-capture-size 16 "
-        "--vllm-enable-metrics "
     )
 
     misc_args = (
