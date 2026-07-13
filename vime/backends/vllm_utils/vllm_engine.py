@@ -187,12 +187,17 @@ class VLLMEngine(RayActor):
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external vLLM engine (rank={self.rank}, expect_server_args={expect_server_args})")
 
+        def _matches_expected(actual, expected):
+            if isinstance(actual, dict) and isinstance(expected, dict):
+                return all(key in actual and _matches_expected(actual[key], value) for key, value in expected.items())
+            return actual == expected
+
         def _sanity_check_server_args(actual_server_args, expect_server_args):
             for name in external_engine_need_check_fields:
                 expect_value = expect_server_args.get(name)
                 actual_value = actual_server_args.get(name)
-                assert (
-                    actual_value == expect_value
+                assert _matches_expected(
+                    actual_value, expect_value
                 ), f"{name=} {expect_value=} {actual_value=} {expect_server_args=} {actual_server_args=}"
 
         actual_server_args = get_server_info(f"http://{self.server_host}:{self.server_port}")
@@ -215,7 +220,9 @@ class VLLMEngine(RayActor):
                 "worker_type": self.worker_type,
             }
             if self.worker_type == "prefill":
-                bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                bootstrap_port = server_args_dict.get("_disaggregation_bootstrap_port")
+                if bootstrap_port is None:
+                    bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
                 if bootstrap_port is None:
                     raise RuntimeError(
                         f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
@@ -583,12 +590,18 @@ def _compute_server_args(
             kwargs["headless"] = True
 
     if worker_type == "prefill":
-        kwargs["disaggregation_mode"] = "prefill"
         assert (
             disaggregation_bootstrap_port is not None
         ), "disaggregation_bootstrap_port must be set for prefill worker"
+        kwargs["kv_transfer_config"] = {
+            "kv_connector": "NixlConnector",
+            "kv_role": "kv_producer",
+        }
     elif worker_type == "decode":
-        kwargs["disaggregation_mode"] = "decode"
+        kwargs["kv_transfer_config"] = {
+            "kv_connector": "NixlConnector",
+            "kv_role": "kv_consumer",
+        }
 
     if args.use_rollout_routing_replay:
         kwargs["enable_return_routed_experts"] = True

@@ -171,7 +171,10 @@ def test_compute_server_args_applies_worker_type_and_bootstrap_port(vllm_args):
         worker_type="prefill",
         disaggregation_bootstrap_port=12345,
     )
-    assert sa_prefill["disaggregation_mode"] == "prefill"
+    assert sa_prefill["kv_transfer_config"] == {
+        "kv_connector": "NixlConnector",
+        "kv_role": "kv_producer",
+    }
 
     sa_decode, _ = mod._compute_server_args(
         vllm_args,
@@ -181,7 +184,10 @@ def test_compute_server_args_applies_worker_type_and_bootstrap_port(vllm_args):
         port=8000,
         worker_type="decode",
     )
-    assert sa_decode["disaggregation_mode"] == "decode"
+    assert sa_decode["kv_transfer_config"] == {
+        "kv_connector": "NixlConnector",
+        "kv_role": "kv_consumer",
+    }
 
 
 @pytest.mark.unit

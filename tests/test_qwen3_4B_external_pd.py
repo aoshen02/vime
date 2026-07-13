@@ -1,20 +1,20 @@
 """E2E test for --rollout-external-engine-addrs with a pure-PD external fleet.
 
 Spawns two vLLM servers out-of-band on a single GPU box (all tp=1):
-- 1 prefill (``--disaggregation-mode prefill``, mooncake transfer backend)
-- 1 decode  (``--disaggregation-mode decode``,  mooncake transfer backend)
+- 1 prefill (NIXL ``kv_producer``)
+- 1 decode  (NIXL ``kv_consumer``)
 
 and points vime at both via ``--rollout-external-engine-addrs ...``.
 The first 4 GPUs train. vime queries ``/server_info`` on each engine to
 infer per-engine TP / GPU counts and registers them to its PD-enabled router.
 
-Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
-so the post-train sync writes sparse safetensors to a shared dir and the
-external engines load them via ``update_weights_from_disk(load_format=delta)``
-— that's the only sync path that actually works for pre-launched workers (no
-NCCL group between trainer and external engines).
+Weight sync uses ``--update-weight-mode full --update-weight-transport disk``
+so the post-train sync writes a complete HF checkpoint to a shared directory
+and the external engines reload it through ``update_weights_from_disk`` without
+forming an NCCL group with the trainer.
 """
 
+import json
 import os
 import socket
 import subprocess
@@ -37,6 +37,7 @@ EXTERNAL_HOST = "127.0.0.1"
 PREFILL_PORTS = [13150]
 DECODE_PORTS = [13151]
 BOOTSTRAP_PORTS = [13160]
+DECODE_BOOTSTRAP_PORTS = [13161]
 
 
 def _get_bond_ipv4():
@@ -156,34 +157,43 @@ def _launch_vllm_server(
 ) -> subprocess.Popen:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ",".join(gpus)
+    env["VLLM_SERVER_DEV_MODE"] = "1"
+    assert disaggregation_bootstrap_port is not None
+    env["VLLM_NIXL_SIDE_CHANNEL_HOST"] = external_host
+    env["VLLM_NIXL_SIDE_CHANNEL_PORT"] = str(disaggregation_bootstrap_port)
+    if disaggregation_ib_device is not None:
+        env["UCX_NET_DEVICES"] = disaggregation_ib_device
+
+    kv_role = {
+        "prefill": "kv_producer",
+        "decode": "kv_consumer",
+    }[disaggregation_mode]
 
     cmd = [
-        "python3",
-        "-m",
-        "vllm.launch_server",
-        "--model-path",
+        "vllm",
+        "serve",
         f"/root/models/{MODEL_NAME}",
         "--host",
         "0.0.0.0",
         "--port",
         str(port),
-        "--tp",
+        "--served-model-name",
+        f"/root/models/{MODEL_NAME}",
+        f"/root/models/{MODEL_NAME}/",
+        "--tensor-parallel-size",
         str(tp),
-        "--mem-fraction-static",
+        "--gpu-memory-utilization",
         "0.6",
         "--trust-remote-code",
-        "--disaggregation-mode",
-        disaggregation_mode,
-        "--disaggregation-transfer-backend",
-        "mooncake",
+        "--logprobs-mode",
+        "processed_logprobs",
+        "--enable-prompt-tokens-details",
+        "--enable-server-load-tracking",
+        "--kv-transfer-config",
+        json.dumps({"kv_connector": "NixlConnector", "kv_role": kv_role}),
+        "--weight-transfer-config",
+        json.dumps({"backend": "nccl"}),
     ]
-    if disaggregation_ib_device is not None:
-        cmd += ["--disaggregation-ib-device", disaggregation_ib_device]
-    if disaggregation_bootstrap_port is not None:
-        cmd += ["--disaggregation-bootstrap-port", str(disaggregation_bootstrap_port)]
-        cmd += ["--load-balance-method", "follow_bootstrap_room"]
-    else:
-        cmd += ["--prefill-round-robin-balance"]
 
     log_file = open(log_path, "w")
     process = subprocess.Popen(cmd, env=env, stdout=log_file, stderr=subprocess.STDOUT)
@@ -200,7 +210,7 @@ def _launch_vllm_server(
         if process.poll() is not None:
             raise RuntimeError(f"{disaggregation_mode} server exited with code {process.returncode}; check {log_path}")
         try:
-            req = urllib.request.urlopen(f"http://{external_host}:{port}/server_info", timeout=2)
+            req = urllib.request.urlopen(f"http://{external_host}:{port}/server_info?config_format=json", timeout=2)
             if req.status == 200:
                 print(f"External vllm {disaggregation_mode} server is ready on GPUs {gpus}")
                 return process
@@ -240,21 +250,24 @@ def execute():
                     log_path=f"/tmp/vllm_external_prefill_{idx}.log",
                 )
             )
-        for idx, (gpu, port) in enumerate(zip(decode_gpus, DECODE_PORTS, strict=True)):
+        for idx, (gpu, port, bootstrap_port) in enumerate(
+            zip(decode_gpus, DECODE_PORTS, DECODE_BOOTSTRAP_PORTS, strict=True)
+        ):
             processes.append(
                 _launch_vllm_server(
                     gpus=[gpu],
                     port=port,
                     tp=1,
                     disaggregation_mode="decode",
+                    disaggregation_bootstrap_port=bootstrap_port,
                     disaggregation_ib_device=disaggregation_ib_device,
                     external_host=external_host,
                     log_path=f"/tmp/vllm_external_decode_{idx}.log",
                 )
             )
 
-    delta_dir_cm = tempfile.TemporaryDirectory(prefix="vime_external_pd_delta_")
-    delta_dir = delta_dir_cm.name
+    disk_dir_cm = tempfile.TemporaryDirectory(prefix="vime_external_pd_full_disk_")
+    disk_dir = disk_dir_cm.name
     try:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
@@ -315,16 +328,14 @@ def execute():
         all_addrs = [f"{external_host}:{port}" for port in (*PREFILL_PORTS, *DECODE_PORTS)]
         external_args = "--rollout-external-engine-addrs " + " ".join(all_addrs) + " "
 
-        # External engines have no NCCL group with the trainer, so weight
-        # updates have to go through the disk-backed delta path: the trainer
-        # writes sparse safetensors per sync, the engines pull via
-        # update_weights_from_disk(load_format="delta", files=...).
-        delta_args = (
-            "--update-weight-mode delta "
+        # External engines have no NCCL group with the trainer, so the trainer
+        # publishes a complete HF checkpoint and the engines reload it from the
+        # shared filesystem.
+        disk_update_args = (
+            "--update-weight-mode full "
             "--update-weight-transport disk "
-            "--update-weight-encoding deltas "
-            f"--update-weight-disk-dir {delta_dir} "
-            "--update-weight-delta-keep-files "
+            f"--update-weight-disk-dir {disk_dir} "
+            "--update-weight-disk-keep-files "
         )
 
         ci_args = "--ci-test "
@@ -347,7 +358,7 @@ def execute():
             f"{U.get_default_wandb_args(__file__)} "
             f"{perf_args} "
             f"{external_args} "
-            f"{delta_args} "
+            f"{disk_update_args} "
             f"{ci_args} "
             f"{misc_args} "
         )
@@ -363,15 +374,17 @@ def execute():
             },
         )
 
-        delta_files = list(Path(delta_dir).glob("weight_v*/*.safetensors"))
-        assert delta_files, f"No disk delta safetensors were written under {delta_dir}"
+        checkpoint_dirs = sorted(Path(disk_dir).glob("weight_v*"))
+        assert checkpoint_dirs, f"No disk checkpoint directories were written under {disk_dir}"
+        assert any((path / "model.safetensors.index.json").exists() for path in checkpoint_dirs)
+        assert any(list(path.glob("*.safetensors")) for path in checkpoint_dirs)
     finally:
         for p in processes:
             if p.poll() is None:
                 p.kill()
                 p.wait()
         U.exec_command("pkill -9 vllm; true")
-        delta_dir_cm.cleanup()
+        disk_dir_cm.cleanup()
 
 
 if __name__ == "__main__":
