@@ -86,40 +86,6 @@ def _get_external_host():
     return EXTERNAL_HOST
 
 
-def _get_disaggregation_ib_device():
-    env_value = os.environ.get("VIME_TEST_DISAGGREGATION_IB_DEVICE")
-    if env_value is not None:
-        return env_value.strip() or None
-
-    ib_root = Path("/sys/class/infiniband")
-    if not ib_root.exists():
-        return None
-
-    active_devices = []
-    for device in ib_root.iterdir():
-        for state_file in device.glob("ports/*/state"):
-            try:
-                if "ACTIVE" in state_file.read_text():
-                    active_devices.append(device.name)
-                    break
-            except OSError:
-                continue
-
-    bond_devices = []
-    numeric_mlx5_devices = []
-    for device in active_devices:
-        prefix, _, suffix = device.partition("_")
-        if prefix == "mlx5" and suffix.startswith("bond_") and suffix[5:].isdigit():
-            bond_devices.append(device)
-        elif prefix == "mlx5" and suffix.isdigit():
-            numeric_mlx5_devices.append(device)
-    bond_devices.sort(key=lambda name: int(name.rsplit("_", 1)[1]))
-    numeric_mlx5_devices.sort(key=lambda name: int(name.rsplit("_", 1)[1]))
-
-    devices = bond_devices or numeric_mlx5_devices or sorted(active_devices)
-    return ",".join(devices) if devices else None
-
-
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
@@ -152,7 +118,6 @@ def _launch_vllm_server(
     log_path: str,
     disaggregation_mode: str,
     disaggregation_bootstrap_port: int | None = None,
-    disaggregation_ib_device: str | None = None,
     external_host: str = EXTERNAL_HOST,
 ) -> subprocess.Popen:
     env = os.environ.copy()
@@ -161,8 +126,7 @@ def _launch_vllm_server(
     assert disaggregation_bootstrap_port is not None
     env["VLLM_NIXL_SIDE_CHANNEL_HOST"] = external_host
     env["VLLM_NIXL_SIDE_CHANNEL_PORT"] = str(disaggregation_bootstrap_port)
-    if disaggregation_ib_device is not None:
-        env["UCX_NET_DEVICES"] = disaggregation_ib_device
+    env["UCX_NET_DEVICES"] = "all"
 
     kv_role = {
         "prefill": "kv_producer",
@@ -208,7 +172,10 @@ def _launch_vllm_server(
     deadline = time.time() + 600
     while time.time() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(f"{disaggregation_mode} server exited with code {process.returncode}; check {log_path}")
+            log_tail = Path(log_path).read_text(errors="replace")[-8000:]
+            raise RuntimeError(
+                f"{disaggregation_mode} server exited with code {process.returncode}; {log_path} tail:\n{log_tail}"
+            )
         try:
             req = urllib.request.urlopen(f"http://{external_host}:{port}/server_info?config_format=json", timeout=2)
             if req.status == 200:
@@ -219,15 +186,15 @@ def _launch_vllm_server(
         time.sleep(5)
 
     process.kill()
-    raise RuntimeError(f"{disaggregation_mode} server failed to start within timeout; check {log_path}")
+    process.wait()
+    log_tail = Path(log_path).read_text(errors="replace")[-8000:]
+    raise RuntimeError(f"{disaggregation_mode} server failed to start within timeout; {log_path} tail:\n{log_tail}")
 
 
 def execute():
     train_gpus, prefill_gpus, decode_gpus = _get_gpu_split()
     external_host = _get_external_host()
-    disaggregation_ib_device = _get_disaggregation_ib_device()
     print(f"Using external host for vLLM workers: {external_host}")
-    print(f"Using vLLM disaggregation IB device: {disaggregation_ib_device}")
     processes: list[subprocess.Popen] = []
 
     # Restrict CUDA_VISIBLE_DEVICES to training GPUs before Ray starts so
@@ -245,7 +212,6 @@ def execute():
                     tp=1,
                     disaggregation_mode="prefill",
                     disaggregation_bootstrap_port=bootstrap_port,
-                    disaggregation_ib_device=disaggregation_ib_device,
                     external_host=external_host,
                     log_path=f"/tmp/vllm_external_prefill_{idx}.log",
                 )
@@ -260,7 +226,6 @@ def execute():
                     tp=1,
                     disaggregation_mode="decode",
                     disaggregation_bootstrap_port=bootstrap_port,
-                    disaggregation_ib_device=disaggregation_ib_device,
                     external_host=external_host,
                     log_path=f"/tmp/vllm_external_decode_{idx}.log",
                 )
