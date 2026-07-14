@@ -1044,11 +1044,17 @@ def _start_router(
     router_args.log_level = "warning"
     router_args.request_timeout_secs = args.router_request_timeout_secs
 
+    # Mirror slime's unconditional `disable_health_check=True`: never let the router
+    # falsely mark a healthy rollout engine unavailable. vllm-router has no health-check
+    # toggle; its equivalent false-unavailability source is the per-request circuit
+    # breaker (since 0.1.15 `/inference/v1/generate` is routed through the typed path that
+    # records CB outcomes). That breaker trips on minutes-long RL generations even while
+    # the engines are healthy (their KV scheduler is the real backpressure), causing a
+    # `no_available_workers` retry storm. Disable it for all rollout routers, not just PD.
+    router_args.disable_circuit_breaker = True
+
     if has_pd_disaggregation:
         router_args.vllm_pd_disaggregation = True
-        # Disable circuit breaker so transient RDMA transfer timeouts (PCIe
-        # contention under load) don't mark decode workers dead.
-        router_args.disable_circuit_breaker = True
 
     if prefill_urls is not None:
         router_args.prefill_urls = prefill_urls
