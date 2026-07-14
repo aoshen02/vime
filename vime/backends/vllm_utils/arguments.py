@@ -2,6 +2,7 @@ import argparse
 
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils.argparse_utils import FlexibleArgumentParser
+from vllm_router.launch_router import RouterArgs
 
 from vime.utils.http_utils import _wrap_ipv6
 
@@ -25,22 +26,18 @@ def add_vllm_router_arguments(parser):
         default=14400,
         help="Timeout (seconds) for HTTP requests vime makes to the vllm router.",
     )
-    parser.add_argument(
-        "--vllm-router-policy",
-        type=str,
-        default="consistent_hash",
-        dest="router_policy",
-        choices=["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash"],
-        help=(
-            "vllm-router load-balancing policy. Defaults to 'consistent_hash' for "
-            "session-affinity routing replay via the x-session-id header."
-        ),
-    )
+    # Register the full vllm-router CLI (policy, cache-aware thresholds, ...) with the
+    # ``--router-*`` prefix, exactly like slime does with sglang-router. The load-balancing
+    # policy therefore defaults to the package default (``cache_aware``); ``--router-policy``
+    # can still select ``consistent_hash`` etc. (host/port are managed by the orchestrator).
+    RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
     return parser
 
 
 def add_vllm_arguments(parser):
     parser = add_vllm_router_arguments(parser)
+    # Mirror slime's cache-aware balance thresholds.
+    parser.set_defaults(router_balance_abs_threshold=10, router_balance_rel_threshold=1.2)
     parser.add_argument("--vllm-server-concurrency", type=int, default=512)
     parser.add_argument(
         "--vllm-enable-deterministic-inference",

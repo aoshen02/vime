@@ -140,11 +140,23 @@ def test_add_vllm_router_arguments_parses_real_values(args_mod):
 
 
 @pytest.mark.unit
-def test_add_vllm_router_arguments_defaults_to_consistent_hash(args_mod):
+def test_add_vllm_router_arguments_defaults_to_cache_aware(args_mod):
+    # Mirror slime: the policy is not hand-registered anymore; it comes from the vllm-router
+    # package CLI (RouterArgs.add_cli_args), whose default is ``cache_aware``.
     parser = argparse.ArgumentParser(add_help=False)
     args_mod.add_vllm_router_arguments(parser)
     parsed, _ = parser.parse_known_args([])
-    assert parsed.router_policy == "consistent_hash"
+    assert parsed.router_policy == "cache_aware"
+
+
+@pytest.mark.unit
+def test_add_vllm_arguments_sets_slime_balance_thresholds(args_mod, monkeypatch):
+    _patch_device_config(monkeypatch)
+    parser = argparse.ArgumentParser(add_help=False)
+    args_mod.add_vllm_arguments(parser)
+    parsed, _ = parser.parse_known_args([])
+    assert parsed.router_balance_abs_threshold == 10
+    assert parsed.router_balance_rel_threshold == 1.2
 
 
 def _patch_device_config(monkeypatch):

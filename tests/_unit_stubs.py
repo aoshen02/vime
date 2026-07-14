@@ -104,8 +104,19 @@ def install_vllm_router_stub() -> None:
         return
 
     class RouterArgs:
+        # Mirror the real package's default load-balancing policy (``cache_aware``) and the
+        # ``--router-*`` prefixed flags it registers under ``use_router_prefix=True``, so CPU
+        # unit tests can exercise vime's mirror-slime router wiring without the real package.
         @classmethod
-        def add_cli_args(cls, parser, *args, **kwargs):  # noqa: ARG003
+        def add_cli_args(cls, parser, *args, use_router_prefix=False, exclude_host_port=False, **kwargs):  # noqa: ARG003
+            flag = "--router-policy" if use_router_prefix else "--policy"
+            parser.add_argument(
+                flag,
+                dest="router_policy" if use_router_prefix else "policy",
+                type=str,
+                default="cache_aware",
+                choices=["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash"],
+            )
             return parser
 
         @classmethod
@@ -210,6 +221,10 @@ def install_ray_stub() -> None:
 
 def install_vllm_cli_stubs() -> None:
     """Stub vLLM CLI/parser imports for ``vime.backends.vllm_utils.arguments`` when vLLM is absent."""
+    # ``arguments`` imports ``vllm_router.launch_router.RouterArgs`` at module load, so the
+    # router stub must be present even when only the vLLM CLI stubs are requested.
+    install_vllm_router_stub()
+
     if real_module_available("vllm"):
         return
 
