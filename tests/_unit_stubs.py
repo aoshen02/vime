@@ -109,13 +109,22 @@ def install_vllm_router_stub() -> None:
         # unit tests can exercise vime's mirror-slime router wiring without the real package.
         @classmethod
         def add_cli_args(cls, parser, *args, use_router_prefix=False, exclude_host_port=False, **kwargs):  # noqa: ARG003
-            flag = "--router-policy" if use_router_prefix else "--policy"
+            prefix = "router-" if use_router_prefix else ""
+            dprefix = "router_" if use_router_prefix else ""
             parser.add_argument(
-                flag,
-                dest="router_policy" if use_router_prefix else "policy",
+                f"--{prefix}policy",
+                dest=f"{dprefix}policy",
                 type=str,
                 default="cache_aware",
                 choices=["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash"],
+            )
+            # Mirror the real package's --router-request-timeout-secs so the arg surface (and
+            # option-string collisions) match what vime hits at runtime.
+            parser.add_argument(
+                f"--{prefix}request-timeout-secs",
+                dest=f"{dprefix}request_timeout_secs",
+                type=int,
+                default=1800,
             )
             return parser
 

@@ -20,15 +20,11 @@ def add_vllm_router_arguments(parser):
         default=None,
         help="Port of the vllm router.",
     )
-    parser.add_argument(
-        "--router-request-timeout-secs",
-        type=int,
-        default=14400,
-        help="Timeout (seconds) for HTTP requests vime makes to the vllm router.",
-    )
-    # Register the full vllm-router CLI (policy, cache-aware thresholds, ...) with the
-    # ``--router-*`` prefix, exactly like slime does with sglang-router. The load-balancing
-    # policy therefore defaults to the package default (``cache_aware``); ``--router-policy``
+    # Register the full vllm-router CLI (policy, cache-aware thresholds, request timeout, ...)
+    # with the ``--router-*`` prefix, exactly like slime does with sglang-router. This also
+    # provides ``--router-request-timeout-secs`` (dest ``router_request_timeout_secs``), so we
+    # do NOT hand-register it here (doing so collides with the package's option string). The
+    # load-balancing policy defaults to the package default (``cache_aware``); ``--router-policy``
     # can still select ``consistent_hash`` etc. (host/port are managed by the orchestrator).
     RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
     return parser
@@ -36,8 +32,13 @@ def add_vllm_router_arguments(parser):
 
 def add_vllm_arguments(parser):
     parser = add_vllm_router_arguments(parser)
-    # Mirror slime's cache-aware balance thresholds.
-    parser.set_defaults(router_balance_abs_threshold=10, router_balance_rel_threshold=1.2)
+    # Mirror slime's cache-aware balance thresholds, and keep vime's long rollout timeout
+    # (the vllm-router package default is 1800s, too short for RL generations).
+    parser.set_defaults(
+        router_balance_abs_threshold=10,
+        router_balance_rel_threshold=1.2,
+        router_request_timeout_secs=14400,
+    )
     parser.add_argument("--vllm-server-concurrency", type=int, default=512)
     parser.add_argument(
         "--vllm-enable-deterministic-inference",
