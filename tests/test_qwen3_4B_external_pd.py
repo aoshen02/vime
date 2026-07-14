@@ -126,7 +126,7 @@ def _launch_vllm_server(
     assert disaggregation_bootstrap_port is not None
     env["VLLM_NIXL_SIDE_CHANNEL_HOST"] = external_host
     env["VLLM_NIXL_SIDE_CHANNEL_PORT"] = str(disaggregation_bootstrap_port)
-    env["UCX_NET_DEVICES"] = "all"
+    env["UCX_NET_DEVICES"] = os.environ.get("VIME_TEST_DISAGGREGATION_IB_DEVICE", "all").strip() or "all"
 
     kv_role = {
         "prefill": "kv_producer",
