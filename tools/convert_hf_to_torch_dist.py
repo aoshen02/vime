@@ -4,7 +4,13 @@ import shutil
 
 import torch
 import torch.distributed as dist
+from megatron.core import mpu
 from megatron.core.dist_checkpointing.serialization import get_default_save_sharded_strategy
+from megatron.core.dist_checkpointing.strategies.fully_parallel import (
+    FullyParallelSaveStrategyWrapper,
+    determine_main_replica_uniform_distribution,
+    distribute_main_replicas_with_precomputed_distribution,
+)
 from megatron.core.enums import ModelType
 from megatron.training.arguments import parse_args, validate_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
@@ -85,11 +91,37 @@ def get_args():
     return args
 
 
+class ConversionFullyParallelSaveStrategyWrapper(FullyParallelSaveStrategyWrapper):
+    """Keep parallel save distribution without repeating global validation."""
+
+    def apply_saving_parallelization(self, sharded_state_dict):
+        if self.do_cache_distribution and self.cached_distribution is not None:
+            distribution = self.cached_distribution
+        else:
+            distribution = determine_main_replica_uniform_distribution(
+                sharded_state_dict,
+                self.parallelization_group,
+            )
+
+        distribute_main_replicas_with_precomputed_distribution(
+            sharded_state_dict,
+            self.parallelization_group,
+            distribution,
+        )
+        if self.do_cache_distribution:
+            self.cached_distribution = distribution
+
+
 def get_conversion_checkpoint_context(args):
-    """Skip redundant global sharding validation for one-shot conversion saves."""
+    """Skip conversion-only validation while preserving fully parallel saves."""
     args.ckpt_assume_constant_structure = True
-    args.ckpt_fully_parallel_save = False
-    return {"save_strategy": get_default_save_sharded_strategy(args.ckpt_format)}
+    save_strategy = get_default_save_sharded_strategy(args.ckpt_format)
+    save_strategy = ConversionFullyParallelSaveStrategyWrapper(
+        save_strategy,
+        mpu.get_data_parallel_group(with_context_parallel=True),
+        args.ckpt_assume_constant_structure,
+    )
+    return {"save_strategy": save_strategy}
 
 
 def main():
