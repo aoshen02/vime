@@ -4,6 +4,7 @@ import shutil
 
 import torch
 import torch.distributed as dist
+from megatron.core.dist_checkpointing.serialization import get_default_save_sharded_strategy
 from megatron.core.enums import ModelType
 from megatron.training.arguments import parse_args, validate_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
@@ -84,6 +85,13 @@ def get_args():
     return args
 
 
+def get_conversion_checkpoint_context(args):
+    """Skip redundant global sharding validation for one-shot conversion saves."""
+    args.ckpt_assume_constant_structure = True
+    args.ckpt_fully_parallel_save = False
+    return {"save_strategy": get_default_save_sharded_strategy(args.ckpt_format)}
+
+
 def main():
     if torch.version.hip:
         import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
@@ -131,7 +139,14 @@ def main():
     gc.collect()
     torch.cuda.empty_cache()
 
-    save_checkpoint(1, model, None, None, 0)
+    save_checkpoint(
+        1,
+        model,
+        None,
+        None,
+        0,
+        checkpointing_context=get_conversion_checkpoint_context(args),
+    )
 
     if dist.get_rank() == 0:
         # change to release ckpt
