@@ -72,7 +72,7 @@ RUN apt-get update && \
 
 # TE does not publish a cu13 wheel; build from source when ENABLE_CUDA_13=1.
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
-      pip install nvidia-mathdx==25.6.0 pybind11 ninja wheel packaging && \
+      pip install nvidia-mathdx==26.6.0 pybind11 ninja wheel packaging && \
       pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.16; \
     else \
       pip -v install --no-build-isolation "transformer_engine[pytorch]==2.16.1"; \
