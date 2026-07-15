@@ -93,7 +93,18 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
 RUN TMS_CUDA_MAJOR="$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" && \
     export TMS_CUDA_MAJOR && \
     pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@a193d9dd1b877d33c64a41cfb3db9f867df2d926 --no-cache-dir --force-reinstall
-RUN pip install git+https://github.com/radixark/Megatron-Bridge.git@bridge --no-deps --no-build-isolation
+ARG MEGATRON_BRIDGE_COMMIT=07d61e1547a8356cc34928f7eb20226d2f9db3fa
+RUN git clone https://github.com/radixark/Megatron-Bridge.git && \
+    cd Megatron-Bridge && git checkout ${MEGATRON_BRIDGE_COMMIT}
+COPY docker/patch/${PATCH_VERSION}/megatron_bridge.patch /root/Megatron-Bridge/
+RUN cd Megatron-Bridge && \
+    git apply megatron_bridge.patch --3way && \
+    if grep -R -n '^<<<<<<< ' .; then \
+      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+      exit 1; \
+    fi && \
+    rm megatron_bridge.patch && \
+    pip install . --no-deps --no-build-isolation
 RUN pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 
 COPY requirements.txt /tmp/requirements.txt
