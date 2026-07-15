@@ -43,19 +43,6 @@ def add_vllm_arguments(parser):
             "AND exports ``VLLM_BATCH_INVARIANT=1`` to the vLLM subprocess."
         ),
     )
-    _vllm_packed = parser.add_mutually_exclusive_group()
-    _vllm_packed.add_argument(
-        "--vllm-weight-sync-packed",
-        dest="vllm_weight_sync_packed",
-        action="store_true",
-    )
-    _vllm_packed.add_argument(
-        "--no-vllm-weight-sync-packed",
-        dest="vllm_weight_sync_packed",
-        action="store_false",
-    )
-    parser.set_defaults(vllm_weight_sync_packed=True)
-
     # Monkey-patch parser to prefix all engine flags with --vllm- / vllm_
     old_add_argument = parser.add_argument
     old_add_argument_group = parser.add_argument_group

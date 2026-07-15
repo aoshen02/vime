@@ -381,10 +381,11 @@ def test_update_weights_from_tensor_posts_ipc_payload_and_records_version(vllm_e
     assert vllm_engine._weight_version is None
 
     vllm_engine.update_weights_from_tensor(
-        names=["layer.0.weight"],
-        dtype_names=["float32"],
-        shapes=[[2, 2]],
-        ipc_handles=[{"uuid-gpu0": ("rebuild_fn", (1, 2, 3))}],
+        names=["a", "b"],
+        dtype_names=["bfloat16", "float32"],
+        shapes=[[2], [1]],
+        ipc_handles={"uuid-gpu0": ("rebuild_fn", (1, 2, 3))},
+        tensor_sizes=[4, 4],
         weight_version="42",
     )
 
@@ -393,8 +394,10 @@ def test_update_weights_from_tensor_posts_ipc_payload_and_records_version(vllm_e
     # ipc_handles got cloudpickle'd into ipc_handles_pickled
     assert "ipc_handles" not in sent
     assert isinstance(sent["ipc_handles_pickled"], str)
-    assert sent["names"] == ["layer.0.weight"]
-    assert sent["shapes"] == [[2, 2]]
+    assert sent["names"] == ["a", "b"]
+    assert sent["shapes"] == [[2], [1]]
+    assert sent["tensor_sizes"] == [4, 4]
+    assert sent["packed"] is True
     # version recorded after POST success
     assert vllm_engine._weight_version == "42"
 
@@ -411,7 +414,7 @@ def test_update_weights_from_tensor_does_not_advance_version_on_failure(vllm_eng
     vllm_engine._weight_version = "old"
     with pytest.raises(RuntimeError, match="simulated POST failure"):
         vllm_engine.update_weights_from_tensor(
-            names=[], dtype_names=[], shapes=[], ipc_handles=[], weight_version="new"
+            names=[], dtype_names=[], shapes=[], ipc_handles={}, tensor_sizes=[], weight_version="new"
         )
     assert vllm_engine._weight_version == "old"
 
@@ -456,9 +459,7 @@ def test_update_weights_from_distributed_posts_update_weights_without_checkpoint
         names,
         dtypes,
         shapes,
-        group_name="vime-pp_0",
         weight_version="7",
-        packed=True,
     )
 
     assert len(calls) == 1

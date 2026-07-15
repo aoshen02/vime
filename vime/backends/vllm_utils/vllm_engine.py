@@ -275,13 +275,19 @@ class VLLMEngine(RayActor):
         names: list[str],
         dtype_names: list[str],
         shapes: list[list[int]],
-        ipc_handles: list[dict] | None = None,
+        ipc_handles: dict[str, tuple],
+        tensor_sizes: list[int],
         weight_version: str,
         flush_cache: bool = False,
     ):
-        payload: dict = {"names": names, "dtype_names": dtype_names, "shapes": shapes}
-        if ipc_handles is not None:
-            payload["ipc_handles_pickled"] = base64.b64encode(cloudpickle.dumps(ipc_handles)).decode("utf-8")
+        payload: dict = {
+            "names": names,
+            "dtype_names": dtype_names,
+            "shapes": shapes,
+            "ipc_handles_pickled": base64.b64encode(cloudpickle.dumps(ipc_handles)).decode("utf-8"),
+            "tensor_sizes": tensor_sizes,
+            "packed": True,
+        }
         if flush_cache:
             self.flush_cache()
         result = self._make_request("update_weights", {"update_info": payload})
@@ -424,13 +430,10 @@ class VLLMEngine(RayActor):
         names,
         dtypes,
         shapes,
-        group_name,
         *,
         flush_cache=False,
         weight_version: str,
-        packed: bool = True,
     ):
-        del group_name
         if flush_cache:
             self.flush_cache()
         dtype_names = [str(d).replace("torch.", "") for d in dtypes]
@@ -438,7 +441,7 @@ class VLLMEngine(RayActor):
             "names": names,
             "dtype_names": dtype_names,
             "shapes": [list(s) for s in shapes],
-            "packed": bool(packed),
+            "packed": True,
         }
         result = self._make_request("update_weights", {"update_info": update_info})
         self._weight_version = str(weight_version)
