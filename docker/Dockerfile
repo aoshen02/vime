@@ -7,6 +7,7 @@ ARG PATCH_VERSION=latest
 ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
 
 ARG ENABLE_CUDA_13=1
+ARG FA2_MAX_JOBS=64
 
 # ======================================== Setup =============================================
 
@@ -39,7 +40,7 @@ RUN ln -sf /usr/bin/python3 /usr/local/bin/python
 
 # The validated TransformerEngine 2.16 context-parallel stack uses FA2 + FA3.
 RUN pip uninstall -y flash-attn-4 flash_attn_4 || true
-RUN MAX_JOBS=64 pip -v install flash-attn==2.8.3 --no-build-isolation
+RUN MAX_JOBS=${FA2_MAX_JOBS} pip -v install flash-attn==2.8.3 --no-build-isolation
 
 # This FA3 commit provides the window_size_left/window_size_right API used by TE 2.16.
 RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
