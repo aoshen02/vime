@@ -5,12 +5,29 @@ import logging
 import multiprocessing
 import os
 import time
+<<<<<<< ours (vime current)
 from typing import Any
 from urllib.parse import quote
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+from urllib.parse import quote
+=======
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 import cloudpickle
 import requests
+<<<<<<< ours (vime current)
 from vllm.utils.system_utils import kill_process_tree
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+import vllm_router
+from packaging.version import parse
+from vllm.srt.server_args import ServerArgs
+from vllm.srt.utils import kill_process_tree
+from urllib3.exceptions import NewConnectionError
+=======
+from vllm.srt.server_args import ServerArgs
+from vllm.srt.utils import kill_process_tree
+from urllib3.exceptions import NewConnectionError
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 from vime.backends.vllm_utils.external import get_server_info
 from vime.ray.ray_actor import RayActor
@@ -34,12 +51,81 @@ def get_base_gpu_id(args, rank):
     return start_index
 
 
+<<<<<<< ours (vime current)
 def launch_server_process(server_args_dict: dict) -> multiprocessing.Process:
     env = _build_subprocess_env(server_args_dict)
     kwargs = {k: v for k, v in server_args_dict.items() if not k.startswith("_")}
     host = _wrap_ipv6(kwargs.get("host") or "127.0.0.1")
     kwargs["host"] = host.strip("[]")
     logger.info("Launching vLLM server: %s", kwargs)
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+def _to_local_gpu_id(physical_gpu_id: int) -> int:
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not cvd:
+        return physical_gpu_id  # no remapping
+    # CUDA_VISIBLE_DEVICES can be like "4,5,6,7"
+    visible = [int(x) for x in cvd.split(",") if x.strip() != ""]
+    # In a remapped process, valid torch device indices are 0..len(visible)-1
+    if physical_gpu_id in visible:
+        return visible.index(physical_gpu_id)
+    # If we're already getting local IDs, allow them
+    if 0 <= physical_gpu_id < len(visible):
+        return physical_gpu_id
+    raise RuntimeError(
+        f"GPU id {physical_gpu_id} is not valid under CUDA_VISIBLE_DEVICES={cvd}. "
+        f"Expected one of {visible} (physical) or 0..{len(visible)-1} (local)."
+    )
+
+
+def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+    if getattr(server_args, "encoder_only", False):
+        from vllm.srt.disaggregation.encode_server import launch_server_process as vllm_launch_server_process
+
+        return vllm_launch_server_process(
+            server_args,
+            start_method="spawn",
+            wait_for_server=True,
+        )
+
+    from vllm.srt.entrypoints.http_server import launch_server
+=======
+def _to_local_gpu_id(physical_gpu_id: int) -> int:
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not cvd:
+        return physical_gpu_id  # no remapping
+    # CUDA_VISIBLE_DEVICES can be like "4,5,6,7"
+    visible = [int(x) for x in cvd.split(",") if x.strip() != ""]
+    # In a remapped process, valid torch device indices are 0..len(visible)-1
+    if physical_gpu_id in visible:
+        return visible.index(physical_gpu_id)
+    # If we're already getting local IDs, allow them
+    if 0 <= physical_gpu_id < len(visible):
+        return physical_gpu_id
+    raise RuntimeError(
+        f"GPU id {physical_gpu_id} is not valid under CUDA_VISIBLE_DEVICES={cvd}. "
+        f"Expected one of {visible} (physical) or 0..{len(visible)-1} (local)."
+    )
+
+
+def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+    # Expandable segments help the colocated training actor tolerate repeated
+    # cache releases, but VLLM's allocator/sleep path does not support them.
+    # The rollout Ray actor inherits the job environment, so remove the option
+    # before spawning every VLLM server and its children.
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    os.environ.pop("PYTORCH_ALLOC_CONF", None)
+
+    if getattr(server_args, "encoder_only", False):
+        from vllm.srt.disaggregation.encode_server import launch_server_process as vllm_launch_server_process
+
+        return vllm_launch_server_process(
+            server_args,
+            start_method="spawn",
+            wait_for_server=True,
+        )
+
+    from vllm.srt.entrypoints.http_server import launch_server
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     multiprocessing.set_start_method("spawn", force=True)
     p = multiprocessing.Process(target=_run_vllm_server, args=(kwargs, env))
@@ -205,6 +291,7 @@ class VLLMEngine(RayActor):
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
             worker_url = f"http://{self.server_host}:{self.server_port}"
+<<<<<<< ours (vime current)
             payload = {
                 "url": worker_url,
                 "worker_type": self.worker_type,
@@ -223,6 +310,47 @@ class VLLMEngine(RayActor):
                 f"http://{self.router_ip}:{self.router_port}/workers",
                 json=payload,
             )
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+            if parse(vllm_router.__version__) <= parse("0.2.1"):
+                assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url={worker_url}",
+                )
+            else:
+                payload = {
+                    "url": worker_url,
+                    "worker_type": self.worker_type,
+                }
+                if self.worker_type == "prefill":
+                    bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                    if bootstrap_port is None:
+                        raise RuntimeError(
+                            f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
+                            "cannot register it to the PD router."
+                        )
+                    payload["bootstrap_port"] = bootstrap_port
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/workers",
+                    json=payload,
+                )
+=======
+            payload = {
+                "url": worker_url,
+                "worker_type": self.worker_type,
+            }
+            if self.worker_type == "prefill":
+                bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                if bootstrap_port is None:
+                    raise RuntimeError(
+                        f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; "
+                        "cannot register it to the PD router."
+                    )
+                payload["bootstrap_port"] = bootstrap_port
+            response = requests.post(
+                f"http://{self.router_ip}:{self.router_port}/workers",
+                json=payload,
+            )
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             response.raise_for_status()
 
     def _make_request(self, endpoint: str, payload: dict | None = None):
@@ -305,6 +433,7 @@ class VLLMEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
+<<<<<<< ours (vime current)
             try:
                 all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
                 for worker in all_workers:
@@ -319,6 +448,49 @@ class VLLMEngine(RayActor):
             except Exception as e:
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
 
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+            response = None
+            if parse(vllm_router.__version__) <= parse("0.2.1"):
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
+                )
+            elif parse(vllm_router.__version__) < parse("0.3.0"):
+                worker_url = quote(worker_url, safe="")
+                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
+            else:
+                try:
+                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                    for worker in all_workers:
+                        if worker["url"] == worker_url:
+                            worker_id = worker["id"]
+                            response = requests.delete(
+                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
+                            )
+                            break
+                    else:
+                        logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch workers list or remove worker: {e}")
+
+            if response is not None:
+                response.raise_for_status()
+=======
+            response = None
+            try:
+                all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                for worker in all_workers:
+                    if worker["url"] == worker_url:
+                        worker_id = worker["id"]
+                        response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}")
+                        break
+                else:
+                    logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch workers list or remove worker: {e}")
+
+            if response is not None:
+                response.raise_for_status()
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
@@ -537,6 +709,9 @@ def _compute_server_args(
     ec_transfer_override = vllm_overrides.pop("ec_transfer_config", None)
 
     _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
+    normalized_overrides = {key.replace("-", "_"): value for key, value in (vllm_overrides or {}).items()}
+    pp_size = int(normalized_overrides.get("pp_size", args.vllm_pp_size))
+    tp_size = int(normalized_overrides.get("tp_size", _gpus_per_engine // pp_size))
     nnodes = max(1, _gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
     if nnodes == 1:
@@ -564,15 +739,63 @@ def _compute_server_args(
     kwargs: dict[str, Any] = {
         "model": str(args.hf_checkpoint),
         "trust_remote_code": True,
+<<<<<<< ours (vime current)
         "seed": args.seed + rank,
         "host": _wrap_ipv6(host or "127.0.0.1"),
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        "random_seed": args.seed + rank,
+        # memory
+        "enable_memory_saver": args.offload_rollout,
+        # distributed
+        "host": host,
+=======
+        "random_seed": args.seed + rank * args.num_gpus_per_node,
+        # memory
+        "enable_memory_saver": args.offload_rollout,
+        # distributed
+        "host": host,
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         "port": port,
         "nnodes": nnodes,
         "node_rank": node_rank,
+<<<<<<< ours (vime current)
         "tensor_parallel_size": tp,
         "logprobs_mode": "processed_logprobs",
         "enable_prompt_tokens_details": True,
         "enable_server_load_tracking": True,
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        "dist_init_addr": dist_init_addr,
+        "gpu_id_step": 1,
+        "base_gpu_id": base,
+        # parallel
+        "tp_size": _gpus_per_engine // args.vllm_pp_size,
+        "dp_size": args.vllm_dp_size,
+        "pp_size": args.vllm_pp_size,
+        "ep_size": args.vllm_ep_size,
+        # always skip warmup to prevent warmup timeout.
+        "skip_server_warmup": True,
+        # always enable draft weights cpu backup so that we run training without mtp weights.
+        "enable_draft_weights_cpu_backup": True,
+        # Always enable Prometheus metrics so the router /engine_metrics endpoint
+        # is available for external scraping.
+        "enable_metrics": True,
+=======
+        "dist_init_addr": dist_init_addr,
+        "gpu_id_step": 1,
+        "base_gpu_id": base,
+        # parallel
+        "tp_size": tp_size,
+        "dp_size": args.vllm_dp_size,
+        "pp_size": pp_size,
+        "ep_size": args.vllm_ep_size,
+        # always skip warmup to prevent warmup timeout.
+        "skip_server_warmup": True,
+        # always enable draft weights cpu backup so that we run training without mtp weights.
+        "enable_draft_weights_cpu_backup": True,
+        # Always enable Prometheus metrics so the router /engine_metrics endpoint
+        # is available for external scraping.
+        "enable_metrics": True,
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     }
 
     if pp > 1:
@@ -668,6 +891,7 @@ def _compute_server_args(
                     f"vllm_overrides: overriding {normalized_key}={kwargs[normalized_key]} -> {value} (rank={rank})"
                 )
             kwargs[normalized_key] = value
+<<<<<<< ours (vime current)
         if "model_path" in {k.replace("-", "_") for k in vllm_overrides}:
             kwargs["model"] = str(vllm_overrides.get("model_path") or vllm_overrides.get("model-path"))
 
@@ -683,6 +907,37 @@ def _compute_server_args(
     kwargs["_pp_size"] = pp
     kwargs["_dp_size"] = dp
     kwargs["_disaggregation_bootstrap_port"] = disaggregation_bootstrap_port
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+            if normalized_key in server_arg_field_names:
+                unused_keys.discard(normalized_key)
+            else:
+                unused_keys.add(normalized_key)
+
+    # for compatibility with old args
+    if len(unused_keys) > 0:
+        logger.info(f"Warning: The following arguments is not supported in the current vllm: {unused_keys}.")
+        for key in unused_keys:
+            kwargs.pop(key)
+=======
+            if normalized_key in server_arg_field_names:
+                unused_keys.discard(normalized_key)
+            else:
+                unused_keys.add(normalized_key)
+
+    if (
+        "cuda_graph_backend_prefill" in server_arg_field_names
+        and kwargs.get("enable_memory_saver")
+        and kwargs.get("cuda_graph_backend_prefill") is None
+    ):
+        # Breakable is VLLM's default prefill backend on CUDA, but it is incompatible with memory saver mode.
+        kwargs["cuda_graph_backend_prefill"] = "disabled"
+
+    # for compatibility with old args
+    if len(unused_keys) > 0:
+        logger.info(f"Warning: The following arguments is not supported in the current vllm: {unused_keys}.")
+        for key in unused_keys:
+            kwargs.pop(key)
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     return kwargs, external_engine_need_check_fields
 

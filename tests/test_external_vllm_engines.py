@@ -1,4 +1,5 @@
 import sys
+import types
 from argparse import Namespace
 from pathlib import Path
 
@@ -8,12 +9,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+<<<<<<< ours (vime current)
 from vime.backends.vllm_utils.external import (
     apply_external_engine_info_to_args,
     discover_external_engines,
     get_server_info,
 )
 from vime.utils.http_utils import get_rollout_num_engines
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+from slime.backends.vllm_utils.external import apply_external_engine_info_to_args, discover_external_engines
+from slime.utils.http_utils import get_rollout_num_engines
+=======
+from slime.backends.vllm_utils.external import (
+    ExternalEngineInfo,
+    apply_external_engine_info_to_args,
+    discover_external_engines,
+    start_external_rollout_servers,
+)
+from slime.utils.http_utils import get_rollout_num_engines
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 NUM_GPUS = 0
 
@@ -60,6 +74,44 @@ def test_discover_external_engines_reads_server_info(monkeypatch):
     assert info.server_info["pp_size"] == 2
     assert info.server_info["dp_size"] == 1
     assert info.server_info["ep_size"] == 4
+    assert info.parallel_config == {"tp_size": 4, "pp_size": 2, "ep_size": 4, "moe_dp_size": 1}
+
+
+def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch):
+    class FakeActor:
+        init = Namespace(remote=lambda **kwargs: kwargs)
+
+    class FakeActorClass:
+        def options(self, **kwargs):
+            return self
+
+        def remote(self, **kwargs):
+            return FakeActor()
+
+    ray = types.ModuleType("ray")
+    ray.remote = lambda actor_class: FakeActorClass()
+    vllm_engine = types.ModuleType("slime.backends.vllm_utils.vllm_engine")
+    vllm_engine.VLLMEngine = object
+    ray_utils = types.ModuleType("slime.ray.utils")
+    ray_utils.add_default_ray_env_vars = lambda: {}
+    monkeypatch.setitem(sys.modules, "ray", ray)
+    monkeypatch.setitem(sys.modules, "slime.backends.vllm_utils.vllm_engine", vllm_engine)
+    monkeypatch.setitem(sys.modules, "slime.ray.utils", ray_utils)
+
+    info = ExternalEngineInfo(
+        url="http://host1:10090",
+        host="host1",
+        port=10090,
+        worker_type="regular",
+        num_gpus=8,
+        server_info={"tp_size": 4, "pp_size": 2, "ep_size": 4, "moe_dp_size": 2},
+    )
+    args = Namespace(rollout_external_engine_infos=[info.to_dict()])
+
+    servers, init_handles = start_external_rollout_servers(args, start_router=lambda *args, **kwargs: ("host1", 30000))
+
+    assert servers["default"].engine_parallel_configs == [{"tp_size": 4, "pp_size": 2, "ep_size": 4, "moe_dp_size": 2}]
+    assert len(init_handles) == 1
 
 
 def test_get_server_info_flattens_nested_vllm_transfer_configs(monkeypatch):

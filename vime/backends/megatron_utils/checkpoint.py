@@ -8,8 +8,14 @@ from megatron.training.checkpointing import load_checkpoint as _load_checkpoint_
 from megatron.training.checkpointing import save_checkpoint
 from megatron.training.global_vars import get_args
 
+<<<<<<< ours (vime current)
 from vime.utils import megatron_bridge_utils
 
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+from slime.utils import megatron_bridge_utils
+
+=======
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 try:
     # Here we patch out the `validate_non_overlapping_shards_metadata` in both functions
     # because it is really slow for large models with many shards.
@@ -127,18 +133,24 @@ def _is_megatron_checkpoint(path: str | Path) -> bool:
 
 
 def _load_checkpoint_hf(ddp_model, optimizer, args, load_path: str):
+<<<<<<< ours (vime current)
     assert args.megatron_to_hf_mode == "bridge", "Only bridge mode is supported for loading HF checkpoint"
     from megatron.bridge import AutoBridge
 
     import vime_plugins.megatron_bridge  # noqa: F401
 
-    logger.info(f"Load checkpoint from HuggingFace model into Megatron (path={load_path})")
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    assert args.megatron_to_hf_mode == "bridge", "Only bridge mode is supported for loading HF checkpoint"
+    from megatron.bridge import AutoBridge
 
-    with megatron_bridge_utils.patch_megatron_model(ddp_model):
-        bridge = megatron_bridge_utils.patch_auto_bridge_hf_config(
-            AutoBridge.from_hf_pretrained(load_path, trust_remote_code=True)
-        )
-        bridge.load_hf_weights(ddp_model)
+    import slime_plugins.megatron_bridge  # noqa: F401
+
+=======
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+    logger.info(f"Load checkpoint from HuggingFace model into Megatron (path={load_path})")
+    from slime.backends.megatron_utils.hf_to_megatron import load_hf_weights
+
+    load_hf_weights(args, ddp_model, load_path)
 
     # Copied from Megatron-core :: load_checkpoint (with simplifications)
     if (args.fp16 or args.bf16) and optimizer is not None:

@@ -9,12 +9,20 @@ import torch
 import torch.distributed as dist
 from torch.distributed.distributed_c10d import PrefixStore, _get_default_group, _get_default_store
 
+<<<<<<< ours (vime current)
 from vime.utils.distributed_utils import get_gloo_group, init_gloo_group, set_gloo_group
 from vime.utils.memory_utils import available_memory, clear_memory, print_memory
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+from slime.utils.memory_utils import available_memory, clear_memory, print_memory
+=======
+from slime.utils.distributed_utils import get_gloo_group, init_gloo_group, set_gloo_group
+from slime.utils.memory_utils import available_memory, clear_memory, print_memory
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 logger = logging.getLogger(__name__)
 
 old_new_group_dict = {}
+<<<<<<< ours (vime current)
 default_process_group_states = {}
 
 
@@ -105,6 +113,118 @@ def _reload_default_process_group() -> None:
         state.generation,
     )
 
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+=======
+default_process_group_states = {}
+
+
+@dataclass
+class _DefaultProcessGroupState:
+    backend: str
+    timeout: timedelta
+    store: Any
+    rank: int
+    world_size: int
+    generation: int = 0
+    nccl_world_destroyed: bool = False
+
+
+def register_default_process_group(timeout: timedelta) -> None:
+    """Register the NCCL WORLD group so it can be destroyed and rebuilt.
+
+    Keeping a reference to the rendezvous store is intentional.  It keeps the
+    rank-0 TCPStore alive after ``destroy_process_group()`` and lets every
+    generation use a fresh PrefixStore namespace, avoiding stale rendezvous
+    keys when WORLD is recreated repeatedly.
+    """
+    if not dist.is_initialized():
+        raise RuntimeError("Cannot register WORLD before torch.distributed is initialized")
+
+    pid = os.getpid()
+    backend = str(dist.get_backend())
+    state = _DefaultProcessGroupState(
+        backend=backend,
+        timeout=timeout,
+        store=_get_default_store(),
+        rank=dist.get_rank(),
+        world_size=dist.get_world_size(),
+    )
+    default_process_group_states[pid] = state
+    logger.info(
+        "Registered default WORLD process group for reload: backend=%s, rank=%s, world_size=%s",
+        backend,
+        state.rank,
+        state.world_size,
+    )
+
+
+def _uses_nccl(backend: str) -> bool:
+    return "nccl" in backend.lower()
+
+
+def _new_default_process_group(state: _DefaultProcessGroupState, backend: str) -> None:
+    state.generation += 1
+    store = PrefixStore(f"slime-reloadable-world-{state.generation}-{backend}", state.store)
+    dist.init_process_group(
+        backend=backend,
+        store=store,
+        rank=state.rank,
+        world_size=state.world_size,
+        timeout=state.timeout,
+    )
+
+
+def _destroy_default_nccl_process_group() -> None:
+    state = default_process_group_states.get(os.getpid())
+    if state is None or state.nccl_world_destroyed or not _uses_nccl(state.backend):
+        return
+
+    # Pure PP=4 exposed a teardown ordering deadlock here.  Pipeline ranks own
+    # different overlapping subsets of singleton, embedding, and PP groups, so
+    # destroying the local wrapper list one group at a time let rank 0 enter
+    # subgroup reload while another rank was still shutting down.  The first
+    # rank then blocked forever in new_group(), waiting for the others.
+    #
+    # Destroying WORLD once makes PyTorch shut down every registered NCCL and
+    # Gloo backend in its global process-group order.  This still releases all
+    # communicator memory; invalidating the wrappers below only drops stale
+    # Python handles after their native backends have already been shut down.
+    dist.barrier(group=get_gloo_group())
+    dist.destroy_process_group()
+    ReloadableProcessGroup.invalidate_process_groups()
+    set_gloo_group(None)
+
+    _new_default_process_group(state, backend="gloo")
+    set_gloo_group(_get_default_group())
+    state.nccl_world_destroyed = True
+    logger.info(
+        "Destroyed default %s WORLD process group and initialized a temporary Gloo WORLD (generation %s)",
+        state.backend,
+        state.generation,
+    )
+
+
+def _reload_default_process_group() -> None:
+    state = default_process_group_states.get(os.getpid())
+    if state is None or not state.nccl_world_destroyed:
+        return
+
+    # WORLD uses Gloo while the NCCL WORLD is destroyed, so this barrier does
+    # not allocate CUDA or recreate an NCCL communicator before all ranks are ready.
+    dist.barrier()
+    dist.destroy_process_group()
+    set_gloo_group(None)
+
+    _new_default_process_group(state, backend=state.backend)
+    init_gloo_group()
+    state.nccl_world_destroyed = False
+    logger.info(
+        "Reloaded default WORLD process group with backend %s (generation %s)",
+        state.backend,
+        state.generation,
+    )
+
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 _COMM_MEMORY_CHECK_SKIP_OPS = {
     "all_gather_into_tensor",
@@ -136,12 +256,26 @@ def monkey_patch_torch_dist():
 
     def new_group(*args, **kwargs):
         group = old_new_group(*args, **kwargs)
+<<<<<<< ours (vime current)
         explicit_backend = args[2] if len(args) >= 3 else kwargs.get("backend")
         backend = str(explicit_backend) if explicit_backend is not None else str(dist.get_backend())
 
         # Once WORLD is reloadable, destroying it invalidates every cached
         # subgroup, including Gloo and singleton groups.
         if backend == "gloo" and pid not in default_process_group_states:
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        # skip none nccl group.
+        if len(args) >= 3 and args[2] == "gloo" or "backend" in kwargs and kwargs["backend"] == "gloo":
+=======
+        explicit_backend = args[2] if len(args) >= 3 else kwargs.get("backend")
+        backend = str(explicit_backend) if explicit_backend is not None else str(dist.get_backend())
+
+        # Before WORLD is registered, preserve the historical behavior of
+        # leaving CPU groups and singleton groups untouched.  Afterwards every
+        # cached subgroup must be reloadable because destroying WORLD
+        # invalidates all of them, including Gloo and singleton groups.
+        if backend == "gloo" and pid not in default_process_group_states:
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             return group
 
         # Get ranks from arguments
@@ -153,7 +287,19 @@ def monkey_patch_torch_dist():
             # If no ranks specified, use all ranks in world
             ranks = list(range(dist.get_world_size()))
 
+<<<<<<< ours (vime current)
         if len(ranks) == 1 and pid not in default_process_group_states:
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        if len(ranks) == 1:
+=======
+        # Historically singleton groups were left unwrapped because they do
+        # not own a useful communicator.  Once WORLD itself is destroyed,
+        # however, PyTorch invalidates *every* registered subgroup, including
+        # singleton groups cached by Megatron.  Wrap them for actors that have
+        # registered a reloadable WORLD so those cached references remain
+        # usable after wake-up.  Preserve the old behavior for other callers.
+        if len(ranks) == 1 and pid not in default_process_group_states:
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             return group
 
         group = ReloadableProcessGroup(
@@ -284,6 +430,13 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
                 )
 
             del reloadable_group.group
+            reloadable_group.group = None
+
+    @staticmethod
+    def invalidate_process_groups():
+        """Drop handles after destroying WORLD, which already shut down every subgroup."""
+        pid = os.getpid()
+        for reloadable_group in ReloadableProcessGroup.GROUPS.get(pid, []):
             reloadable_group.group = None
 
     @staticmethod
@@ -423,12 +576,24 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
 
 
 def destroy_process_groups():
+<<<<<<< ours (vime current)
     """Destroy subgroups and replace NCCL WORLD with a temporary Gloo WORLD."""
     state = default_process_group_states.get(os.getpid())
     if state is not None and not state.nccl_world_destroyed and _uses_nccl(state.backend):
         dist.barrier(group=get_gloo_group())
     ReloadableProcessGroup.destroy_process_groups()
     _destroy_default_nccl_process_group()
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    """Destroy all reloadable process groups."""
+    ReloadableProcessGroup.destroy_process_groups()
+=======
+    """Destroy registered subgroups and replace NCCL WORLD with a temporary Gloo WORLD."""
+    state = default_process_group_states.get(os.getpid())
+    if state is not None and not state.nccl_world_destroyed and _uses_nccl(state.backend):
+        _destroy_default_nccl_process_group()
+    else:
+        ReloadableProcessGroup.destroy_process_groups()
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 
 def reload_process_groups():

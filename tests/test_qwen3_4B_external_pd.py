@@ -8,10 +8,25 @@ and points vime at both via ``--rollout-external-engine-addrs ...``.
 The first 4 GPUs train. vime queries ``/server_info`` on each engine to
 infer per-engine TP / GPU counts and registers them to its PD-enabled router.
 
+<<<<<<< ours (vime current)
 Weight sync uses ``--update-weight-mode full --update-weight-transport disk``
 so the post-train sync writes a complete HF checkpoint to a shared directory
 and the external engines reload it through ``update_weights_from_disk`` without
 forming an NCCL group with the trainer.
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
+so the post-train sync writes sparse safetensors to a shared dir and the
+external engines load them via ``update_weights_from_disk(load_format=delta)``
+— that's the only sync path that actually works for pre-launched workers (no
+NCCL group between trainer and external engines).
+=======
+Weight sync uses ``--update-weight-mode delta --update-weight-transport disk``
+so the post-train sync writes sparse safetensors to a shared dir and the
+external engines apply them to a host-local checkpoint via ``/pull_weights``
+before reloading that checkpoint — that's the only sync path that actually
+works for pre-launched workers (no NCCL group between trainer and external
+engines).
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 """
 
 import json
@@ -231,8 +246,18 @@ def execute():
                 )
             )
 
+<<<<<<< ours (vime current)
     disk_dir_cm = tempfile.TemporaryDirectory(prefix="vime_external_pd_full_disk_")
     disk_dir = disk_dir_cm.name
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    delta_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_delta_")
+    delta_dir = delta_dir_cm.name
+=======
+    delta_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_delta_")
+    local_checkpoint_dir_cm = tempfile.TemporaryDirectory(prefix="slime_external_pd_local_checkpoint_")
+    delta_dir = delta_dir_cm.name
+    local_checkpoint_dir = local_checkpoint_dir_cm.name
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     try:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
@@ -293,14 +318,41 @@ def execute():
         all_addrs = [f"{external_host}:{port}" for port in (*PREFILL_PORTS, *DECODE_PORTS)]
         external_args = "--rollout-external-engine-addrs " + " ".join(all_addrs) + " "
 
+<<<<<<< ours (vime current)
         # External engines have no NCCL group with the trainer, so the trainer
         # publishes a complete HF checkpoint and the engines reload it from the
         # shared filesystem.
         disk_update_args = (
             "--update-weight-mode full "
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        # External engines have no NCCL group with the trainer, so weight
+        # updates have to go through the disk-backed delta path: the trainer
+        # writes sparse safetensors per sync, the engines pull via
+        # update_weights_from_disk(load_format="delta", files=...).
+        delta_args = (
+            "--update-weight-mode delta "
+=======
+        # External engines have no NCCL group with the trainer, so weight
+        # updates have to go through the disk-backed delta path: the trainer
+        # writes sparse safetensors per sync, then each engine applies them to
+        # the host-local checkpoint through /pull_weights before reloading it.
+        delta_args = (
+            "--update-weight-mode delta "
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             "--update-weight-transport disk "
+<<<<<<< ours (vime current)
             f"--update-weight-disk-dir {disk_dir} "
             "--update-weight-disk-keep-files "
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+            "--update-weight-encoding deltas "
+            f"--update-weight-disk-dir {delta_dir} "
+            "--update-weight-delta-keep-files "
+=======
+            "--update-weight-delta-encoding xor "
+            f"--update-weight-disk-dir {delta_dir} "
+            f"--update-weight-local-checkpoint-dir {local_checkpoint_dir} "
+            "--update-weight-disk-keep-files "
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         )
 
         ci_args = "--ci-test "
@@ -349,7 +401,14 @@ def execute():
                 p.kill()
                 p.wait()
         U.exec_command("pkill -9 vllm; true")
+<<<<<<< ours (vime current)
         disk_dir_cm.cleanup()
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        delta_dir_cm.cleanup()
+=======
+        delta_dir_cm.cleanup()
+        local_checkpoint_dir_cm.cleanup()
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 
 if __name__ == "__main__":

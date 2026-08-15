@@ -13,6 +13,7 @@ import numpy as np
 import ray
 import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+<<<<<<< ours (vime current)
 
 from vime.backends.vllm_utils.external import start_external_rollout_servers
 from vime.backends.vllm_utils.vllm_config import ModelConfig, ServerGroupConfig, VllmConfig
@@ -32,6 +33,40 @@ from vime.utils.logging_utils import configure_logger, init_tracking
 from vime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from vime.utils.misc import Box, group_by, load_function
 from vime.utils.types import Sample
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+from vllm.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
+
+from slime.backends.vllm_utils.external import start_external_rollout_servers
+from slime.backends.vllm_utils.vllm_config import ModelConfig, ServerGroupConfig, VllmConfig
+from slime.backends.vllm_utils.vllm_engine import VLLMEngine
+from slime.rollout.base_types import call_rollout_fn
+from slime.utils import logging_utils
+from slime.utils.data import get_source
+from slime.utils.dp_schedule import build_dp_schedule
+from slime.utils.health_monitor import RolloutHealthMonitor
+from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
+from slime.utils.logging_utils import configure_logger, init_tracking
+from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
+from slime.utils.misc import Box, group_by, load_function
+from slime.utils.types import Sample
+=======
+from vllm.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
+
+from slime.backends.vllm_utils.external import start_external_rollout_servers
+from slime.backends.vllm_utils.vllm_config import ModelConfig, ServerGroupConfig, VllmConfig
+from slime.backends.vllm_utils.vllm_engine import VLLMEngine
+from slime.rollout.base_types import call_rollout_fn
+from slime.rollout.sample_hooks import set_current_rollout_id
+from slime.utils import logging_utils
+from slime.utils.data import get_source
+from slime.utils.dp_schedule import build_dp_schedule
+from slime.utils.health_monitor import RolloutHealthMonitor
+from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
+from slime.utils.logging_utils import configure_logger, init_tracking
+from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
+from slime.utils.misc import Box, group_by, load_function
+from slime.utils.types import Sample
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 from ..utils.metric_utils import has_repetition
 from .rollout_validation import validate_server_group_gpu_indices
@@ -108,6 +143,43 @@ def _tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:
         )
 
 
+def _validate_rollout_routed_experts_for_replay(
+    routed_experts: list[torch.Tensor],
+    args,
+) -> None:
+    """Reject incomplete PP routing captures before R3 consumes them."""
+    if not routed_experts:
+        raise ValueError("R3 is enabled but no rollout routed-experts tensors were returned.")
+
+    num_layers = int(args.num_layers)
+    topk = int(args.moe_router_topk)
+    moe_layer_freq = getattr(args, "moe_layer_freq", None)
+    if isinstance(moe_layer_freq, (list, tuple)):
+        moe_layers = [layer_id for layer_id, freq in enumerate(moe_layer_freq[:num_layers]) if int(freq) != 0]
+    else:
+        moe_layers = list(range(num_layers))
+
+    for sample_idx, experts in enumerate(routed_experts):
+        experts = torch.as_tensor(experts)
+        if experts.ndim != 3 or tuple(experts.shape[1:]) != (num_layers, topk):
+            raise ValueError(
+                "Invalid rollout routed-experts shape for R3: "
+                f"sample={sample_idx}, got={tuple(experts.shape)}, "
+                f"expected=(*, {num_layers}, {topk})."
+            )
+        if experts.shape[0] == 0:
+            raise ValueError(f"R3 sample {sample_idx} has no routed-experts rows.")
+        if topk > 1:
+            missing_layers = [layer_id for layer_id in moe_layers if not torch.count_nonzero(experts[:, layer_id, :])]
+            if missing_layers:
+                raise ValueError(
+                    "R3 routed-experts capture is all zero for MoE layers "
+                    f"{missing_layers} in sample {sample_idx}. This usually means "
+                    "VLLM pipeline stages did not aggregate their disjoint routing "
+                    "captures; refusing to replay expert 0 everywhere."
+                )
+
+
 @dataclasses.dataclass
 class ServerGroup:
     """A group of homogeneous vLLM engines with the same configuration.
@@ -139,6 +211,18 @@ class ServerGroup:
     def engines(self):
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
+
+    def parallel_config(self) -> dict[str, Any]:
+        """Return the VLLM parallel args that affect rank-local expert routing."""
+        overrides = {key.replace("-", "_"): value for key, value in self.vllm_overrides.items()}
+        pp_size = int(overrides.get("pp_size", getattr(self.args, "vllm_pp_size", 1)))
+        tp_size = int(overrides.get("tp_size", self.num_gpus_per_engine // pp_size))
+        return {
+            "tp_size": tp_size,
+            "pp_size": pp_size,
+            "ep_size": int(overrides.get("ep_size", getattr(self.args, "vllm_ep_size", 1))),
+            "moe_dp_size": int(overrides.get("moe_dp_size", getattr(self.args, "vllm_moe_dp_size", 1))),
+        }
 
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
         """Create Ray actors, allocate ports, and fire ``engine.init()`` without waiting.
@@ -192,6 +276,7 @@ class ServerGroup:
                 placement_group_bundle_index=reordered_bundle_indices[gpu_index],
             )
 
+<<<<<<< ours (vime current)
             env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
             # vime-patch: expandable_segments breaks vLLM custom all-reduce CUDA
             # IPC. Strip only that key, keeping any other allocator settings.
@@ -199,6 +284,35 @@ class ServerGroup:
             env_vars["PYTORCH_CUDA_ALLOC_CONF"] = ",".join(
                 kv for kv in _alloc.split(",") if kv and not kv.strip().startswith("expandable_segments")
             )
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+            env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
+                key: os.environ.get(key, default_val)
+                for key, default_val in {
+                    "VLLM_JIT_DEEPGEMM_PRECOMPILE": "true",
+                    "VLLM_JIT_DEEPGEMM_FAST_WARMUP": "true",
+                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "VLLM_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "VLLM_MEMORY_SAVER_CUDA_GRAPH": "true",
+                    "VLLM_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+                    "VLLM_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+                    "VLLM_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+                }.items()
+            }
+=======
+            env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
+                key: os.environ.get(key, default_val)
+                for key, default_val in {
+                    "VLLM_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "VLLM_JIT_DEEPGEMM_FAST_WARMUP": "true",
+                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "VLLM_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "VLLM_MEMORY_SAVER_CUDA_GRAPH": "true",
+                    "VLLM_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+                    "VLLM_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+                    "VLLM_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+                }.items()
+            }
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
@@ -317,6 +431,11 @@ class RolloutServer:
             for j in range(len(g.engines)):
                 offsets.append(g.gpu_offset + j * g.num_gpus_per_engine)
         return offsets
+
+    @property
+    def engine_parallel_configs(self) -> list[dict[str, Any]]:
+        """Per-engine VLLM parallel config, parallel to ``engines``."""
+        return [g.parallel_config() for g in self.server_groups for _ in g.engines]
 
     @property
     def nodes_per_engine(self):
@@ -546,8 +665,9 @@ class RolloutManager:
         engines = srv.engines if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
+        parallel_configs = srv.engine_parallel_configs if srv else []
         num_new = srv.num_new_engines if srv else 0
-        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
+        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, parallel_configs
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -556,6 +676,7 @@ class RolloutManager:
     def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
+        set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
@@ -572,6 +693,7 @@ class RolloutManager:
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
+        set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
@@ -810,7 +932,10 @@ class RolloutManager:
             train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
 
         if samples[0].rollout_routed_experts is not None:
-            train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
+            routed_experts = [torch.as_tensor(sample.rollout_routed_experts) for sample in samples]
+            if getattr(self.args, "use_rollout_routing_replay", False):
+                _validate_rollout_routed_experts_for_replay(routed_experts, self.args)
+            train_data["rollout_routed_experts"] = routed_experts
 
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
@@ -1049,15 +1174,35 @@ def _start_router(
     router_args.host = router_ip
     router_args.port = router_port
     router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
+<<<<<<< ours (vime current)
     router_args.log_level = "warning"
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    router_args.log_level = "warn"
+=======
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     router_args.request_timeout_secs = args.vllm_router_request_timeout_secs
 
     if has_pd_disaggregation:
+<<<<<<< ours (vime current)
         router_args.vllm_pd_disaggregation = True
 
     if prefill_urls is not None:
         router_args.prefill_urls = prefill_urls
         router_args.decode_urls = decode_urls
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        router_args.pd_disaggregation = True
+        # Disable circuit breaker to prevent RDMA transfer timeouts from
+        # marking decode workers as dead. Timeouts are transient (PCIe
+        # contention under high load) and do not indicate a dead server.
+        router_args.disable_circuit_breaker = True
+=======
+        router_args.pd_disaggregation = True
+
+    # Disable circuit breaker to prevent RDMA transfer timeouts from
+    # marking decode workers as dead. Timeouts are transient (PCIe
+    # contention under high load) and do not indicate a dead server.
+    router_args.disable_circuit_breaker = True
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     # Disable circuit breaker to prevent RDMA transfer timeouts from
     # marking workers as dead. Timeouts are transient (PCIe contention under

@@ -236,35 +236,17 @@ PPO（Proximal Policy Optimization）是经典的 RL 算法，使用 critic 模�
 --advantage-estimator ppo
 ```
 
-**注意：PPO 的 Critic 和 Actor 是并列申请 GPU 的**，在资源分配时需要考虑这一点。具体来说：
+**注意：当前 PPO 下 Critic 和 Actor 共享同一组训练 GPU**，资源分配时不需要为 critic 额外预留一组独立 GPU。具体来说：
 
-- Critic 模型会独立占用一组 GPU，与 Actor 的 GPU 资源分开；
-- 可以通过 `--critic-num-nodes` 和 `--critic-num-gpus-per-node` 来配置 critic 使用的资源；
-- 如果不配置 critic 的资源参数，默认会使用与 actor 相同的资源配置。
+- PPO 会创建 actor 和 critic 两套训练进程组，但它们会被放到同一组 train placement group 上；
+- critic 的训练规模跟随 actor 配置，当前 actor / critic 的 Megatron 并行拓扑必须保持一致；
+- PPO 会强制开启 train 侧 offload，使 actor 和 critic 在同一批 GPU 上轮流唤醒和释放显存；
+- 当前没有单独配置 critic 训练资源的 CLI 参数，critic 的节点数和每节点 GPU 数会由 actor 配置派生。
 
-集群资源分配示例：
-
-```bash
-# Actor 使用 1 个节点，4 张 GPU
---actor-num-nodes 1
---actor-num-gpus-per-node 4
-
-# Critic 使用 1 个节点，4 张 GPU（与 Actor 并列）
---critic-num-nodes 1
---critic-num-gpus-per-node 4
-
-# Rollout 使用 8 张 GPU
---rollout-num-gpus 8
-```
-
-在上述配置下，总共需要 `4 (actor) + 4 (critic) + 8 (rollout) = 16` 张 GPU。
 
 PPO 相关参数：
 
-- `--critic-load`：critic 模型的 checkpoint 路径；
-- `--critic-save`：critic 模型的保存路径；
-- `--critic-lr`：critic 模型的学习率；
-- `--critic-lr-warmup-iters`：critic 模型的 warmup 步数；
+- `--megatron-config-path`：通过 YAML 对 actor / critic 分别覆盖 Megatron 参数，例如为 critic 单独设置 `load`、`save`、`lr` 或 warmup 参数；
 - `--num-critic-only-steps`：训练开始时只训练 critic 的步数；
 - `--eps-clip`：PPO clip 范围；
 - `--value-clip`：value loss 的 clip 范围；

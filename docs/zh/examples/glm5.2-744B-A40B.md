@@ -18,7 +18,13 @@ hf download zai-org/GLM-5.2 --local-dir $BASE_DIR/GLM-5.2
 hf download zai-org/GLM-5.2-FP8 --local-dir $BASE_DIR/GLM-5.2-FP8
 ```
 
+<<<<<<< ours (vime current)
 开源 GLM-5.2 的 config 使用 `model_type: glm_moe_dsa`，vime 将其映射到 DeepSeek-V3.2 的 bridge（`vime_plugins.mbridge.deepseek_v32`），因为两者共享相同的 DSA 权重布局。
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+开源 GLM-5.2 的 config 使用 `model_type: glm_moe_dsa`，slime 将其映射到 DeepSeek-V3.2 的 bridge（`slime_plugins.mbridge.deepseek_v32`），因为两者共享相同的 DSA 权重布局。
+=======
+开源 GLM-5.2 的 config 使用 `model_type: glm_moe_dsa`，slime 将其映射到原生 DeepSeek-V3.2 loader，因为两者共享相同的 DSA 权重布局。
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 ### 转换 Checkpoint
 

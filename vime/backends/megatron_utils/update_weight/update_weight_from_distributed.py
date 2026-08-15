@@ -88,6 +88,7 @@ class UpdateWeightFromDistributed:
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
         engine_gpu_offsets: Sequence[int] | None = None,
+        engine_parallel_configs: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         """
         Record rollout engines and create the NCCL group eagerly for PP=1.

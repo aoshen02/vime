@@ -92,7 +92,25 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     prompt_ids = _prepare_prompt_ids(sample, state.tokenizer, state.processor)
     base_prompt_ids = _base_dataset_prompt_ids(sample, state.tokenizer, state.processor)
 
+<<<<<<< ours (vime current)
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    assert (
+        sampling_params["max_new_tokens"] >= 0
+    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
+    if sampling_params["max_new_tokens"] == 0:
+        sample.status = Sample.Status.TRUNCATED
+        return sample
+=======
+    sampling_params["max_new_tokens"] -= sample.response_length
+
+    assert (
+        sampling_params["max_new_tokens"] >= 0
+    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
+    if sampling_params["max_new_tokens"] == 0:
+        sample.status = Sample.Status.TRUNCATED
+        return sample
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     params = dict(sampling_params)
     if len(sample.response) > 0:

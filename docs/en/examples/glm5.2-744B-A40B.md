@@ -18,8 +18,16 @@ hf download zai-org/GLM-5.2 --local-dir $BASE_DIR/GLM-5.2
 hf download zai-org/GLM-5.2-FP8 --local-dir $BASE_DIR/GLM-5.2-FP8
 ```
 
+<<<<<<< ours (vime current)
 The open-source GLM-5.2 config uses `model_type: glm_moe_dsa`, which vime maps onto
 the DeepSeek-V3.2 bridge (`vime_plugins.mbridge.deepseek_v32`) since the two share the
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+The open-source GLM-5.2 config uses `model_type: glm_moe_dsa`, which slime maps onto
+the DeepSeek-V3.2 bridge (`slime_plugins.mbridge.deepseek_v32`) since the two share the
+=======
+The open-source GLM-5.2 config uses `model_type: glm_moe_dsa`, which slime maps onto
+the native DeepSeek-V3.2 loader since the two share the
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 same DSA weight layout.
 
 ### Convert Checkpoint

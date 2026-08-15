@@ -112,7 +112,13 @@ SPEC_ARGS=(
 - `--enable-mtp-training`：启用 MTP 层的梯度计算。不设置此标志时，MTP 层会被加载但冻结。
 - `--mtp-loss-scaling-factor 0.2`：MTP loss 相对于主策略 loss 的权重，默认为 0.2。
 
+<<<<<<< ours (vime current)
 > **注意**：MTP 训练需要 MTP checkpoint bridge 正确转换 HuggingFace 和 Megatron 格式之间的权重。`GLM4MoELiteBridge`（位于 `vime_plugins/mbridge/glm4moe_lite.py`）扩展了 DeepSeek V3 bridge，实现了动态 MTP 层索引以支持 GLM-4.7-Flash 的 47 层架构。
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+> **注意**：MTP 训练需要 MTP checkpoint bridge 正确转换 HuggingFace 和 Megatron 格式之间的权重。`GLM4MoELiteBridge`（位于 `slime_plugins/mbridge/glm4moe_lite.py`）扩展了 DeepSeek V3 bridge，实现了动态 MTP 层索引以支持 GLM-4.7-Flash 的 47 层架构。
+=======
+> **注意**：原生 DeepSeek 布局 loader 会按模型配置的层数映射 MTP 权重，包括 47 层的 GLM-4.7-Flash。
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 >
 > 对于其他支持 MTP 训练的模型（如 MiMo），可参考 `scripts/run-mimo-7B-rl-eagle.sh`。
 

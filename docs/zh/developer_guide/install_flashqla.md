@@ -19,10 +19,44 @@ FlashQLA 是 Qwen GDN kernel 的可选运行后端。安装 FlashQLA 后，仍�
 
 ## Docker 镜像
 
-标准 CUDA Docker 镜像会默认安装 FlashQLA：
+标准 CUDA 12 Docker 镜像会默认安装 FlashQLA：
 
 ```bash
 docker build \
   -f docker/Dockerfile \
+<<<<<<< ours (vime current)
   -t vime:flashqla .
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+  -t slime:flashqla .
+```
+
+## GB10 镜像
+
+`docker/Dockerfile.gb10` 默认不安装 FlashQLA。GB10 环境需要自行验证 FlashQLA 编译和运行行为；如需实验性安装，可显式传入：
+
+```bash
+docker build \
+  --build-arg INSTALL_FLASHQLA=1 \
+  -f docker/Dockerfile.gb10 \
+  -t slime:gb10-flashqla .
+=======
+  --build-arg VLLM_IMAGE_REPOSITORY=slimerl/vllm \
+  --build-arg VLLM_IMAGE_TAG=v0.5.15.post1-cu129 \
+  -t slime:flashqla .
+```
+
+CUDA 13 镜像中的 VLLM 0.5.15.post1 依赖 TileLang 0.1.11，而当前
+FlashQLA 依赖 TileLang 0.1.9，两者的 kernel 行为不兼容。因此 CUDA 13
+镜像不安装 FlashQLA，请使用默认的 FLA 后端。
+
+## GB10 镜像
+
+`docker/Dockerfile.gb10` 默认不安装 FlashQLA。GB10 环境需要自行验证 FlashQLA 编译和运行行为；如需实验性安装，可显式传入：
+
+```bash
+docker build \
+  --build-arg INSTALL_FLASHQLA=1 \
+  -f docker/Dockerfile.gb10 \
+  -t slime:gb10-flashqla .
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 ```

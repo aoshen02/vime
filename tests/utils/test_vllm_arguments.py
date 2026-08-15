@@ -1,3 +1,4 @@
+<<<<<<< ours (vime current)
 """CPU unit tests for ``vime.backends.vllm_utils.arguments``."""
 
 from __future__ import annotations
@@ -306,3 +307,40 @@ def test_validate_args_rejects_prefill_and_rollout_external(args_mod):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+=======
+from argparse import Namespace
+
+import pytest
+
+from slime.backends.vllm_utils.arguments import validate_args
+
+NUM_GPUS = 0
+
+
+def test_validate_args_canonicalizes_moe_data_parallel_size():
+    args = Namespace(
+        vllm_data_parallel_size=8,
+        vllm_pipeline_parallel_size=7,
+        vllm_expert_parallel_size=8,
+        vllm_moe_data_parallel_size=1,
+        rollout_num_gpus_per_engine=56,
+        vllm_enable_dp_attention=True,
+        vllm_router_ip=None,
+        prefill_num_servers=None,
+        rollout_external=False,
+        vllm_config=None,
+    )
+
+    validate_args(args)
+
+    assert args.vllm_tp_size == 8
+    assert args.vllm_pp_size == 7
+    assert args.vllm_dp_size == 8
+    assert args.vllm_ep_size == 8
+    assert args.vllm_moe_dp_size == 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)

@@ -128,7 +128,13 @@ MTP_ARGS=(
 - `--enable-mtp-training`: Enables gradient computation for MTP layers. Without this flag, the MTP layer is loaded but frozen.
 - `--mtp-loss-scaling-factor 0.2`: Weight of the MTP loss relative to the main policy loss. Default is 0.2.
 
+<<<<<<< ours (vime current)
 > **Note**: MTP training for GLM-4.7 relies on `GLM4MoEBridge` (in `vime_plugins/mbridge/glm4moe.py`) to map regular and MTP weights between HuggingFace and Megatron formats.
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+> **Note**: MTP training for GLM-4.7 relies on `GLM4MoEBridge` (in `slime_plugins/mbridge/glm4moe.py`) to map regular and MTP weights between HuggingFace and Megatron formats.
+=======
+> **Note**: The native loader in `slime/backends/megatron_utils/hf_to_megatron/glm.py` maps both regular and MTP weights.
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 #### Multi-Node Support
 

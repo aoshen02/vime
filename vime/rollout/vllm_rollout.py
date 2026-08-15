@@ -12,9 +12,16 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
+<<<<<<< ours (vime current)
 import vllm_router  # noqa: F401 — ensures vllm-router is importable on startup
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+import vllm_router
+from packaging.version import parse
+=======
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 from tqdm import tqdm
 
+<<<<<<< ours (vime current)
 from vime.backends.vllm_utils.server_control import abort_inflight_requests
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
@@ -24,6 +31,28 @@ from vime.utils.eval_config import EvalDatasetConfig
 from vime.utils.http_utils import get, get_rollout_num_engines, post
 from vime.utils.misc import SingletonMeta, load_function
 from vime.utils.processing_utils import (
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+from slime.backends.vllm_utils.server_control import abort_servers_until_idle
+from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
+from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
+from slime.utils.async_utils import run
+from slime.utils.data import Dataset
+from slime.utils.eval_config import EvalDatasetConfig
+from slime.utils.http_utils import get, get_rollout_num_engines, post
+from slime.utils.misc import SingletonMeta, load_function
+from slime.utils.processing_utils import (
+=======
+from slime.backends.vllm_utils.server_control import abort_servers_until_idle
+from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
+from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
+from slime.rollout.sample_hooks import apply_rollout_sample_hooks
+from slime.utils.async_utils import run
+from slime.utils.data import Dataset
+from slime.utils.eval_config import EvalDatasetConfig
+from slime.utils.http_utils import get, get_rollout_num_engines, post
+from slime.utils.misc import SingletonMeta, load_function
+from slime.utils.processing_utils import (
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     build_processor_kwargs,
     encode_image_for_rollout_engine,
     load_processor,
@@ -338,6 +367,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     prompt_ids = _prepare_prompt_ids(sample, state.tokenizer, state.processor)
 
+    sampling_params["max_new_tokens"] -= sample.response_length
+
     assert (
         sampling_params["max_new_tokens"] >= 0
     ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
@@ -489,6 +520,8 @@ async def generate_and_rm(
             else:
                 sample = await generate(args, sample, sampling_params)
 
+    sample = await apply_rollout_sample_hooks(args, sample, evaluation=evaluation)
+
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
         return sample
@@ -569,11 +602,23 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     assert not state.aborted
     state.aborted = True
 
+<<<<<<< ours (vime current)
     loop = asyncio.get_running_loop()
     if state.pendings:
         base = f"http://{args.vllm_router_ip}:{args.vllm_router_port}"
         response = await get(f"{base}/workers")
         urls = [worker["url"] for worker in response["workers"]]
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    if parse(vllm_router.__version__) <= parse("0.2.1"):
+        response = await get(f"http://{args.vllm_router_ip}:{args.vllm_router_port}/list_workers")
+        urls = response["urls"]
+    else:
+        response = await get(f"http://{args.vllm_router_ip}:{args.vllm_router_port}/workers")
+        urls = [worker["url"] for worker in response["workers"]]
+=======
+    response = await get(f"http://{args.vllm_router_ip}:{args.vllm_router_port}/workers")
+    urls = [worker["url"] for worker in response["workers"]]
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
         # Delete-type abort: drop in-flight requests without pausing the scheduler.
         await abort_inflight_requests(urls)
@@ -667,7 +712,11 @@ async def generate_rollout_async(
             all_data.append(group)
 
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
-            if not dynamic_filter_output.keep:
+            if should_drop_dynamic_filter_output(
+                dynamic_filter_output,
+                remaining_batch_size=state.remaining_batch_size,
+                target_data_size=target_data_size,
+            ):
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
                 continue
@@ -782,8 +831,10 @@ async def eval_rollout_single_dataset(
         top_p=dataset_cfg.top_p,
         top_k=dataset_cfg.top_k,
         max_new_tokens=dataset_cfg.max_response_len,
-        stop=args.rollout_stop,
-        stop_token_ids=args.rollout_stop_token_ids,
+        stop=dataset_cfg.stop if dataset_cfg.stop is not None else args.rollout_stop,
+        stop_token_ids=(
+            dataset_cfg.stop_token_ids if dataset_cfg.stop_token_ids is not None else args.rollout_stop_token_ids
+        ),
         skip_special_tokens=(
             dataset_cfg.skip_special_tokens
             if dataset_cfg.skip_special_tokens is not None
@@ -794,6 +845,11 @@ async def eval_rollout_single_dataset(
     )
     if dataset_cfg.repetition_penalty is not None:
         base_sampling_params["repetition_penalty"] = dataset_cfg.repetition_penalty
+    min_new_tokens = dataset_cfg.min_new_tokens
+    if min_new_tokens is None:
+        min_new_tokens = getattr(args, "eval_min_new_tokens", None)
+    if min_new_tokens is not None:
+        base_sampling_params["min_new_tokens"] = min_new_tokens
 
     tasks = []
     # do multiple samples for eval prompts

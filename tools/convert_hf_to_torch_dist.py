@@ -9,6 +9,7 @@ from megatron.training.arguments import parse_args, validate_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 from megatron.training.training import get_model
 
+<<<<<<< ours (vime current)
 import vime_plugins.mbridge  # noqa: F401
 from mbridge import AutoBridge
 from vime.backends.megatron_utils.arguments import set_default_megatron_args
@@ -16,6 +17,22 @@ from vime.backends.megatron_utils.initialize import init
 from vime.backends.megatron_utils.model_provider import get_model_provider_func
 from vime.utils.logging_utils import configure_logger
 from vime.utils.memory_utils import print_memory
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+import slime_plugins.mbridge  # noqa: F401
+from mbridge import AutoBridge
+from slime.backends.megatron_utils.arguments import set_default_megatron_args
+from slime.backends.megatron_utils.initialize import init
+from slime.backends.megatron_utils.model_provider import get_model_provider_func
+from slime.utils.logging_utils import configure_logger
+from slime.utils.memory_utils import print_memory
+=======
+from slime.backends.megatron_utils.arguments import set_default_megatron_args
+from slime.backends.megatron_utils.hf_to_megatron import load_hf_weights
+from slime.backends.megatron_utils.initialize import init
+from slime.backends.megatron_utils.model_provider import get_model_provider_func
+from slime.utils.logging_utils import configure_logger
+from slime.utils.memory_utils import print_memory
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 
 def add_convertion_args(parser):
@@ -27,12 +44,22 @@ def add_convertion_args(parser):
         default=None,
         help="Path to a custom model provider function.",
     )
+<<<<<<< ours (vime current)
     parser.add_argument(
         "--megatron-to-hf-mode",
         choices=["raw", "bridge"],
         default="raw",
         help="The method to convert megatron weights to hugging face weights for vLLM.",
     )
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    parser.add_argument(
+        "--megatron-to-hf-mode",
+        choices=["raw", "bridge"],
+        default="raw",
+        help="The method to convert megatron weights to hugging face weights for VLLM.",
+    )
+=======
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     parser.add_argument("--allgather-cp", action="store_true", default=False)
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
@@ -119,8 +146,7 @@ def main():
 
     # Load model
     hf_model_path = args.hf_checkpoint
-    bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
-    bridge.load_weights(model, hf_model_path, memory_efficient=True)
+    load_hf_weights(args, model, hf_model_path)
     print(f"Model loaded: {hf_model_path}")
 
     if args.use_cpu_initialization:

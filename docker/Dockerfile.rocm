@@ -212,6 +212,7 @@ RUN cd /root/Megatron-LM && \
     if grep -R -n '^<<<<<<< ' .; then \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \
       exit 1; \
+<<<<<<< ours (vime current)
     fi && \
     rm megatron.patch amd_megatron_fused_kernels_init.patch && \
     pip install -e .
@@ -255,3 +256,172 @@ print('IPCWeightTransferEngine + VLLMEngine import ok')"
 WORKDIR /root/vime
 ENTRYPOINT ["sleep"]
 CMD ["infinity"]
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    fi
+
+#########################################
+#########################################
+#########################################
+
+
+
+
+#########################################
+###Add torch_memory_saver################
+#########################################
+# # Set environment variables
+# ENV HIPCC_COMPILE_FLAGS_APPEND="--amdgpu-target=gfx90a;gfx942 -D__HIP_PLATFORM_AMD__"
+# ENV CFLAGS="-D__HIP_PLATFORM_AMD__"
+# ENV CXXFLAGS="-D__HIP_PLATFORM_AMD__"
+# Install torch_memory_saver
+# RUN pip install git+https://github.com/YangWang92/torch_memory_saver_numa.git --no-deps
+# RUN pip install "git+https://github.com/YangWang92/torch_memory_saver_numa.git@numa"
+RUN pip install "git+https://github.com/yushengsu-thu/torch_memory_saver.git"
+# pip install git+https://github.com/fzyzcjy/torch_memory_saver.git --no-deps
+#########################################
+#########################################
+
+
+
+
+########################################
+######Install ray#######################
+########################################
+# need to add this patch manually: https://github.com/ray-project/ray/pull/53531/files
+RUN pip uninstall ray -y
+# RUN pip install "ray[data,train,tune,serve]>=2.47.0" 
+RUN pip install "ray[data,train,tune,serve]==2.47.1" 
+########################################
+########################################
+########################################
+
+
+### Need to verify whether numerical/convergence issue
+#######################################
+################apex###################
+#######################################
+WORKDIR /workspace/
+RUN pip uninstall -y apex && \
+    git clone https://github.com/ROCm/apex.git && \
+    cd apex && \
+    python setup.py install && \
+    cd /workspace/ 
+#######################################
+#######################################
+#######################################
+
+
+########################################
+############ mbridge####################
+########################################
+RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
+########################################
+########################################
+########################################
+
+
+
+########################################
+########slime agent framewrok need######
+########################################
+RUN pip install pydra_config==0.0.15
+RUN pip install together
+RUN pip install google-generativeai
+########################################
+########################################
+########################################
+
+
+########################################
+########Additional packages#############
+########################################
+RUN pip install tensorboard
+########################################
+########################################
+########################################
+
+
+WORKDIR /workspace/
+
+CMD ["/usr/bin/bash"]
+=======
+    fi
+
+#########################################
+#########################################
+#########################################
+
+
+
+
+#########################################
+###Add torch_memory_saver################
+#########################################
+# # Set environment variables
+# ENV HIPCC_COMPILE_FLAGS_APPEND="--amdgpu-target=gfx90a;gfx942 -D__HIP_PLATFORM_AMD__"
+# ENV CFLAGS="-D__HIP_PLATFORM_AMD__"
+# ENV CXXFLAGS="-D__HIP_PLATFORM_AMD__"
+# Install torch_memory_saver
+# RUN pip install git+https://github.com/YangWang92/torch_memory_saver_numa.git --no-deps
+# RUN pip install "git+https://github.com/YangWang92/torch_memory_saver_numa.git@numa"
+RUN pip install "git+https://github.com/yushengsu-thu/torch_memory_saver.git"
+# pip install git+https://github.com/fzyzcjy/torch_memory_saver.git --no-deps
+#########################################
+#########################################
+
+
+
+
+########################################
+######Install ray#######################
+########################################
+# need to add this patch manually: https://github.com/ray-project/ray/pull/53531/files
+RUN pip uninstall ray -y
+# RUN pip install "ray[data,train,tune,serve]>=2.47.0" 
+RUN pip install "ray[data,train,tune,serve]==2.47.1" 
+########################################
+########################################
+########################################
+
+
+### Need to verify whether numerical/convergence issue
+#######################################
+################apex###################
+#######################################
+WORKDIR /workspace/
+RUN pip uninstall -y apex && \
+    git clone https://github.com/ROCm/apex.git && \
+    cd apex && \
+    python setup.py install && \
+    cd /workspace/ 
+#######################################
+#######################################
+#######################################
+
+
+
+
+########################################
+########slime agent framewrok need######
+########################################
+RUN pip install pydra_config==0.0.15
+RUN pip install together
+RUN pip install google-generativeai
+########################################
+########################################
+########################################
+
+
+########################################
+########Additional packages#############
+########################################
+RUN pip install tensorboard
+########################################
+########################################
+########################################
+
+
+WORKDIR /workspace/
+
+CMD ["/usr/bin/bash"]
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)

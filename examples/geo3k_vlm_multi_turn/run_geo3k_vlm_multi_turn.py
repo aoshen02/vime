@@ -3,6 +3,7 @@ import os
 import vime.utils.misc as U
 from vime.utils.external_utils.command_utils import execute_train
 
+<<<<<<< ours (vime current)
 MODEL_NAME = os.environ.get("VIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
 assert MODEL_NAME in {
     "Qwen3-VL-2B-Instruct",
@@ -15,16 +16,28 @@ assert MODEL_NAME in {
 
 NUM_GPUS = int(os.environ.get("VIME_SCRIPT_NUM_GPUS", "8"))
 EXTERNAL_RAY = int(os.environ.get("VIME_SCRIPT_EXTERNAL_RAY", "0"))
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
+assert MODEL_NAME in {
+    "Qwen3-VL-2B-Instruct",
+    "Qwen3-VL-4B-Instruct",
+    "Qwen3-VL-8B-Instruct",
+    "Qwen3-VL-2B-Thinking",
+    "Qwen3-VL-4B-Thinking",
+    "Qwen3-VL-8B-Thinking",
+}
+
+NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "4"))
+EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
+=======
+MODEL_NAME = "Qwen3.5-35B-A3B"
+
+NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "8"))
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 DATASET_NAME = "VeraIsHere/geo3k_imgurl_processed"
 DATA_ROOT = "/root/datasets/geo3k_imgurl_processed"
 TRAIN_DATA_PATH = os.path.join(DATA_ROOT, "train.parquet")
-
-
-def get_megatron_model_type(model_name: str) -> str:
-    model_type = model_name.replace("-Instruct", "").replace("-Thinking", "")
-    model_type = model_type.replace("Qwen3-VL-", "qwen3-")
-    return model_type.replace("-2B", "-1.7B")
 
 
 def prepare():
@@ -97,6 +110,7 @@ def execute():
 
     cudagraph_sizes = " ".join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))
     vllm_args = (
+<<<<<<< ours (vime current)
         "--rollout-num-gpus-per-engine 1 "
         "--router-policy consistent_hash "
         "--vllm-max-model-len 32768 "
@@ -104,32 +118,43 @@ def execute():
         "--vllm-generation-config vllm "
         f"--vllm-cudagraph-capture-sizes {cudagraph_sizes} "
         "--vllm-logprobs-mode processed_logprobs "
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        "--rollout-num-gpus-per-engine 1 "
+        "--vllm-mem-fraction-static 0.6 "
+        f"--vllm-cuda-graph-bs {' '.join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))} "
+=======
+        f"--rollout-num-gpus-per-engine {NUM_GPUS} "
+        f"--vllm-ep-size {NUM_GPUS} "
+        "--vllm-mem-fraction-static 0.6 "
+        f"--vllm-cuda-graph-bs {' '.join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))} "
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     )
 
     backend_args = (
         "--train-backend megatron "
         f"--load /root/models/{MODEL_NAME} "
+<<<<<<< ours (vime current)
         "--tensor-model-parallel-size 1 "
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        "--tensor-model-parallel-size 4 "
+=======
+        "--tensor-model-parallel-size 2 "
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
         "--context-parallel-size 1 "
-        "--expert-model-parallel-size 1 "
+        f"--expert-model-parallel-size {NUM_GPUS} "
         "--expert-tensor-parallel-size 1 "
         "--recompute-granularity full "
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
-        "--use-dynamic-batch-size "
-        "--max-tokens-per-gpu 4096 "
+        "--micro-batch-size 1 "
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
-        "--megatron-to-hf-mode bridge "
     )
-
-    megatron_model_type = get_megatron_model_type(MODEL_NAME)
-    os.environ["MODEL_ARGS_ROTARY_BASE"] = "5000000"
 
     misc_args = (
         "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " f"--rollout-num-gpus {NUM_GPUS} " "--colocate "
@@ -150,7 +175,7 @@ def execute():
     execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=megatron_model_type,
+        megatron_model_type="qwen3.5-35B-A3B-vl",
         extra_env_vars=({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),
     )
 

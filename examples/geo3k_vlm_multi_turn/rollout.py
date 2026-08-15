@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 import torch
+<<<<<<< ours (vime current)
 from PIL import Image
 
 from vime.rollout.vllm_rollout import (
@@ -28,6 +29,33 @@ from vime.utils.types import Sample
 
 DEFAULT_ENV_MODULE = "examples.geo3k_vlm_multi_turn.env_geo3k"
 DUMMY_MESSAGES = (
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+from examples.geo3k_vlm_multi_turn.base_env import BaseInteractionEnv
+
+# When executed as a module: python -m examples.vlm_multi_turn.rollout
+from slime.rollout.vllm_rollout import GenerateState
+from slime.utils.http_utils import post
+from slime.utils.processing_utils import encode_image_for_rollout_engine
+from slime.utils.types import Sample
+
+DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
+
+# Dummy messages used for calculating trim length in chat template encoding
+DUMMY_MESSAGES = [
+=======
+from examples.geo3k_vlm_multi_turn.base_env import BaseInteractionEnv
+
+# When executed as a module: python -m examples.vlm_multi_turn.rollout
+from slime.rollout.vllm_rollout import GenerateState
+from slime.utils.http_utils import post
+from slime.utils.processing_utils import build_processor_kwargs, encode_image_for_rollout_engine
+from slime.utils.types import Sample
+
+DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
+
+# Dummy messages used for calculating trim length in chat template encoding
+DUMMY_MESSAGES = [
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "I am a user."},
     {"role": "assistant", "content": "I am an assistant."},
@@ -38,6 +66,7 @@ IMAGE_GRID_DIMENSIONS = 3
 def _load_env_module(env_path: str | None):
     target = env_path or DEFAULT_ENV_MODULE
     module_path = Path(target)
+<<<<<<< ours (vime current)
     if module_path.suffix != ".py" or not module_path.exists():
         return importlib.import_module(target)
 
@@ -82,6 +111,201 @@ def _messages_for_render(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
         content = message.get("content")
         if not isinstance(content, list):
             rendered.append(dict(message))
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+    if module_path.suffix == ".py" and module_path.exists():
+        spec = importlib.util.spec_from_file_location(f"rollout_env_{module_path.stem}", module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot import environment module from {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    return importlib.import_module(target)
+
+
+def _build_env(env_module, sample: Sample, args: Any):
+    """Instantiate the interaction environment using the provided module."""
+    build_fn = env_module.build_env
+    if not callable(build_fn):
+        raise ValueError("Environment module must expose a callable `build_env(sample, args)`.")
+    try:
+        return build_fn(sample=sample, args=args)
+    except TypeError:
+        # Fallback to positional signature
+        return build_fn(sample, args)
+
+
+def _encode_observation_for_generation(
+    tokenizer,
+    processor,
+    message: dict,
+    metadata: dict | None,
+    apply_chat_template: bool,
+    apply_chat_template_kwargs: dict | None,
+):
+    """
+    Encode a single observation turn that may include images/videos in the content list.
+    Trim out the system/tool preamble added by the chat template so only the observation tokens remain.
+    """
+    tools = metadata.get("tools") if metadata else None
+    apply_kwargs = apply_chat_template_kwargs or {}
+
+    trim_length = 0
+
+    if apply_chat_template:
+        dummy_prompt = tokenizer.apply_chat_template(
+            DUMMY_MESSAGES,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=False,
+            **apply_kwargs,
+        )
+        formatted_prompt = tokenizer.apply_chat_template(
+            DUMMY_MESSAGES + [message],
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=True,
+            **apply_kwargs,
+        )
+        trim_length = len(tokenizer.encode(dummy_prompt, add_special_tokens=False))
+    else:
+        formatted_prompt = [message]
+
+    multimodal_inputs = None
+    multimodal_train_inputs = None
+    if processor:
+        # Convert content-embedded images/videos into multimodal inputs for the processor.
+        from qwen_vl_utils import process_vision_info
+
+        images, videos = process_vision_info([message])
+        multimodal_inputs = {"images": images, "videos": videos}
+        processor_output = processor(text=formatted_prompt, **multimodal_inputs)
+        prompt_ids = processor_output["input_ids"][0]
+        multimodal_train_inputs = {
+            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
+        } or None
+    else:
+        prompt_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+
+    if trim_length:
+        prompt_ids = prompt_ids[trim_length:]
+
+    image_data = []
+    if multimodal_inputs and multimodal_inputs.get("images"):
+        image_data = [encode_image_for_rollout_engine(img) for img in multimodal_inputs["images"]]
+    return prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
+
+
+def _merge_multimodal_train_inputs(chunks: list[dict | None]) -> dict | None:
+    """
+    Merge per-turn multimodal_train_inputs with a single concat per key.
+
+    Note: Only torch.Tensor values are merged; non-tensor fields are ignored by design.
+    """
+    if not chunks:
+        return None
+
+    values_by_key = {}
+    for chunk in chunks:
+        if not chunk:
+=======
+    if module_path.suffix == ".py" and module_path.exists():
+        spec = importlib.util.spec_from_file_location(f"rollout_env_{module_path.stem}", module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot import environment module from {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    return importlib.import_module(target)
+
+
+def _build_env(env_module, sample: Sample, args: Any):
+    """Instantiate the interaction environment using the provided module."""
+    build_fn = env_module.build_env
+    if not callable(build_fn):
+        raise ValueError("Environment module must expose a callable `build_env(sample, args)`.")
+    try:
+        return build_fn(sample=sample, args=args)
+    except TypeError:
+        # Fallback to positional signature
+        return build_fn(sample, args)
+
+
+def _encode_observation_for_generation(
+    tokenizer,
+    processor,
+    message: dict,
+    metadata: dict | None,
+    apply_chat_template: bool,
+    apply_chat_template_kwargs: dict | None,
+):
+    """
+    Encode a single observation turn that may include images/videos in the content list.
+    Trim out the system/tool preamble added by the chat template so only the observation tokens remain.
+    """
+    tools = metadata.get("tools") if metadata else None
+    apply_kwargs = apply_chat_template_kwargs or {}
+
+    trim_length = 0
+
+    if apply_chat_template:
+        dummy_prompt = tokenizer.apply_chat_template(
+            DUMMY_MESSAGES,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=False,
+            **apply_kwargs,
+        )
+        formatted_prompt = tokenizer.apply_chat_template(
+            DUMMY_MESSAGES + [message],
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=True,
+            **apply_kwargs,
+        )
+        trim_length = len(tokenizer.encode(dummy_prompt, add_special_tokens=False))
+    else:
+        formatted_prompt = [message]
+
+    multimodal_inputs = None
+    multimodal_train_inputs = None
+    if processor:
+        # Convert content-embedded images/videos into multimodal inputs for the processor.
+        from qwen_vl_utils import process_vision_info
+
+        images, videos = process_vision_info([message])
+        multimodal_inputs = {"images": images, "videos": videos}
+        processor_output = processor(text=formatted_prompt, **build_processor_kwargs(multimodal_inputs))
+        prompt_ids = processor_output["input_ids"][0]
+        multimodal_train_inputs = {
+            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
+        } or None
+    else:
+        prompt_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+
+    if trim_length:
+        prompt_ids = prompt_ids[trim_length:]
+
+    image_data = []
+    if multimodal_inputs and multimodal_inputs.get("images"):
+        image_data = [encode_image_for_rollout_engine(img) for img in multimodal_inputs["images"]]
+    return prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
+
+
+def _merge_multimodal_train_inputs(chunks: list[dict | None]) -> dict | None:
+    """
+    Merge per-turn multimodal_train_inputs with a single concat per key.
+
+    Note: Only torch.Tensor values are merged; non-tensor fields are ignored by design.
+    """
+    if not chunks:
+        return None
+
+    values_by_key = {}
+    for chunk in chunks:
+        if not chunk:
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             continue
         parts: list[dict[str, Any]] = []
         for part in content:

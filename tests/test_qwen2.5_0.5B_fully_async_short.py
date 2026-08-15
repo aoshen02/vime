@@ -112,8 +112,13 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 1 "
         "--rollout-num-gpus 3 "
+<<<<<<< ours (vime current)
         f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
         f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
+||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
+        "--megatron-to-hf-mode bridge "
+=======
+>>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     )
 
     train_args = (
