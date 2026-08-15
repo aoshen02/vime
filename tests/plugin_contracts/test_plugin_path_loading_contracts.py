@@ -32,35 +32,17 @@ install_stubs(with_vllm_router=True, with_transformers=True)
 
 NUM_GPUS = 0
 
-<<<<<<< ours (vime current)
 from vime.rollout.base_types import RolloutFnEvalOutput, call_rollout_fn
 from vime.rollout.data_source import RolloutDataSourceWithBuffer
-from vime.rollout.filter_hub.base_types import DynamicFilterOutput, call_dynamic_filter
-from vime.rollout.rm_hub import async_rm, batched_async_rm
-from vime.rollout.vllm_rollout import generate_rollout as default_generate_rollout
-from vime.utils.misc import load_function
-from vime.utils.types import Sample
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from slime.rollout.base_types import RolloutFnEvalOutput, call_rollout_fn
-from slime.rollout.data_source import RolloutDataSourceWithBuffer
-from slime.rollout.filter_hub.base_types import DynamicFilterOutput, call_dynamic_filter
-from slime.rollout.rm_hub import async_rm, batched_async_rm
-from slime.rollout.vllm_rollout import generate_rollout as default_generate_rollout
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
-=======
-from slime.rollout.base_types import RolloutFnEvalOutput, call_rollout_fn
-from slime.rollout.data_source import RolloutDataSourceWithBuffer
-from slime.rollout.filter_hub.base_types import (
+from vime.rollout.filter_hub.base_types import (
     DynamicFilterOutput,
     call_dynamic_filter,
     should_drop_dynamic_filter_output,
 )
-from slime.rollout.rm_hub import async_rm, batched_async_rm
-from slime.rollout.vllm_rollout import generate_rollout as default_generate_rollout
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+from vime.rollout.rm_hub import async_rm, batched_async_rm
+from vime.rollout.vllm_rollout import generate_rollout as default_generate_rollout
+from vime.utils.misc import load_function
+from vime.utils.types import Sample
 
 
 def run_contract_test_file() -> None:
@@ -221,7 +203,7 @@ def check_dynamic_filter_path(path: str) -> None:
 
 
 def test_dynamic_filter_can_fall_back_to_zero_std_groups_at_target_capacity():
-    fn = load_function("slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback")
+    fn = load_function("vime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback")
     output = call_dynamic_filter(fn, make_args(), [make_sample(0, reward=1.0), make_sample(1, reward=1.0)])
 
     assert not bool(output.keep)
@@ -231,7 +213,7 @@ def test_dynamic_filter_can_fall_back_to_zero_std_groups_at_target_capacity():
 
 
 def test_strict_dynamic_filter_still_drops_at_target_capacity():
-    fn = load_function("slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std")
+    fn = load_function("vime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std")
     output = call_dynamic_filter(fn, make_args(), [make_sample(0, reward=0.0), make_sample(1, reward=0.0)])
 
     assert not bool(output.keep)

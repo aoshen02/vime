@@ -29,14 +29,17 @@ logger = logging.getLogger(__name__)
 def _begin_vllm_weight_update_session(rollout_engines: Sequence[ActorHandle]) -> None:
     if dist.get_rank() == 0:
         logger.info("vLLM weight update: start_weight_update")
-        ray.get([engine.start_weight_update.remote(is_checkpoint_format=True) for engine in rollout_engines])
+        ray.get([engine.start_weight_update.remote() for engine in rollout_engines])
     dist.barrier(group=get_gloo_group())
 
 
-def _end_vllm_weight_update_session(rollout_engines: Sequence[ActorHandle]) -> None:
+def _end_vllm_weight_update_session(
+    rollout_engines: Sequence[ActorHandle],
+    weight_version: int,
+) -> None:
     if dist.get_rank() == 0:
         logger.info("vLLM weight update: finish_weight_update")
-        ray.get([engine.finish_weight_update.remote() for engine in rollout_engines])
+        ray.get([engine.finish_weight_update.remote(weight_version=str(weight_version)) for engine in rollout_engines])
     dist.barrier(group=get_gloo_group())
 
 
@@ -75,12 +78,24 @@ class UpdateWeightFromDistributed:
                 model_name=model_name,
                 quantization_config=quantization_config,
             )
-            if args.megatron_to_hf_mode == "bridge"
+            if getattr(args, "megatron_to_hf_mode", "raw") == "bridge"
             else None
         )
+        self._initialize_parallel_layout()
+
+    def _initialize_parallel_layout(self) -> None:
+        pp_rank = mpu.get_pipeline_model_parallel_rank()
+        self._pp_world_size = mpu.get_pipeline_model_parallel_world_size()
+        self._is_pp_src_rank = (
+            mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+            and mpu.get_tensor_model_parallel_rank() == 0
+            and (getattr(self, "_hf_weight_iterator", None) is None or pp_rank == 0)
+        )
+        if self._is_pp_src_rank:
+            self._group_name = f"vime-pp_{pp_rank}"
 
     def _uses_persistent_group(self) -> bool:
-        return self._pp_world_size == 1 or self._hf_weight_iterator is not None
+        return self._pp_world_size == 1 or getattr(self, "_hf_weight_iterator", None) is not None
 
     def connect_rollout_engines(
         self,
@@ -93,25 +108,15 @@ class UpdateWeightFromDistributed:
         """
         Record rollout engines and create the NCCL group eagerly for PP=1.
         Raw PP>1 groups are created one pipeline stage at a time during updates.
-        Bridge PP>1 uses one persistent group from PP0.
         """
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
         self._engine_gpu_counts = engine_gpu_counts
+        self._initialize_parallel_layout()
 
         # For TP:
         #   1. AllGather parameters to rank 0
         #   2. Broadcast parameters from rank 0 to all vLLM engines
-        pp_rank = mpu.get_pipeline_model_parallel_rank()
-        self._pp_world_size = mpu.get_pipeline_model_parallel_world_size()
-        self._is_pp_src_rank = (
-            mpu.get_data_parallel_rank(with_context_parallel=True) == 0
-            and mpu.get_tensor_model_parallel_rank() == 0
-            and (self._hf_weight_iterator is None or pp_rank == 0)
-        )
-        if self._is_pp_src_rank:
-            self._group_name = f"vime-pp_{pp_rank}"
-
         if self._is_pp_src_rank and self._uses_persistent_group():
             if self._model_update_groups is not None:
                 disconnect_rollout_engines_from_distributed(
@@ -144,47 +149,47 @@ class UpdateWeightFromDistributed:
         """
         Pause → flush → _send_weights → continue. Progress on PP source.
         """
+        previous_version = self.weight_version
         self.weight_version += 1
-
-        if dist.get_rank() == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-
-            # int4/fp4 pre_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=True,
-                    post_process_quantization=False,
-                    rollout_engines=self.rollout_engines,
-                )
-        dist.barrier(group=get_gloo_group())
-
-        _begin_vllm_weight_update_session(self.rollout_engines)
         try:
-            self._send_weights_to_rollout_engines()
-        finally:
-            _end_vllm_weight_update_session(self.rollout_engines)
-
-        if self.args.enable_mtp_training and (self.args.vllm_speculative_config or {}).get("method") == "mtp":
             if dist.get_rank() == 0:
-                ray.get([engine.start_draft_weight_update.remote() for engine in self.rollout_engines])
-            dist.barrier(group=get_gloo_group())
-            try:
-                self._send_weights_to_rollout_engines()
-            finally:
-                _end_vllm_weight_update_session(self.rollout_engines)
+                ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
+                ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
 
-        dist.barrier(group=get_gloo_group())
-        if dist.get_rank() == 0:
-            # int4/fp4 post_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
+                # int4/fp4 pre_process
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=True,
+                        post_process_quantization=False,
+                        rollout_engines=self.rollout_engines,
+                    )
+            dist.barrier(group=get_gloo_group())
+
+            _begin_vllm_weight_update_session(self.rollout_engines)
+            self._send_weights_to_rollout_engines()
+            _end_vllm_weight_update_session(self.rollout_engines, self.weight_version)
+
+            if self.args.enable_mtp_training and (self.args.vllm_speculative_config or {}).get("method") == "mtp":
+                if dist.get_rank() == 0:
+                    ray.get([engine.start_draft_weight_update.remote() for engine in self.rollout_engines])
+                dist.barrier(group=get_gloo_group())
+                self._send_weights_to_rollout_engines()
+                _end_vllm_weight_update_session(self.rollout_engines, self.weight_version)
+
+            dist.barrier(group=get_gloo_group())
+            if dist.get_rank() == 0:
+                # int4/fp4 post_process
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=False,
+                        post_process_quantization=True,
+                        rollout_engines=self.rollout_engines,
+                    )
+                ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+            dist.barrier(group=get_gloo_group())
+        except Exception:
+            self.weight_version = previous_version
+            raise
 
     def _send_weights_to_rollout_engines(self) -> None:
         if self._uses_persistent_group():
@@ -231,7 +236,7 @@ class UpdateWeightFromDistributed:
         Non-expert (TP) pass → barrier → expert (EP) pass → barrier. Each iterator
         yields broadcast-ready chunks (bucketing happens internally).
         """
-        if self._hf_weight_iterator is not None:
+        if getattr(self, "_hf_weight_iterator", None) is not None:
             self._sync_bridge_weights_to_rollout_engines(pbar)
             return
 
@@ -250,18 +255,14 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
 
     def _sync_bridge_weights_to_rollout_engines(self, pbar: tqdm | None) -> None:
-        """
-        Export HF weights through Megatron-Bridge, then send each exported chunk
-        over the same NCCL non-colocate path used by the raw converter.
-        """
+        """Export Bridge HF chunks and send them through the NCCL path."""
         if self._is_pp_src_rank:
             logger.info("Using Megatron-Bridge HF weight export for non-colocate vLLM weight sync")
 
         megatron_local_weights = self.weights_getter()
         for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
             if self._is_pp_src_rank:
-                hf_named_tensors = list(hf_named_tensors)
-                self._update_bucket_weights_from_distributed(hf_named_tensors, pbar=pbar)
+                self._update_bucket_weights_from_distributed(list(hf_named_tensors), pbar=pbar)
 
         dist.barrier(group=get_gloo_group())
 
@@ -384,16 +385,17 @@ class UpdateWeightFromDistributed:
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
-        refs = update_weights_from_distributed(
-            self._model_update_groups,
-            self.weight_version,
-            self.rollout_engines,
-            converted_named_tensors,
-        )
-
-        ray.get(refs)
-        converted_named_tensors.clear()
-        ray.get(self.rollout_engine_lock.release.remote())
+        try:
+            refs = update_weights_from_distributed(
+                self._model_update_groups,
+                self.weight_version,
+                self.rollout_engines,
+                converted_named_tensors,
+            )
+            ray.get(refs)
+            converted_named_tensors.clear()
+        finally:
+            ray.get(self.rollout_engine_lock.release.remote())
         pbar.update(1)
 
 

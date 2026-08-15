@@ -1,12 +1,10 @@
 import importlib
-import sys
-import types
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-from slime.backends.megatron_utils.alignment import deepgemm_forward, deepgemm_moe_forward
+from vime.backends.megatron_utils.alignment import deepgemm_forward, deepgemm_moe_forward
 
 NUM_GPUS = 1
 
@@ -296,7 +294,7 @@ def test_pipeline_stage_input_rmsnorm_uses_one_vllm_forward_and_analytic_backwar
     assert model.decoder.layers[1].input_layernorm.forward_calls == 0
     assert not hasattr(
         model.decoder.layers[1].input_layernorm,
-        "_slime_vllm_pipeline_input_rmsnorm_wrapped",
+        "_vime_vllm_pipeline_input_rmsnorm_wrapped",
     )
     torch.testing.assert_close(input_.grad, expected_input.grad)
     torch.testing.assert_close(
@@ -311,7 +309,7 @@ def test_pipeline_stage_input_rmsnorm_is_opt_in(monkeypatch):
 
     deepgemm_forward.enable_vllm_layer0_input_rmsnorm(None, model, "")
 
-    assert not hasattr(model, "_slime_vllm_layer0_input_rmsnorm_wrapped")
+    assert not hasattr(model, "_vime_vllm_layer0_input_rmsnorm_wrapped")
 
 
 def test_absorbed_kv_rmsnorm_uses_one_vllm_forward_and_analytic_backward(
@@ -454,10 +452,10 @@ def test_enable_wraps_only_selected_global_layer(monkeypatch):
 
     deepgemm_forward.enable_deepgemm_forward(args, [model_chunk], store_prefix="")
 
-    assert model_chunk.decoder.layers[0].mlp.linear_fc1._slime_deepgemm_forward_wrapped
+    assert model_chunk.decoder.layers[0].mlp.linear_fc1._vime_deepgemm_forward_wrapped
     assert not hasattr(
         model_chunk.decoder.layers[1].mlp.linear_fc1,
-        "_slime_deepgemm_forward_wrapped",
+        "_vime_deepgemm_forward_wrapped",
     )
 
 
@@ -471,6 +469,15 @@ def test_default_targets_cover_indexer_and_shared_expert_fp8_linears():
 
 
 def test_vllm_router_value_retains_megatron_backward(monkeypatch):
+    class FakeGateLinear:
+        def __init__(self, weight):
+            self.weight = weight
+            self.calls = []
+
+        def __call__(self, value):
+            self.calls.append(value)
+            return torch.nn.functional.linear(value, self.weight).float() + 17, None
+
     class Router(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -493,25 +500,19 @@ def test_vllm_router_value_retains_megatron_backward(monkeypatch):
     model_chunk.decoder.layers = torch.nn.ModuleList([Layer()])
     args = SimpleNamespace(
         megatron_deepgemm_moe_forward_layers=[3],
-        vllm_enable_fp32_moe_router=True,
     )
     input_ = torch.arange(8, dtype=torch.float32).view(2, 4).requires_grad_()
     expected_input = input_.detach().clone().requires_grad_()
     expected_weight = model_chunk.decoder.layers[0].mlp.router.weight.detach().clone().requires_grad_()
     torch.nn.functional.linear(expected_input, expected_weight).sum().backward()
+    gate_linear = FakeGateLinear(model_chunk.decoder.layers[0].mlp.router.weight)
+    build_calls = []
 
-    batch_invariant_ops = importlib.import_module("vllm.srt.batch_invariant_ops")
-    monkeypatch.setattr(
-        batch_invariant_ops,
-        "router_gemm_batch_invariant",
-        lambda value, weight: torch.full(
-            (value.shape[0], weight.shape[0]),
-            17.0,
-            dtype=torch.float32,
-            device=value.device,
-        ),
-        raising=False,
-    )
+    def build_gate_linear(weight):
+        build_calls.append(weight)
+        return gate_linear
+
+    monkeypatch.setattr(deepgemm_forward, "_build_vllm_gate_linear", build_gate_linear)
 
     deepgemm_forward.enable_vllm_router_gemm(
         args,
@@ -520,7 +521,14 @@ def test_vllm_router_value_retains_megatron_backward(monkeypatch):
     )
     output = model_chunk.decoder.layers[0].mlp.router.gating(input_)
 
-    torch.testing.assert_close(output, torch.full((2, 3), 17.0))
+    torch.testing.assert_close(
+        output,
+        torch.nn.functional.linear(input_.detach(), model_chunk.decoder.layers[0].mlp.router.weight.detach()) + 17,
+    )
+    assert build_calls == [model_chunk.decoder.layers[0].mlp.router.weight]
+    assert gate_linear.weight is model_chunk.decoder.layers[0].mlp.router.weight
+    assert len(gate_linear.calls) == 1
+    assert gate_linear.calls[0].shape == (2, 4)
     assert model_chunk.decoder.layers[0].mlp.router.forward_calls == 0
     output.sum().backward()
     torch.testing.assert_close(input_.grad, expected_input.grad)
@@ -530,24 +538,29 @@ def test_vllm_router_value_retains_megatron_backward(monkeypatch):
     )
 
 
-def test_vllm_router_value_requires_matching_vllm_fp32_router():
-    args = SimpleNamespace(
-        megatron_deepgemm_moe_forward_layers=[3],
-        vllm_enable_fp32_moe_router=False,
-    )
+def test_vllm_router_value_delegates_large_batch_without_chunking():
+    class FakeGateLinear:
+        def __init__(self):
+            self.calls = []
 
-    with pytest.raises(RuntimeError, match="--vllm-enable-fp32-moe-router"):
-        deepgemm_forward.enable_vllm_router_gemm(
-            args,
-            [],
-            store_prefix="",
-        )
+        def __call__(self, value):
+            self.calls.append(value)
+            return torch.nn.functional.linear(value, weight), None
+
+    value = torch.arange(260, dtype=torch.float32).view(65, 4).requires_grad_()
+    weight = torch.arange(12, dtype=torch.float32).view(3, 4).div(10).requires_grad_()
+    gate_linear = FakeGateLinear()
+
+    output = deepgemm_forward._VLLMRouterGEMMWithMegatronBackward.apply(value, weight, gate_linear)
+
+    torch.testing.assert_close(output, torch.nn.functional.linear(value.detach(), weight.detach()))
+    assert len(gate_linear.calls) == 1
+    assert gate_linear.calls[0].shape == (65, 4)
 
 
 def test_vllm_router_value_allows_saved_rollout_replay_without_live_vllm():
     args = SimpleNamespace(
         megatron_deepgemm_moe_forward_layers=[3],
-        vllm_enable_fp32_moe_router=False,
         debug_train_only=True,
         load_debug_rollout_data="/tmp/rollout.pt",
     )
@@ -564,7 +577,6 @@ def test_vllm_swiglu_uses_one_forward_and_analytic_backward(monkeypatch):
     expected.backward(grad_output)
 
     calls = {"count": 0}
-    fake_sgl_kernel = types.ModuleType("sgl_kernel")
 
     def one_forward(input_, out):
         calls["count"] += 1
@@ -572,8 +584,7 @@ def test_vllm_swiglu_uses_one_forward_and_analytic_backward(monkeypatch):
         out.copy_(torch.nn.functional.silu(input_gate) * input_up + 19)
         return out
 
-    fake_sgl_kernel.silu_and_mul = one_forward
-    monkeypatch.setitem(sys.modules, "sgl_kernel", fake_sgl_kernel)
+    monkeypatch.setattr(deepgemm_forward, "_vllm_silu_and_mul", one_forward)
     output = deepgemm_forward._vllm_swiglu_with_megatron_backward(value)
 
     torch.testing.assert_close(output, expected.detach() + 19)
@@ -666,11 +677,10 @@ def test_combined_before_train_hook_installs_alignment(monkeypatch):
 def _require_cuda_deepgemm(monkeypatch):
     if not torch.cuda.is_available():
         pytest.skip("CUDA is required for real DeepGEMM diff tests")
-    monkeypatch.setenv("VLLM_JIT_DEEPGEMM_PRECOMPILE", "0")
     for module_name in (
         "deep_gemm",
-        "vllm.srt.layers.deep_gemm_wrapper",
-        "vllm.srt.layers.quantization.fp8_utils",
+        "vllm.utils.deep_gemm",
+        "vllm.model_executor.layers.quantization.utils.fp8_utils",
     ):
         try:
             importlib.import_module(module_name)

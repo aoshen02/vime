@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from slime.backends.megatron_utils.alignment import deepgemm_moe_forward
+from vime.backends.megatron_utils.alignment import deepgemm_moe_forward
 
 NUM_GPUS = 1
 
@@ -14,21 +14,22 @@ NUM_GPUS = 1
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on"])
 def test_configures_batch_invariant_in_megatron_actor(monkeypatch, value):
     state = {"enabled": False}
-    deep_gemm = SimpleNamespace(get_batch_invariant=lambda: state["enabled"])
-    wrapper = SimpleNamespace(configure_deep_gemm_batch_invariant=lambda enabled: state.update(enabled=enabled))
-    monkeypatch.setenv("VLLM_DEEPGEMM_BATCH_INVARIANT", value)
+    deep_gemm = SimpleNamespace(
+        get_batch_invariant=lambda: state["enabled"],
+        set_batch_invariant=lambda enabled: state.update(enabled=enabled),
+    )
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", value)
 
-    assert deepgemm_moe_forward._configure_batch_invariant(deep_gemm, wrapper)
+    assert deepgemm_moe_forward._configure_batch_invariant(deep_gemm)
     assert state["enabled"]
 
 
 def test_batch_invariant_actor_configuration_fails_closed(monkeypatch):
-    deep_gemm = SimpleNamespace(get_batch_invariant=lambda: False)
-    wrapper = SimpleNamespace(configure_deep_gemm_batch_invariant=lambda enabled: None)
-    monkeypatch.setenv("VLLM_DEEPGEMM_BATCH_INVARIANT", "1")
+    deep_gemm = SimpleNamespace(get_batch_invariant=lambda: False, set_batch_invariant=lambda enabled: None)
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
 
     with pytest.raises(RuntimeError, match="did not enable"):
-        deepgemm_moe_forward._configure_batch_invariant(deep_gemm, wrapper)
+        deepgemm_moe_forward._configure_batch_invariant(deep_gemm)
 
 
 def _small_bf16(shape, *, offset=0):
@@ -97,13 +98,13 @@ def test_combine_workspace_view_uses_caller_owned_bytes():
 
 
 def test_combine_workspace_is_disabled_without_explicit_configuration(monkeypatch):
-    monkeypatch.delenv("SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
+    monkeypatch.delenv("VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
 
     assert deepgemm_moe_forward._combine_workspace_bytes() is None
 
 
 def test_combine_workspace_uses_explicit_configuration(monkeypatch):
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", "3758096384")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", "3758096384")
 
     assert deepgemm_moe_forward._combine_workspace_bytes() == 3758096384
 
@@ -439,7 +440,7 @@ def test_deepep_scatter_exact_route_count_reuses_device_counts(monkeypatch):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_cuda_route_position_compaction_is_identical_to_nonzero():
-    from slime.backends.megatron_utils.alignment.deterministic_route_kernels import compact_route_positions
+    from vime.backends.megatron_utils.alignment.deterministic_route_kernels import compact_route_positions
 
     valid = torch.tensor(
         [[True, False, True], [False, True, True], [True, False, False]],
@@ -601,9 +602,10 @@ def test_cuda_fused_static_route_gradient_is_bitwise(monkeypatch):
 
 
 def test_ordered_ep_gather_backward_matches_weighted_route_sum(monkeypatch):
-    import vllm.srt.layers.moe.ep_moe.kernels as kernels
+    import vllm.model_executor.layers.fused_moe.deep_gemm_utils as kernels
 
-    def fake_ep_gather(input_tensor, recv_ids, recv_weights, input_index, output):
+    def fake_ep_gather(input_tensor, recv_ids, recv_weights, input_index, expert_map, output):
+        assert expert_map is None
         output.zero_()
         for token in range(recv_ids.shape[0]):
             accumulator = torch.zeros(input_tensor.shape[1], dtype=torch.float32)
@@ -698,7 +700,7 @@ def test_deepep_alignment_is_disabled_outside_deterministic_mode(monkeypatch):
 
 
 def test_deepep_alignment_captures_ordered_topk_without_r3(monkeypatch):
-    from slime.utils import routing_replay
+    from vime.utils import routing_replay
 
     monkeypatch.delenv("ENABLE_ROUTING_REPLAY", raising=False)
     monkeypatch.setattr(routing_replay, "ORDERED_TOPK_CAPTURE_ROUTER", None)
@@ -791,7 +793,7 @@ def test_deepep_alignment_captures_ordered_topk_without_r3(monkeypatch):
     assert manager.original_setup_calls == 0
     assert routing_replay.ORDERED_TOPK_CAPTURE_ROUTER is None
     assert not hasattr(router, "routing_replay")
-    assert not hasattr(router, "_slime_ordered_topk_indices")
+    assert not hasattr(router, "_vime_ordered_topk_indices")
 
     # Megatron 1dcf0dafa splits combine/postprocess.  Its adapter must retain
     # VLLM's single shared + alpha * routed operation instead of rounding a
@@ -816,7 +818,7 @@ def test_deepep_alignment_captures_ordered_topk_without_r3(monkeypatch):
 
 
 def test_topk_order_alignment_is_scoped_to_registered_router(monkeypatch):
-    from slime.utils import routing_replay
+    from vime.utils import routing_replay
 
     monkeypatch.delenv("ENABLE_ROUTING_REPLAY", raising=False)
     monkeypatch.setattr(routing_replay, "ORDERED_TOPK_CAPTURE_ROUTER", None)
@@ -960,11 +962,12 @@ def test_static_combine_backward_handles_padding_with_reused_storage():
 
 
 def test_low_latency_ep_gather_preserves_order_and_backward(monkeypatch):
-    import vllm.srt.layers.moe.ep_moe.kernels as kernels
+    import vllm.model_executor.layers.fused_moe.deep_gemm_utils as kernels
 
     calls = []
 
-    def fake_ep_gather(hidden_states, topk_ids, topk_weights, output_index, output):
+    def fake_ep_gather(hidden_states, topk_ids, topk_weights, output_index, expert_map, output):
+        assert expert_map is None
         calls.append(
             (
                 topk_ids.clone(),
@@ -1157,13 +1160,13 @@ class FakeDeepGEMMOps:
         group_size,
         *,
         column_major_scales,
-        scale_tma_aligned,
-        scale_ue8m0,
+        tma_aligned_scales,
+        use_ue8m0,
     ):
         assert group_size == 128
         assert column_major_scales is False
-        assert scale_tma_aligned is False
-        assert scale_ue8m0 is False
+        assert tma_aligned_scales is False
+        assert use_ue8m0 is False
         self.activation_input_pointers.append(value.data_ptr())
         self.activation_inputs.append(value.detach().clone())
         return (
@@ -1313,7 +1316,7 @@ def test_no_grad_aligned_glm_layout_reuses_input_for_all_activation_scratch(
     parallelism_one,
 ):
     del parallelism_one
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "2")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "2")
     module = TEGroupedMLP(num_experts=2, hidden_size=384, ffn_hidden_size=128)
     counts = torch.tensor([128, 128], dtype=torch.int32)
     hidden = _small_bf16((256, 384), offset=5)
@@ -1354,7 +1357,7 @@ def test_no_grad_padded_glm_layout_reuses_padding_for_activation_scratch(
     parallelism_one,
 ):
     del parallelism_one
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "2")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "2")
     module = TEGroupedMLP(num_experts=2, hidden_size=384, ffn_hidden_size=128)
     counts = torch.tensor([129, 130], dtype=torch.int32)
     hidden = _small_bf16((259, 384), offset=7)
@@ -1441,7 +1444,7 @@ def test_weight_order_layout_and_zero_count_expert_reach_grouped_gemm(
     # This assertion checks the all-experts weight ordering.  Keep its scope
     # independent of the benchmark's operation-local grouping override; the
     # grouped path itself is covered by the following workspace-bound test.
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "3")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "3")
     module = TEGroupedMLP(num_experts=3)
     fake_ops = FakeDeepGEMMOps()
     monkeypatch.setattr(
@@ -1489,8 +1492,8 @@ def test_deterministic_forward_limits_peak_workspace_to_expert_groups(
     parallelism_one,
 ):
     del parallelism_one
-    monkeypatch.setenv("VLLM_DEEPGEMM_BATCH_INVARIANT", "1")
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
     module = TEGroupedMLP(num_experts=3)
     fake_ops = FakeDeepGEMMOps()
     monkeypatch.setattr(
@@ -1565,7 +1568,7 @@ def test_checkpoint_recompute_reuses_shared_workspace_for_grouped_outputs(
     parallelism_one,
 ):
     del parallelism_one
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
     module = TEGroupedMLP(num_experts=2)
     fake_ops = FakeDeepGEMMOps()
     monkeypatch.setattr(
@@ -1603,8 +1606,8 @@ def test_checkpoint_recompute_writes_group_outputs_into_final_storage(
     parallelism_one,
 ):
     del parallelism_one
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
-    monkeypatch.delenv("SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
+    monkeypatch.delenv("VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
     module = TEGroupedMLP(num_experts=2)
     fake_ops = FakeDeepGEMMOps()
     monkeypatch.setattr(
@@ -1648,8 +1651,8 @@ def test_checkpoint_recompute_reuses_wide_final_output_for_fc1_and_activation_sc
     parallelism_one,
 ):
     del parallelism_one
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
-    monkeypatch.delenv("SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
+    monkeypatch.delenv("VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
     # GLM has hidden_size == 3 * ffn_hidden_size, so the final-output
     # destination can hold [gate, up, silu(gate) * up] without overlap.
     module = TEGroupedMLP(num_experts=2, hidden_size=384, ffn_hidden_size=128)
@@ -1693,7 +1696,7 @@ def test_initial_no_grad_forward_does_not_overwrite_dispatch_workspace(
     parallelism_one,
 ):
     del parallelism_one
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
     module = TEGroupedMLP(num_experts=2)
     fake_ops = FakeDeepGEMMOps()
     monkeypatch.setattr(
@@ -1728,7 +1731,7 @@ def test_initial_no_grad_forward_does_not_overwrite_dispatch_workspace(
 
 @pytest.mark.parametrize("value", ["0", "-1", "not-an-int"])
 def test_rejects_invalid_experts_per_forward_group(monkeypatch, value):
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", value)
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", value)
     with pytest.raises(RuntimeError, match="must be a positive integer"):
         deepgemm_moe_forward._experts_per_forward_group(8)
 
@@ -1844,7 +1847,7 @@ def test_rejects_transposed_or_individually_wrapped_expert_weights(parallelism_o
         )
 
     child_wrapped = TEGroupedMLP()
-    child_wrapped.linear_fc2._slime_deepgemm_forward_wrapped = True
+    child_wrapped.linear_fc2._vime_deepgemm_forward_wrapped = True
     with pytest.raises(RuntimeError, match="individually wrapped"):
         deepgemm_moe_forward._wrap_te_grouped_mlp(
             child_wrapped,
@@ -1883,9 +1886,9 @@ def test_installer_uses_global_layer_number_with_wrapper_prefixes(parallelism_on
     assert wrapped == ["module.module.decoder.layers.1.mlp.experts"]
     assert not hasattr(
         gpt.decoder.layers[0].mlp.experts,
-        "_slime_deepgemm_moe_forward_wrapped",
+        "_vime_deepgemm_moe_forward_wrapped",
     )
-    assert gpt.decoder.layers[1].mlp.experts._slime_deepgemm_moe_forward_wrapped
+    assert gpt.decoder.layers[1].mlp.experts._vime_deepgemm_moe_forward_wrapped
     assert (
         deepgemm_moe_forward.install_deepgemm_moe_forward(
             [ddp_wrapper],
@@ -1897,7 +1900,7 @@ def test_installer_uses_global_layer_number_with_wrapper_prefixes(parallelism_on
 
 def test_installer_skips_preallocated_workspace_when_unconfigured(monkeypatch, parallelism_one):
     del parallelism_one
-    monkeypatch.delenv("SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
+    monkeypatch.delenv("VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES", raising=False)
 
     class Layer(torch.nn.Module):
         def __init__(self):
@@ -1921,9 +1924,9 @@ def test_installer_skips_preallocated_workspace_when_unconfigured(monkeypatch, p
     assert wrapped == ["decoder.layers.0.mlp.experts"]
     assert not hasattr(dispatcher, deepgemm_moe_forward._COMBINE_WORKSPACE_ATTR)
     assert not hasattr(experts, deepgemm_moe_forward._COMBINE_WORKSPACE_ATTR)
-    assert not hasattr(dispatcher, "_slime_preallocated_combine_wrapped")
-    assert not hasattr(dispatcher, "_slime_preallocated_dispatch_wrapped")
-    assert not hasattr(dispatcher, "_slime_preallocated_token_combine_wrapped")
+    assert not hasattr(dispatcher, "_vime_preallocated_combine_wrapped")
+    assert not hasattr(dispatcher, "_vime_preallocated_dispatch_wrapped")
+    assert not hasattr(dispatcher, "_vime_preallocated_token_combine_wrapped")
 
 
 def test_hook_uses_default_suffixes_when_cli_modules_are_none(monkeypatch):
@@ -1955,12 +1958,10 @@ def test_hook_uses_default_suffixes_when_cli_modules_are_none(monkeypatch):
 def _require_cuda_deepgemm(monkeypatch):
     if not torch.cuda.is_available():
         pytest.skip("CUDA is required for real DeepGEMM diff tests")
-    monkeypatch.setenv("VLLM_JIT_DEEPGEMM_PRECOMPILE", "0")
     for module_name in (
         "deep_gemm",
-        "vllm.srt.layers.deep_gemm_wrapper",
-        "vllm.srt.layers.quantization.fp8_kernel",
-        "sgl_kernel",
+        "vllm.utils.deep_gemm",
+        "vllm.model_executor.layers.quantization.utils.fp8_utils",
     ):
         try:
             importlib.import_module(module_name)
@@ -2018,7 +2019,7 @@ def test_cuda_deepgemm_moe_expert_grouping_is_bitwise_batch_invariant(
     monkeypatch,
 ):
     _require_cuda_deepgemm(monkeypatch)
-    monkeypatch.setenv("VLLM_DEEPGEMM_BATCH_INVARIANT", "1")
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
     monkeypatch.setattr(
         deepgemm_moe_forward.parallel_state,
         "get_tensor_model_parallel_world_size",
@@ -2041,7 +2042,7 @@ def test_cuda_deepgemm_moe_expert_grouping_is_bitwise_batch_invariant(
         "decoder.layers.3.mlp.experts",
     )
 
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "3")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "3")
     ungrouped = deepgemm_moe_forward._deepgemm_grouped_moe_forward(
         module,
         hidden_states,
@@ -2050,7 +2051,7 @@ def test_cuda_deepgemm_moe_expert_grouping_is_bitwise_batch_invariant(
         layout=layout,
         module_name="decoder.layers.3.mlp.experts",
     )
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP", "1")
     grouped = deepgemm_moe_forward._deepgemm_grouped_moe_forward(
         module,
         hidden_states,
@@ -2178,10 +2179,10 @@ def test_cuda_grouped_bf16_trainable_expert_backward_matches_per_expert_path(
         "get_expert_tensor_parallel_world_size",
         lambda: 1,
     )
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP", "3")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP", "3")
     # Force adaptive grouping into [expert 0, expert 1] and [expert 2] while
     # keeping every individual expert below the cap.
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES", "131072")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES", "131072")
     torch.cuda.set_device(0)
     torch.manual_seed(459)
 
@@ -2201,7 +2202,7 @@ def test_cuda_grouped_bf16_trainable_expert_backward_matches_per_expert_path(
     probs = torch.rand(num_tokens, device="cuda", dtype=torch.float32) * 1.5 + 0.1
     grad_output = (torch.randn(num_tokens, 128, device="cuda", dtype=torch.float32) * 0.2).to(torch.bfloat16)
 
-    monkeypatch.delenv("SLIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", raising=False)
+    monkeypatch.delenv("VIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", raising=False)
     assert deepgemm_moe_forward._use_grouped_bf16_backward(
         hidden,
         (129, 17, 260),
@@ -2211,7 +2212,7 @@ def test_cuda_grouped_bf16_trainable_expert_backward_matches_per_expert_path(
 
     old_hidden = hidden.detach().clone().requires_grad_()
     old_probs = probs.detach().clone().requires_grad_()
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", "0")
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", "0")
     old_output, _ = old_module(old_hidden, tokens_per_expert, old_probs)
     old_output.backward(grad_output)
     old_hidden_grad = old_hidden.grad.detach().clone()
@@ -2305,8 +2306,8 @@ def test_cuda_grouped_bf16_trainable_expert_backward_matches_per_expert_path(
     old_module.zero_grad(set_to_none=True)
     fallback_hidden = hidden.detach().clone().requires_grad_()
     fallback_probs = probs.detach().clone().requires_grad_()
-    monkeypatch.setenv("SLIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", "0")
-    old_module._slime_reuse_expert_input_for_grad = True
+    monkeypatch.setenv("VIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", "0")
+    old_module._vime_reuse_expert_input_for_grad = True
     fallback_output, _ = old_module(fallback_hidden, tokens_per_expert, fallback_probs)
     fallback_output.backward(grad_output)
 

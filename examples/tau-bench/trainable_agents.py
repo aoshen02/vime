@@ -15,99 +15,7 @@ from openai_tool_adapter import create_openai_adapter
 from tau_bench.agents.tool_calling_agent import RESPOND_ACTION_NAME
 from tau_bench.envs import get_env
 from tau_bench.types import Action, RunConfig
-<<<<<<< ours (vime current)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from transformers import AutoTokenizer
-
-from slime.rollout.vllm_rollout import GenerateState
-from slime.utils.http_utils import post
-
-# Set up logger for this module
-logger = logging.getLogger(__name__)
-
-
-class Status(Enum):
-    COMPLETED = "completed"
-    TRUNCATED = "truncated"
-    ABORTED = "aborted"
-
-
-@dataclass
-class InteractionResult:
-    prompt: str
-    reward: float
-    messages: list[dict[str, Any]]
-    info: dict[str, Any]
-    response: str = ""
-    loss_mask: list[int] | None = None
-    tokens: int | None = None
-    status: Status = Status.COMPLETED
-
-
-def call_to_action_vllm(calls: list[Any], text_response: str) -> Action:
-    """
-    Convert vllm response message to Action, similar to original message_to_action
-    but adapted for vllm response format.
-    """
-    # Default action if no action was found.
-    action = Action(name=RESPOND_ACTION_NAME, kwargs={"content": text_response})
-    if calls:
-        if len(calls) > 1:
-            logger.debug("Multiple tool calls identified, only taking first.")
-        tool_call = calls[0]
-        params = json.loads(tool_call["parameters"])
-        if not isinstance(params, dict):
-            logger.warning(f"{params} does not follow dict structure for action")
-        else:
-            action = Action(name=tool_call["name"], kwargs=params)
-    return action
-=======
 from token_delta import get_token_delta
-from transformers import AutoTokenizer
-
-from slime.rollout.vllm_rollout import GenerateState
-from slime.utils.http_utils import post
-
-# Set up logger for this module
-logger = logging.getLogger(__name__)
-
-
-class Status(Enum):
-    COMPLETED = "completed"
-    TRUNCATED = "truncated"
-    ABORTED = "aborted"
-
-
-@dataclass
-class InteractionResult:
-    prompt: str
-    reward: float
-    messages: list[dict[str, Any]]
-    info: dict[str, Any]
-    response: str = ""
-    loss_mask: list[int] | None = None
-    tokens: int | None = None
-    status: Status = Status.COMPLETED
-
-
-def call_to_action_vllm(calls: list[Any], text_response: str) -> Action:
-    """
-    Convert vllm response message to Action, similar to original message_to_action
-    but adapted for vllm response format.
-    """
-    # Default action if no action was found.
-    action = Action(name=RESPOND_ACTION_NAME, kwargs={"content": text_response})
-    if calls:
-        if len(calls) > 1:
-            logger.debug("Multiple tool calls identified, only taking first.")
-        tool_call = calls[0]
-        params = json.loads(tool_call["parameters"])
-        if not isinstance(params, dict):
-            logger.warning(f"{params} does not follow dict structure for action")
-        else:
-            action = Action(name=tool_call["name"], kwargs=params)
-    return action
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 from vime.rollout.vllm_rollout import (
     GenerateState,
@@ -314,7 +222,6 @@ class TauBenchEnv:
             "content": content + "\n/no_think" if observation.get("role") == "user" else content,
         }
 
-<<<<<<< ours (vime current)
     @staticmethod
     def _to_dict(info: Any) -> dict:
         if hasattr(info, "model_dump"):
@@ -464,37 +371,6 @@ class TrainableTauBenchAgent:
             return sample
 
         async def safe_render() -> dict | None:
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            # Add assistant response to conversation
-            messages.append({"role": "assistant", "content": response})
-            assistant_token_ids, assistant_loss_mask = self._get_token_delta(state.tokenizer, messages)
-            response_token_ids.extend(assistant_token_ids)
-            loss_masks.extend(assistant_loss_mask)
-
-            # Execute action in environment
-            agent_content, calls = parsed["normal_text"], parsed["calls"]
-            logger.debug(f"Creating action from - content: '{agent_content}', " f"calls: {calls}")
-            action = call_to_action_vllm(calls, agent_content)
-            logger.debug(f"Created action: {action}")
-
-=======
-            # Add assistant response to conversation
-            messages.append({"role": "assistant", "content": response})
-            assistant_token_ids, assistant_loss_mask = self._get_token_delta(
-                state.tokenizer,
-                messages,
-                include_generation_prompt=bool(response_token_ids),
-            )
-            response_token_ids.extend(assistant_token_ids)
-            loss_masks.extend(assistant_loss_mask)
-
-            # Execute action in environment
-            agent_content, calls = parsed["normal_text"], parsed["calls"]
-            logger.debug(f"Creating action from - content: '{agent_content}', " f"calls: {calls}")
-            action = call_to_action_vllm(calls, agent_content)
-            logger.debug(f"Created action: {action}")
-
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             try:
                 render_messages = _messages_for_render(messages)
                 payload = {"model": args.hf_checkpoint, "messages": render_messages}
@@ -531,7 +407,6 @@ class TrainableTauBenchAgent:
             return params
 
         try:
-            pending_obs_offset: int | None = None
             rendered_body = await safe_render()
             if rendered_body is None:
                 return _mark_truncated()
@@ -551,18 +426,6 @@ class TrainableTauBenchAgent:
                 return _mark_truncated()
 
             for turn_idx in range(args.max_turns):
-                input_ids = _coerce_flat_int_token_ids(rendered_body.get("token_ids"))
-
-                if pending_obs_offset is not None:
-                    obs_tokens = input_ids[pending_obs_offset:]
-                    remaining = remaining_budget()
-                    if remaining is not None and len(obs_tokens) > remaining:
-                        append_response_window(obs_tokens[: max(remaining, 0)], [0] * max(remaining, 0))
-                        sample.status = Sample.Status.TRUNCATED
-                        break
-                    append_response_window(obs_tokens, [0] * len(obs_tokens))
-                    pending_obs_offset = None
-
                 current_sampling_params = sampling_params_for_turn()
                 if current_sampling_params is None:
                     sample.status = Sample.Status.TRUNCATED
@@ -619,7 +482,6 @@ class TrainableTauBenchAgent:
                     and eos_token_id is not None
                     and getattr(args, "append_eos_token_after_stop_str_in_multi_turn", True)
                 )
-<<<<<<< ours (vime current)
                 if append_stop_eos:
                     already_has_eos = bool(train_tokens and train_tokens[-1] == eos_token_id)
                     if stop_strings and response_text.endswith(stop_strings) and not already_has_eos:
@@ -632,11 +494,24 @@ class TrainableTauBenchAgent:
                         train_logprobs.append(0.0)
                         train_loss_mask.append(0)
 
+                has_previous_response = bool(response_tokens)
                 response_tokens.extend(new_tokens)
+                messages.append({"role": "assistant", "content": response_text})
+                assistant_delta_ids, assistant_delta_mask = get_token_delta(
+                    state.tokenizer,
+                    messages,
+                    include_generation_prompt=has_previous_response,
+                )
+                generation_prompt_length = next(
+                    (index for index, mask in enumerate(assistant_delta_mask) if mask),
+                    len(assistant_delta_mask),
+                )
+                append_response_window(
+                    assistant_delta_ids[:generation_prompt_length],
+                    assistant_delta_mask[:generation_prompt_length],
+                )
                 append_response_window(train_tokens, train_loss_mask, train_logprobs)
                 _maybe_apply_routed_experts(args, sample, choice)
-
-                messages.append({"role": "assistant", "content": response_text})
 
                 if finish_reason == "length":
                     sample.status = Sample.Status.TRUNCATED
@@ -653,15 +528,25 @@ class TrainableTauBenchAgent:
                     sample.status = Sample.Status.COMPLETED
                     break
 
+                render_prefix_len = len(sample.tokens)
                 next_user_message = env.format_observation(observation)
                 messages.append(next_user_message)
+                obs_tokens, obs_loss_mask = get_token_delta(state.tokenizer, messages)
+                remaining = remaining_budget()
+                if remaining is not None and len(obs_tokens) > remaining:
+                    append_response_window(
+                        obs_tokens[: max(remaining, 0)],
+                        obs_loss_mask[: max(remaining, 0)],
+                    )
+                    sample.status = Sample.Status.TRUNCATED
+                    break
+                append_response_window(obs_tokens, obs_loss_mask)
 
                 if turn_idx + 1 >= args.max_turns:
                     sample.reward = compute_process_reward(env, 0.0)
                     sample.status = Sample.Status.TRUNCATED
                     break
 
-                pending_obs_offset = len(input_ids) + len(train_tokens)
                 max_ctx = args.rollout_max_context_len or 8192
                 if len(sample.tokens) >= max_ctx - 64:
                     logger.info(
@@ -674,10 +559,10 @@ class TrainableTauBenchAgent:
                 if rendered_body is None:
                     return _mark_truncated()
                 rendered_ids = _coerce_flat_int_token_ids(rendered_body.get("token_ids"))
-                is_prefix_stable = rendered_ids[:pending_obs_offset] == sample.tokens[:pending_obs_offset]
+                is_prefix_stable = rendered_ids[:render_prefix_len] == sample.tokens[:render_prefix_len]
                 sample.metadata["multiturn_render"] = {
                     "prefix_stable": is_prefix_stable,
-                    "prefix_len": pending_obs_offset,
+                    "prefix_len": render_prefix_len,
                     "sample_len": len(sample.tokens),
                     "rendered_len": len(rendered_ids),
                     "turn": turn_idx + 1,
@@ -687,208 +572,6 @@ class TrainableTauBenchAgent:
                         "Full conversation render is not prefix-stable with the generated token stream: "
                         f"{sample.metadata['multiturn_render']}"
                     )
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            else:
-                # Direct response from user
-                messages.append({"role": "user", "content": env_response.observation})
-
-            # Update token tracking
-            env_token_ids, env_loss_mask = self._get_token_delta(state.tokenizer, messages)
-            response_token_ids.extend(env_token_ids)
-            loss_masks.extend(env_loss_mask)
-
-            # Update reward and info
-            total_reward = env_response.reward
-            info = {**info, **env_response.info.model_dump()}
-
-            # Check if done
-            if env_response.done:
-                res.status = Status.COMPLETED
-                break
-
-        # Handle truncation
-        if not env_response.done:
-            res.status = Status.TRUNCATED
-
-        return self._build_final_result(
-            res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
-        )
-
-    def _get_token_delta(self, tokenizer: AutoTokenizer, messages: list[dict]) -> tuple[list[int], list[int]]:
-        """
-        Calculate token delta for multi-turn conversations.
-
-        Tokenization logic adapted from:
-        https://verl.readthedocs.io/en/v0.4.1/vllm_multiturn/multiturn.html
-        to calculate the right token count in a multi-turn environment using
-        delta between messages.
-
-        Args:
-            tokenizer: Tokenizer instance
-            messages: Conversation messages
-
-        Returns:
-            Tuple of (token_ids, loss_mask)
-        """
-        curr = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-        token_ids = []
-        loss_mask = []
-
-        # Case 1: last message is an assistant response
-        if messages[-1]["role"] == "assistant":
-            prev = tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=True, tokenize=False)
-            new_tokens = tokenizer.encode(curr[len(prev) :], add_special_tokens=False)
-            token_ids += new_tokens
-            loss_mask += [1] * len(new_tokens)  # Mask only the new assistant tokens
-        else:
-            # Case 2: last message is a tool response or environment observation
-            prev = tokenizer.apply_chat_template(messages[:-1], add_generation_prompt=False, tokenize=False)
-            new_tokens = tokenizer.encode(curr[len(prev) :], add_special_tokens=False)
-            token_ids += new_tokens
-            loss_mask += [0] * len(new_tokens)  # Don't mask environment/tool tokens
-
-        return token_ids, loss_mask
-
-    def _build_final_result(
-        self,
-        res: InteractionResult,
-        total_reward: float,
-        info: dict[str, Any],
-        messages: list[dict[str, Any]],
-        loss_masks: list[int],
-        prompt_token_ids: list[int],
-        response_token_ids: list[int],
-    ) -> InteractionResult:
-        """
-        Build the final interaction result with all collected data.
-
-        Args:
-            res: InteractionResult instance to populate
-            total_reward: Total reward accumulated during interaction
-            info: Environment info dictionary
-            messages: Complete conversation messages
-            loss_masks: Loss masks for training
-            prompt_token_ids: Prompt token IDs
-            response_token_ids: Response token IDs
-
-        Returns:
-            Populated InteractionResult
-        """
-        res.reward = total_reward
-        res.info = info
-        res.messages = messages
-        res.loss_mask = loss_masks
-        res.tokens = prompt_token_ids + response_token_ids
-        res.response = "".join([msg.get("content", "") for msg in messages if msg["role"] == "assistant"])
-        res.response_length = len(loss_masks)
-
-        logger.debug(
-            f"_build_final_result: response_length={res.response_length}, "
-            f"response_loss_mask_len={len(loss_masks)}, "
-            f"prompt_token_len={len(prompt_token_ids)}, "
-            f"response_token_len={len(response_token_ids)}, "
-            f"response='{res.response[:100]}...'"
-        )
-        return res
-
-=======
-            else:
-                # Direct response from user
-                messages.append({"role": "user", "content": env_response.observation})
-
-            # Update token tracking
-            env_token_ids, env_loss_mask = self._get_token_delta(state.tokenizer, messages)
-            response_token_ids.extend(env_token_ids)
-            loss_masks.extend(env_loss_mask)
-
-            # Update reward and info
-            total_reward = env_response.reward
-            info = {**info, **env_response.info.model_dump()}
-
-            # Check if done
-            if env_response.done:
-                res.status = Status.COMPLETED
-                break
-
-        # Handle truncation
-        if not env_response.done:
-            res.status = Status.TRUNCATED
-
-        return self._build_final_result(
-            res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
-        )
-
-    def _get_token_delta(
-        self,
-        tokenizer: AutoTokenizer,
-        messages: list[dict],
-        *,
-        include_generation_prompt: bool = False,
-    ) -> tuple[list[int], list[int]]:
-        """
-        Calculate token delta for multi-turn conversations.
-
-        Tokenization logic adapted from:
-        https://verl.readthedocs.io/en/v0.4.1/vllm_multiturn/multiturn.html
-        to calculate the right token count in a multi-turn environment using
-        delta between messages.
-
-        Args:
-            tokenizer: Tokenizer instance
-            messages: Conversation messages
-
-        Returns:
-            Tuple of (token_ids, loss_mask)
-        """
-        return get_token_delta(
-            tokenizer,
-            messages,
-            include_generation_prompt=include_generation_prompt,
-        )
-
-    def _build_final_result(
-        self,
-        res: InteractionResult,
-        total_reward: float,
-        info: dict[str, Any],
-        messages: list[dict[str, Any]],
-        loss_masks: list[int],
-        prompt_token_ids: list[int],
-        response_token_ids: list[int],
-    ) -> InteractionResult:
-        """
-        Build the final interaction result with all collected data.
-
-        Args:
-            res: InteractionResult instance to populate
-            total_reward: Total reward accumulated during interaction
-            info: Environment info dictionary
-            messages: Complete conversation messages
-            loss_masks: Loss masks for training
-            prompt_token_ids: Prompt token IDs
-            response_token_ids: Response token IDs
-
-        Returns:
-            Populated InteractionResult
-        """
-        res.reward = total_reward
-        res.info = info
-        res.messages = messages
-        res.loss_mask = loss_masks
-        res.tokens = prompt_token_ids + response_token_ids
-        res.response = "".join([msg.get("content", "") for msg in messages if msg["role"] == "assistant"])
-        res.response_length = len(loss_masks)
-
-        logger.debug(
-            f"_build_final_result: response_length={res.response_length}, "
-            f"response_loss_mask_len={len(loss_masks)}, "
-            f"prompt_token_len={len(prompt_token_ids)}, "
-            f"response_token_len={len(response_token_ids)}, "
-            f"response='{res.response[:100]}...'"
-        )
-        return res
-
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
             sample.response = state.tokenizer.decode(response_tokens, skip_special_tokens=False)
             sample.response_length = len(sample.loss_mask)

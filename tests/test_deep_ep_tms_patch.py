@@ -19,7 +19,7 @@ def _load_megatron_utils_init(monkeypatch, buffer_cls, tms_impl, module_name):
     monkeypatch.setitem(sys.modules, "torch_memory_saver", torch_memory_saver_module)
     monkeypatch.setitem(sys.modules, "megatron", types.ModuleType("megatron"))
 
-    package_path = Path(__file__).parents[1] / "slime" / "backends" / "megatron_utils"
+    package_path = Path(__file__).parents[1] / "vime" / "backends" / "megatron_utils"
     spec = importlib.util.spec_from_file_location(
         module_name,
         package_path / "__init__.py",

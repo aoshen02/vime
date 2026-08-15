@@ -120,34 +120,12 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
-<<<<<<< ours (vime current)
-            parser.add_argument(
-                "--train-memory-margin-bytes",
-                type=int,
-                default=1024**3,
-                help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
-            )
             parser.add_argument(
                 "--megatron-to-hf-mode",
                 choices=["raw", "bridge"],
                 default="raw",
-                help="The method to convert megatron weights to hugging face weights for vLLM.",
+                help="The method to convert Megatron weights to Hugging Face weights for vLLM.",
             )
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            parser.add_argument(
-                "--train-memory-margin-bytes",
-                type=int,
-                default=1024**3,
-                help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
-            )
-            parser.add_argument(
-                "--megatron-to-hf-mode",
-                choices=["raw", "bridge"],
-                default="raw",
-                help="The method to convert megatron weights to hugging face weights for VLLM.",
-            )
-=======
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             # Delta weight sync.
             parser.add_argument(
                 "--update-weight-mode",
@@ -474,21 +452,11 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "This is the filter function for dynamic sampling. "
-<<<<<<< ours (vime current)
-                    "It should be able to judge whether the result of a prompt should be selected or not."
-                    "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples."
-                    "You could use `vime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example."
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-                    "It should be able to judge whether the result of a prompt should be selected or not."
-                    "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples."
-                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example."
-=======
                     "It should be able to judge whether the result of a prompt should be selected or not. "
                     "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples. "
-                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example. "
+                    "You could use `vime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example. "
                     "To avoid another sampling round when the oversampled candidates cannot fill rollout_batch_size, "
-                    "use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback`."
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+                    "use `vime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std_with_fallback`."
                 ),
             )
 
@@ -1470,7 +1438,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 "--loss-mask-type",
                 type=str,
                 default="qwen",
-                choices=["qwen", "qwen3", "qwen3_5", "distill_qwen"],
+                choices=["qwen", "qwen3", "qwen3_5", "gemma4", "distill_qwen"],
                 help="Loss mask type",
             )
             parser.add_argument(
@@ -1881,6 +1849,9 @@ def vime_validate_args(args):
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
 
+    if args.megatron_to_hf_mode == "bridge" and args.load is None:
+        args.load = args.ref_load or args.hf_checkpoint
+
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -1889,8 +1860,8 @@ def vime_validate_args(args):
     load_is_hf = (
         args.load is not None and os.path.isdir(args.load) and os.path.exists(os.path.join(args.load, "config.json"))
     )
-    if load_is_hf:
-        from slime.backends.megatron_utils.hf_to_megatron import supports_hf_weight_loading
+    if load_is_hf and args.megatron_to_hf_mode != "bridge":
+        from vime.backends.megatron_utils.hf_to_megatron import supports_hf_weight_loading
 
         load_is_hf = supports_hf_weight_loading(args.load)
     if not load_is_megatron:
@@ -2025,10 +1996,10 @@ def vime_validate_args(args):
                 f"actor_num_gpus_per_node {args.actor_num_gpus_per_node} (per-physical-node GPU count)."
             )
             args.num_gpus_per_node = args.actor_num_gpus_per_node
-        if args.rollout_num_gpus == 0:
-            logger.info("rollout_num_gpus is 0 under colocate; no local vLLM engines will be launched.")
-        elif args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
+        if args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+        elif args.rollout_num_gpus == 0:
+            logger.info("rollout_num_gpus is 0 under colocate; no local vLLM engines will be launched.")
 
     if args.offload_train is None:
         args.offload_train = False

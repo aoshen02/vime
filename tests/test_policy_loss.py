@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from slime.utils.ppo_utils import compute_policy_loss
+from vime.utils.ppo_utils import compute_policy_loss
 
 NUM_GPUS = 0
 
@@ -28,7 +28,7 @@ def test_compute_policy_loss_applies_dual_clip_to_negative_advantages():
 
 
 def test_policy_loss_function_forwards_eps_clip_c():
-    loss_path = Path(__file__).parents[1] / "slime" / "backends" / "megatron_utils" / "loss.py"
+    loss_path = Path(__file__).parents[1] / "vime" / "backends" / "megatron_utils" / "loss.py"
     module = ast.parse(loss_path.read_text())
     policy_loss_function = next(
         node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "policy_loss_function"

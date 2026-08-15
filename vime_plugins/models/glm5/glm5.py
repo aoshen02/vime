@@ -28,7 +28,7 @@ from megatron.core.transformer.transformer_config import MLATransformerConfig
 from transformers import AutoConfig
 
 from .ops.indexer import generate_varlen_mask_params, lighting_indexer
-from .ops.sparse_mla import VLLMSparseMLA, SparseMLA
+from .ops.sparse_mla import SparseMLA, VLLMSparseMLA
 
 # Names of the indexer submodules. On a DSA model with *cross-layer index
 # sharing* these only exist on "computing" layers; "skip" layers drop them.
@@ -53,7 +53,7 @@ class _VLLMAbsorbWeightSTE(torch.autograd.Function):
 class _VLLMIndexerHeadWeights(torch.autograd.Function):
     @staticmethod
     def forward(ctx, hidden_states: torch.Tensor, weight: torch.Tensor):
-        from vllm.srt.layers import deep_gemm_wrapper
+        import deep_gemm
 
         flat_input = hidden_states.reshape(-1, hidden_states.shape[-1]).contiguous()
         output = torch.empty(
@@ -61,7 +61,7 @@ class _VLLMIndexerHeadWeights(torch.autograd.Function):
             dtype=torch.float32,
             device=flat_input.device,
         )
-        deep_gemm_wrapper.gemm_nt_bf16bf16f32(
+        deep_gemm.bf16_gemm_nt(
             flat_input,
             weight.contiguous(),
             output,
@@ -71,7 +71,7 @@ class _VLLMIndexerHeadWeights(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
-        from slime.backends.megatron_utils.alignment.deepgemm_forward import router_gating_linear_backward
+        from vime.backends.megatron_utils.alignment.deepgemm_forward import router_gating_linear_backward
 
         hidden_states, weight = ctx.saved_tensors
         return router_gating_linear_backward(
@@ -114,17 +114,13 @@ def _get_fp8_aligned_absorb_weight(linear: torch.nn.Module) -> torch.Tensor:
     )
     aligned_weight = getattr(linear, "_vllm_fp8_aligned_absorb_weight_cache", None)
     if aligned_weight is None or getattr(linear, "_vllm_fp8_aligned_absorb_weight_cache_key", None) != cache_key:
-        from vllm.srt.layers.quantization.fp8_utils import block_quant_dequant
-
-        from slime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
+        from vime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
 
         with torch.no_grad():
-            try:
-                from vllm.srt.layers import deep_gemm_wrapper
+            from vllm.model_executor.layers.quantization.utils.fp8_utils import requant_weight_ue8m0_inplace
+            from vllm.utils.deep_gemm import is_deep_gemm_e8m0_used, per_block_cast_to_fp8
 
-                use_ue8m0 = bool(getattr(deep_gemm_wrapper, "DEEPGEMM_SCALE_UE8M0", False))
-            except Exception:
-                use_ue8m0 = False
+            use_ue8m0 = is_deep_gemm_e8m0_used()
 
             if use_ue8m0:
                 # Blackwell (sm100/sm103): the VLLM rollout dequantizes the
@@ -135,30 +131,20 @@ def _get_fp8_aligned_absorb_weight(linear: torch.nn.Module) -> torch.Tensor:
                 # and, amplified through the layers and the FP32 LM head, shows
                 # up as a large train/rollout logprob gap. Replicate the UE8M0
                 # quant so the dequantized absorb weight bit-matches the rollout.
-                # (Use the raw power-of-two block scale for the dequant;
-                # requant_weight_ue8m0's transformed scale layout is for DeepGEMM
-                # only and is incompatible with block_quant_dequant.)
-                from vllm.srt.layers.quantization.fp8_utils import quant_weight_ue8m0
-
-                qweight, scale_inv = quant_weight_ue8m0(weight.detach().contiguous(), [128, 128])
-                aligned_weight = block_quant_dequant(
-                    qweight,
-                    scale_inv,
-                    [128, 128],
-                    torch.bfloat16,
-                )
+                # requant_weight_ue8m0_inplace updates both tensors to the raw
+                # power-of-two per-block scale used for this dequantization.
+                qweight, scale_inv = per_block_cast_to_fp8(weight.detach().contiguous(), block_size=(128, 128))
+                requant_weight_ue8m0_inplace(qweight, scale_inv, (128, 128))
             else:
                 # Hopper (sm90): FP32 block scales. Unchanged.
                 qweight, scale_inv = blockwise_cast_to_fp8_triton(
                     weight.detach().contiguous(),
                     (128, 128),
                 )
-                aligned_weight = block_quant_dequant(
-                    qweight,
-                    scale_inv,
-                    [128, 128],
-                    torch.bfloat16,
-                )
+            expanded_scale = scale_inv.repeat_interleave(128, dim=-2).repeat_interleave(128, dim=-1)
+            aligned_weight = (qweight.float() * expanded_scale[: qweight.shape[-2], : qweight.shape[-1]]).to(
+                torch.bfloat16
+            )
         linear._vllm_fp8_aligned_absorb_weight_cache = aligned_weight
         linear._vllm_fp8_aligned_absorb_weight_cache_key = cache_key
     return _VLLMAbsorbWeightSTE.apply(aligned_weight, weight)
@@ -170,21 +156,17 @@ def _apply_vllm_rope_forward(
     cos_sin_cache: torch.Tensor,
     positions: torch.Tensor,
 ) -> torch.Tensor:
-    from vllm.jit_kernel.rope import apply_rope_with_cos_sin_cache_inplace
+    from vllm import _custom_ops as ops
 
     output = torch.empty_strided(value.size(), value.stride(), dtype=value.dtype, device=value.device)
     output.copy_(value)
-    dummy_k = torch.empty(
-        (value.shape[0], 1, value.shape[-1]),
-        dtype=value.dtype,
-        device=value.device,
-    )
-    apply_rope_with_cos_sin_cache_inplace(
-        output,
-        dummy_k,
-        cos_sin_cache,
+    ops.rotary_embedding(
         positions,
-        is_neox=False,
+        output,
+        None,
+        value.shape[-1],
+        cos_sin_cache,
+        False,
     )
     return output
 
@@ -235,16 +217,23 @@ def _get_vllm_rope_cache(
 class _DSAKVFP8QAT(torch.autograd.Function):
     @staticmethod
     def forward(ctx, kv: torch.Tensor):
-        from vllm.srt.layers.attention.dsa.dequant_k_cache import dequantize_k_cache
-        from vllm.srt.layers.attention.dsa.quant_k_cache import quantize_k_cache
-
         if kv.dtype != torch.bfloat16 or kv.shape[-2:] != (1, 576):
             raise ValueError(
                 "GLM5 KV FP8 QAT requires BF16 [..., 1, 576], " f"got dtype={kv.dtype}, shape={tuple(kv.shape)}"
             )
-        original_shape = kv.shape
-        packed_kv = quantize_k_cache(kv.contiguous().view(-1, 1, 1, 576))
-        return dequantize_k_cache(packed_kv).view(original_shape)
+        flat_kv = kv.contiguous().view(-1, 576)
+        nope = flat_kv[:, :512].view(-1, 4, 128).float()
+        scale = nope.abs().amax(dim=-1, keepdim=True).clamp_min(1e-10) / torch.finfo(torch.float8_e4m3fn).max
+        quantized = (
+            (nope / scale)
+            .clamp(
+                -torch.finfo(torch.float8_e4m3fn).max,
+                torch.finfo(torch.float8_e4m3fn).max,
+            )
+            .to(torch.float8_e4m3fn)
+        )
+        dequantized_nope = (quantized.float() * scale).to(torch.bfloat16).view(-1, 512)
+        return torch.cat((dequantized_nope, flat_kv[:, 512:]), dim=-1).view_as(kv)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
@@ -753,7 +742,7 @@ class DSAMLASelfAttention(DSAMultiLatentAttention):
         if self.config.layernorm_zero_centered_gamma:
             norm_weight = norm_weight + 1.0
         if os.getenv("MEGATRON_USE_VLLM_FUSED_RESIDUAL_RMS", "0") == "1":
-            from vllm.srt.batch_invariant_ops import rms_norm_batch_invariant
+            from vllm.model_executor.layers.batch_invariant import rms_norm_batch_invariant
 
             return rms_norm_batch_invariant(
                 q_compressed,

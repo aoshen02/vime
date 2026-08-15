@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from slime.utils.compare_glm52_layerwise import (
+from vime.utils.compare_glm52_layerwise import (
     TrainSequence,
     _vllm_layer_token_rows,
     compare_layer_outputs,

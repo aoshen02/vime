@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from slime.backends.megatron_utils.stateless_adam import StatelessAdam
+from vime.backends.megatron_utils.stateless_adam import StatelessAdam
 
 NUM_GPUS = 0
 

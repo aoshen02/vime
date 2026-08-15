@@ -3,7 +3,6 @@
 # The trainer publishes per-tensor deltas to --update-weight-disk-dir as a canonical HF directory;
 # each engine's /pull_weights applies them into --update-weight-local-checkpoint-dir on every host
 # it spans, and the engine reloads via the vanilla update_weights_from_disk path.
-# Vime currently rejects --update-weight-mode delta; this script is upstream reference material.
 #
 # Prerequisites:
 #   - A 2-node (16-GPU) Ray cluster, this script run on the head node.

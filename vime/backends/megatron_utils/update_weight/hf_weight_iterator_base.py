@@ -1,17 +1,22 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from slime.utils.types import ParamInfo
+from vime.utils.types import ParamInfo
 
 
 class HfWeightIteratorBase(ABC):
     @staticmethod
     def create(args, model, **kwargs):
+        from .hf_weight_iterator_bridge import HfWeightIteratorBridge
         from .hf_weight_iterator_direct import HfWeightIteratorDirect
 
-        return HfWeightIteratorDirect(args, model, **kwargs)
+        iterator_cls = {
+            "raw": HfWeightIteratorDirect,
+            "bridge": HfWeightIteratorBridge,
+        }[args.megatron_to_hf_mode]
+        return iterator_cls(args, model, **kwargs)
 
-    def __init__(self, args, model, model_name, quantization_config, transform_ue8m0=True):
+    def __init__(self, args, model, model_name, quantization_config, transform_ue8m0=False):
         self.args = args
         self.model = model
         self.model_name = model_name

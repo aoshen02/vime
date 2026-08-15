@@ -49,16 +49,11 @@ PYTHONPATH=/root/Megatron-LM/ python \
 bash scripts/run-qwen2.5-0.5B-reproducibility.sh
 ```
 
-<<<<<<< ours (vime current)
 这个 PR 中记录了 wandb 的截图 [pull#370](https://github.com/THUDM/slime/pull/370)。
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-For screen shots of the wandb, please refer to [pull#370](https://github.com/THUDM/vime/pull/370).
-=======
-For screen shots of the wandb, please refer to [pull#370](https://github.com/THUDM/vime/pull/370).
 
-## Train/rollout log-prob alignment (GLM-5)
+## Train/rollout log-prob alignment（GLM-5）
 
-Beyond single-side bitwise reproduction, slime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the **GLM-5 structure** (MLA + DSA sparse attention), and requires the deterministic VLLM / batch-invariant DeepGEMM / DeepEP build plus the `megatron-vllm-aligned.patch` Megatron.
+Beyond single-side bitwise reproduction, vime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the **GLM-5 structure** (MLA + DSA sparse attention), and requires the deterministic VLLM / batch-invariant DeepGEMM / DeepEP build plus the `megatron-vllm-aligned.patch` Megatron.
 
 Supported in this path:
 
@@ -82,4 +77,3 @@ DeepEP 对齐参考结果为 `x e-7` 量级）。
 另有一个较短的 EP8 gate `tests/test_glm52_layerwise_zero_e2e.py`，会同时
 记录训推两侧 decoder layer 0–5 的可见输出，并要求所有匹配 hidden-state
 元素的绝对误差严格等于 0。
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)

@@ -17,6 +17,7 @@ if str(_tests_root) not in sys.path:
 import _unit_stubs
 import pytest
 import torch
+
 from vime.utils.types import ParamInfo
 
 MODULE_PATH = "vime.backends.megatron_utils.update_weight.update_weight_from_distributed"
@@ -151,6 +152,23 @@ class DummyGroup:
     token: str = "dummy"
 
 
+@pytest.mark.unit
+def test_constructor_initializes_parallel_layout_before_engine_connection(upw):
+    args = types.SimpleNamespace()
+
+    updater = upw.UpdateWeightFromDistributed(
+        args,
+        [],
+        lambda: {},
+        model_name="qwen3",
+        quantization_config=None,
+    )
+
+    assert updater._pp_world_size == 1
+    assert updater._is_pp_src_rank is True
+    assert updater._group_name == "vime-pp_0"
+
+
 def _real_tensors(n: int = 2):
     return [(f"layer.{i}.weight", torch.zeros(2, 2)) for i in range(n)]
 
@@ -206,7 +224,6 @@ def _make_instance(upw):
     obj.quantization_config = None
     obj.weight_version = 0
     obj._model_update_groups = DummyGroup()
-    obj._hf_weight_iterator = None
     obj._is_pp_src_rank = True
     obj._group_name = "g"
     obj.rollout_engines = []
@@ -344,11 +361,10 @@ def test_empty_tensor_list_still_dispatches(upw, monkeypatch):
 
 
 @pytest.mark.unit
-def test_raw_path_sends_dense_then_expert(upw, monkeypatch):
+def test_sends_dense_then_expert(upw, monkeypatch):
     obj = _make_instance(upw)
     obj._is_pp_src_rank = True
     obj._group_name = "g"
-    obj._hf_weight_iterator = None
     obj._iter_non_expert_chunks = lambda: iter([[("dense.0", torch.zeros(1))], [("dense.1", torch.zeros(1))]])
     obj._iter_expert_chunks = lambda: iter([[("expert.0", torch.zeros(1))]])
 
@@ -437,7 +453,6 @@ def test_expert_chunks_keep_each_layer_together(upw, monkeypatch):
 def test_bridge_path_listifies_chunks(upw, monkeypatch):
     obj = _make_instance(upw)
     obj._is_pp_src_rank = True
-    obj._group_name = "g"
     obj.weights_getter = lambda: {"actor": torch.zeros(1)}
     obj._hf_weight_iterator = MagicMock()
     obj._hf_weight_iterator.get_hf_weight_chunks.return_value = iter(
@@ -457,10 +472,7 @@ def test_bridge_path_listifies_chunks(upw, monkeypatch):
 
     upw.UpdateWeightFromDistributed._sync_bridge_weights_to_rollout_engines(obj, pbar="pbar")
 
-    assert seen == [
-        (["bridge.0"], "pbar"),
-        (["bridge.1"], "pbar"),
-    ]
+    assert seen == [(["bridge.0"], "pbar"), (["bridge.1"], "pbar")]
 
 
 @pytest.mark.unit
@@ -685,13 +697,15 @@ def test_weight_update_session_calls_start_and_finish(upw, monkeypatch):
     monkeypatch.setattr(upw.ray, "get", lambda refs: ray_refs.extend(refs) or refs)
 
     upw._begin_vllm_weight_update_session(engines)
-    upw._end_vllm_weight_update_session(engines)
+    upw._end_vllm_weight_update_session(engines, 12)
 
     assert len(engines[0].start_weight_update.calls) == 1
-    assert engines[0].start_weight_update.calls[0].kwargs["is_checkpoint_format"] is True
+    assert engines[0].start_weight_update.calls[0].kwargs == {}
     assert len(engines[1].start_weight_update.calls) == 1
     assert len(engines[0].finish_weight_update.calls) == 1
     assert len(engines[1].finish_weight_update.calls) == 1
+    assert engines[0].finish_weight_update.calls[0].kwargs == {"weight_version": "12"}
+    assert engines[1].finish_weight_update.calls[0].kwargs == {"weight_version": "12"}
     assert barrier_calls == ["dummy-gloo-group", "dummy-gloo-group"]
 
 
@@ -702,6 +716,33 @@ def test_source_wraps_sync_with_weight_update_session(upw):
     assert "start_draft_weight_update" in src
     assert "_end_vllm_weight_update_session" in src
     assert src.count("_send_weights_to_rollout_engines") == 2
+
+
+@pytest.mark.unit
+def test_failed_transfer_does_not_finish_or_commit_weight_version(upw, monkeypatch):
+    obj = _make_instance(upw)
+    obj.args.enable_mtp_training = False
+    obj.args.vllm_speculative_config = None
+    obj.rollout_engines = []
+    session_events = []
+
+    monkeypatch.setattr(upw.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(upw.dist, "barrier", lambda *args, **kwargs: None)
+    monkeypatch.setattr(upw.ray, "get", lambda refs: refs)
+    monkeypatch.setattr(upw, "get_gloo_group", lambda: "gloo")
+    monkeypatch.setattr(upw, "_begin_vllm_weight_update_session", lambda engines: session_events.append("begin"))
+    monkeypatch.setattr(
+        upw,
+        "_end_vllm_weight_update_session",
+        lambda engines, version: session_events.append(("finish", version)),
+    )
+    obj._send_weights_to_rollout_engines = lambda: (_ for _ in ()).throw(RuntimeError("transfer failed"))
+
+    with pytest.raises(RuntimeError, match="transfer failed"):
+        obj.update_weights()
+
+    assert session_events == ["begin"]
+    assert obj.weight_version == 0
 
 
 @pytest.mark.unit

@@ -37,19 +37,9 @@ hf download zhuzilin/dapo-math-17k --repo-type dataset --local-dir /root/dapo-ma
 
 ## Model Weight Conversion
 
-### Convert from Hugging Face Format to Megatron Format
+#### HF → Megatron torch_dist ckpt
 
-<<<<<<< ours (vime current)
-Load the model configuration for Qwen3-8B, then run the conversion. Two ROCm-specific flags are required: `--no-gradient-accumulation-fusion` and `--attention-backend flash`.
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-#### HF → Megatron torch\_dist ckpt
-
-Use [mbridge](https://github.com/ISEEKYAN/mbridge.git) or [Megatron-LM-amd_version-amd](https://github.com/yushengsu-thu/Megatron-LM-amd_version.git) for conversion:
-=======
-#### HF → Megatron torch\_dist ckpt
-
-Use slime's built-in HuggingFace-to-Megatron loader for conversion:
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+Use Vime's built-in Hugging Face-to-Megatron loader for conversion. Load the model configuration for Qwen3-8B, then run the conversion. Two ROCm-specific flags are required: `--no-gradient-accumulation-fusion` and `--attention-backend flash`.
 
 ```bash
 cd /root/vime && source scripts/models/qwen3-8B.sh

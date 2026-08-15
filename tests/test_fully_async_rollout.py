@@ -1,6 +1,6 @@
 """CPU unit tests for the fully-async rollout worker's queue contract.
 
-The module docstring of ``slime.rollout.fully_async_rollout`` promises that the
+The module docstring of ``vime.rollout.fully_async_rollout`` promises that the
 worker's output queue "stays warm" across ``generate_rollout`` calls: each call
 takes ``rollout_batch_size`` completed groups and leaves the rest queued.
 
@@ -42,8 +42,8 @@ if "transformers" not in sys.modules:
 
 import pytest
 
-import slime.rollout.fully_async_rollout as fa
-from slime.utils.types import Sample
+import vime.rollout.fully_async_rollout as fa
+from vime.utils.types import Sample
 
 
 NUM_GPUS = 0

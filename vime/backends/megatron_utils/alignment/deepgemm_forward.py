@@ -34,7 +34,7 @@ except ImportError:
 def router_gating_linear_backward(inp, weight, grad_output, router_dtype):
     """Compute router-linear dgrad/wgrad without evaluating its forward.
 
-    Re-homed into slime so the GLM-5 alignment path does not depend on this
+    Re-homed into vime so the GLM-5 alignment path does not depend on this
     helper being present in Megatron ``moe_utils`` (it only exists on newer
     Megatron commits).  Behaviour matches that upstream helper.
     """
@@ -62,6 +62,10 @@ def router_gating_linear_backward(inp, weight, grad_output, router_dtype):
         grad_weight = torch.mm(grad_2d.t(), inp_2d.to(router_dtype)).to(weight_dtype)
 
     return grad_input.reshape(*inp_shape), grad_weight
+
+
+def _vllm_silu_and_mul(input_: torch.Tensor, output: torch.Tensor) -> None:
+    torch.ops._C.silu_and_mul(output, input_)
 
 
 _LAYER_PATH_RE = re.compile(r"^(?P<layer_path>(?:.*\.)?decoder\.layers\.(?P<local_layer_index>\d+))\.")
@@ -172,7 +176,7 @@ def _norm_forward(
     if normalization == "RMSNorm" and os.environ.get("MEGATRON_USE_VLLM_FUSED_RESIDUAL_RMS", "0") == "1":
         if norm_bias is not None:
             raise RuntimeError("VLLM RMSNorm alignment does not support a norm bias")
-        from vllm.srt.batch_invariant_ops import rms_norm_batch_invariant
+        from vllm.model_executor.layers.batch_invariant import rms_norm_batch_invariant
 
         weight = norm_weight
         if zero_centered_gamma:
@@ -289,21 +293,23 @@ class _VLLMRMSNormWithAnalyticBackward(torch.autograd.Function):
 
 
 class _VLLMRouterGEMMWithMegatronBackward(torch.autograd.Function):
-    """VLLM batch-invariant FP32 router forward with Megatron backward."""
+    """Native VLLM GateLinear forward with Megatron backward."""
 
     @staticmethod
     def forward(
         ctx,
         value: torch.Tensor,
         weight: torch.Tensor,
+        gate_linear: torch.nn.Module,
     ) -> torch.Tensor:
-        from vllm.srt.batch_invariant_ops import router_gemm_batch_invariant
-
         original_shape = value.shape
-        output = router_gemm_batch_invariant(
-            value.reshape(-1, original_shape[-1]),
-            weight,
-        ).view(*original_shape[:-1], -1)
+        flat_value = value.reshape(-1, original_shape[-1])
+        output = gate_linear(flat_value)
+        if isinstance(output, tuple):
+            output, output_bias = output
+            if output_bias is not None:
+                raise RuntimeError("VLLM router GateLinear unexpectedly returned a bias")
+        output = output.view(*original_shape[:-1], -1)
         ctx.save_for_backward(value, weight)
         return output
 
@@ -320,7 +326,24 @@ class _VLLMRouterGEMMWithMegatronBackward(torch.autograd.Function):
             grad_input = None
         if not ctx.needs_input_grad[1]:
             grad_weight = None
-        return grad_input, grad_weight
+        return grad_input, grad_weight, None
+
+
+def _build_vllm_gate_linear(
+    weight: torch.Tensor,
+) -> torch.nn.Module:
+    from vllm.model_executor.layers.fused_moe.router.gate_linear import GateLinear
+
+    gate_linear = GateLinear(
+        input_size=weight.shape[1],
+        output_size=weight.shape[0],
+        bias=False,
+        out_dtype=torch.float32,
+        params_dtype=weight.dtype,
+        prefix="",
+    )
+    gate_linear.weight = weight
+    return gate_linear
 
 
 class _VLLMSwiGLUWithAnalyticBackward(torch.autograd.Function):
@@ -328,11 +351,9 @@ class _VLLMSwiGLUWithAnalyticBackward(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, value: torch.Tensor) -> torch.Tensor:
-        from sgl_kernel import silu_and_mul
-
         output_shape = (*value.shape[:-1], value.shape[-1] // 2)
         output = torch.empty(output_shape, dtype=value.dtype, device=value.device)
-        silu_and_mul(
+        _vllm_silu_and_mul(
             value.contiguous().view(-1, value.shape[-1]),
             output.view(-1, output.shape[-1]),
         )
@@ -459,15 +480,18 @@ def _deepgemm_linear(
     weight: torch.Tensor,
 ) -> torch.Tensor:
     import deep_gemm
-    from vllm.srt.layers import deep_gemm_wrapper
-    from vllm.srt.layers.quantization.fp8_utils import deepgemm_w8a8_block_fp8_linear_with_fallback
+    from vllm.model_executor.layers.quantization.utils.fp8_utils import (
+        per_token_group_quant_fp8,
+        requant_weight_ue8m0_inplace,
+    )
+    from vllm.utils import deep_gemm as vllm_deep_gemm
 
-    from slime.backends.megatron_utils.alignment.deepgemm_moe_forward import _configure_batch_invariant
-    from slime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
+    from vime.backends.megatron_utils.alignment.deepgemm_moe_forward import _configure_batch_invariant
+    from vime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
 
     # Megatron actors are separate processes from VLLM workers.  Environment
     # propagation alone does not call DeepGEMM's process-local setter.
-    _configure_batch_invariant(deep_gemm, deep_gemm_wrapper)
+    _configure_batch_invariant(deep_gemm)
 
     if input_.dtype != torch.bfloat16:
         raise RuntimeError(f"DeepGEMM alignment forward requires BF16 input, got {input_.dtype}")
@@ -477,29 +501,37 @@ def _deepgemm_linear(
         raise RuntimeError(f"DeepGEMM input/weight K mismatch: {input_.shape[-1]} != {weight.shape[-1]}")
 
     with torch.no_grad():
-        if deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0:
-            # Blackwell (sm100/sm103): the block-FP8 GEMM requires UE8M0
-            # (power-of-two) weight scales. The VLLM rollout produces these by
-            # quantizing the BF16 weight to FP8 (slime quantizer_fp8 ->
-            # quant_weight_ue8m0) and then *requantizing* in
-            # process_weights_after_loading (requant_weight_ue8m0). That requant
-            # is lossy (recomputes per-block scales on the rounded values), so a
-            # single quant_weight_ue8m0 here would NOT bit-match the rollout.
-            # Replicate the same quant -> requant chain to align to ~e-7.
-            from vllm.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, requant_weight_ue8m0
-
-            qweight, weight_scale = quant_weight_ue8m0(weight.detach().contiguous(), [128, 128])
-            qweight, weight_scale = requant_weight_ue8m0(qweight, weight_scale, [128, 128])
+        use_ue8m0 = vllm_deep_gemm.is_deep_gemm_e8m0_used()
+        if use_ue8m0:
+            # Native VLLM quantizes the BF16 weight to block FP8 and then
+            # requantizes it onto UE8M0 power-of-two scales before dispatch.
+            # Apply the same two helpers to the Megatron weight.
+            qweight, weight_scale = vllm_deep_gemm.per_block_cast_to_fp8(
+                weight.detach().contiguous(), block_size=(128, 128)
+            )
+            requant_weight_ue8m0_inplace(qweight, weight_scale, (128, 128))
         else:
             # Hopper (sm90): FP32 block scales. Unchanged.
             qweight, weight_scale = blockwise_cast_to_fp8_triton(weight.detach().contiguous(), (128, 128))
-        return deepgemm_w8a8_block_fp8_linear_with_fallback(
+        qinput, input_scale = per_token_group_quant_fp8(
             input_.detach().contiguous(),
-            qweight,
-            [128, 128],
-            weight_scale,
-            bias=None,
+            128,
+            column_major_scales=True,
+            tma_aligned_scales=True,
+            use_ue8m0=use_ue8m0,
         )
+        output = torch.empty(
+            (*input_.shape[:-1], weight.shape[0]),
+            dtype=torch.bfloat16,
+            device=input_.device,
+        )
+        vllm_deep_gemm.fp8_gemm_nt(
+            (qinput.reshape(-1, qinput.shape[-1]), input_scale),
+            (qweight, weight_scale),
+            output.reshape(-1, output.shape[-1]),
+            is_deep_gemm_e8m0_used=use_ue8m0,
+        )
+        return output
 
 
 def _validate_custom_backward(module: torch.nn.Module) -> None:
@@ -511,7 +543,7 @@ def _validate_custom_backward(module: torch.nn.Module) -> None:
 
 
 def _wrap_te_linear(module: torch.nn.Module, module_name: str) -> bool:
-    if getattr(module, "_slime_deepgemm_forward_wrapped", False):
+    if getattr(module, "_vime_deepgemm_forward_wrapped", False):
         return False
 
     class_name = type(module).__name__
@@ -553,8 +585,8 @@ def _wrap_te_linear(module: torch.nn.Module, module_name: str) -> bool:
         return output, None
 
     module.forward = types.MethodType(deepgemm_forward, module)
-    module._slime_deepgemm_forward_wrapped = True
-    module._slime_deepgemm_module_name = module_name
+    module._vime_deepgemm_forward_wrapped = True
+    module._vime_deepgemm_module_name = module_name
     return True
 
 
@@ -621,18 +653,9 @@ def enable_deepgemm_forward(args, model, store_prefix: str) -> None:
 
 
 def enable_vllm_router_gemm(args, model, store_prefix: str) -> None:
-    """Use one VLLM persistent FP32 forward with Megatron GEMM backward."""
+    """Use VLLM GateLinear forward with Megatron GEMM backward."""
 
     del store_prefix
-    saved_rollout_replay = bool(
-        getattr(args, "debug_train_only", False) and getattr(args, "load_debug_rollout_data", None)
-    )
-    if not (getattr(args, "vllm_enable_fp32_moe_router", False) or saved_rollout_replay):
-        raise RuntimeError(
-            "MEGATRON_USE_VLLM_ROUTER_GEMM=1 requires "
-            "--vllm-enable-fp32-moe-router so Megatron and VLLM "
-            "use the same FP32 router forward"
-        )
     target_layers = _as_set(
         getattr(args, "megatron_deepgemm_moe_forward_layers", None),
         (),
@@ -648,10 +671,14 @@ def enable_vllm_router_gemm(args, model, store_prefix: str) -> None:
             global_layer_index = _get_global_layer_index(model_chunk, name)
             if global_layer_index not in target_layers:
                 continue
-            if getattr(module, "_slime_vllm_router_gemm_wrapped", False):
+            if getattr(module, "_vime_vllm_router_gemm_wrapped", False):
                 continue
+            if getattr(module, "bias", None) is not None:
+                raise RuntimeError("VLLM router alignment does not support a biased Megatron router")
 
             original_gating = module.gating
+            gate_linear = _build_vllm_gate_linear(module.weight)
+            object.__setattr__(module, "_vime_vllm_gate_linear", gate_linear)
 
             def gating(
                 self,
@@ -671,11 +698,12 @@ def enable_vllm_router_gemm(args, model, store_prefix: str) -> None:
                 return _VLLMRouterGEMMWithMegatronBackward.apply(
                     value,
                     self.weight,
+                    self._vime_vllm_gate_linear,
                 )
 
             module.gating = types.MethodType(gating, module)
-            module._slime_vllm_router_gemm_wrapped = True
-            module._slime_vllm_router_gemm_original = original_gating
+            module._vime_vllm_router_gemm_wrapped = True
+            module._vime_vllm_router_gemm_original = original_gating
             wrapped.append(name)
 
     if wrapped and _should_log_deepgemm_summary():
@@ -696,7 +724,7 @@ def enable_vllm_global_batch_invariant_ops() -> None:
     RMS reductions, BMMs, FP32 matmuls, and log-softmax would otherwise still
     use Megatron's normal batch-shaped kernels.
     """
-    if os.environ.get("VLLM_DEEPGEMM_BATCH_INVARIANT", "0").lower() not in {
+    if os.environ.get("VLLM_BATCH_INVARIANT", "0").lower() not in {
         "1",
         "true",
         "yes",
@@ -704,11 +732,9 @@ def enable_vllm_global_batch_invariant_ops() -> None:
     }:
         return
 
-    from vllm.srt.batch_invariant_ops import enable_batch_invariant_mode, is_batch_invariant_mode_enabled
+    from vllm.model_executor.layers import batch_invariant
 
-    enable_batch_invariant_mode()
-    if not is_batch_invariant_mode_enabled():
-        raise RuntimeError("VLLM global batch-invariant mode did not enable")
+    batch_invariant.enable_batch_invariant_mode()
 
 
 def _vllm_batch_invariant_rmsnorm(
@@ -716,7 +742,7 @@ def _vllm_batch_invariant_rmsnorm(
     weight: torch.Tensor,
     eps: float,
 ) -> torch.Tensor:
-    from vllm.srt.batch_invariant_ops import rms_norm_batch_invariant
+    from vllm.model_executor.layers.batch_invariant import rms_norm_batch_invariant
 
     return rms_norm_batch_invariant(value, weight, eps)
 
@@ -781,7 +807,7 @@ def enable_vllm_layer0_input_rmsnorm(
         # greater than one because it follows a pipeline send/recv.
         _, layer_name, layer = min(local_layers, key=lambda item: item[0])
         module = getattr(layer, "input_layernorm", None)
-        if module is None or getattr(module, "_slime_vllm_pipeline_input_rmsnorm_wrapped", False):
+        if module is None or getattr(module, "_vime_vllm_pipeline_input_rmsnorm_wrapped", False):
             continue
         if not hasattr(module, "weight") or not hasattr(module, "eps"):
             raise RuntimeError(f"{layer_name}.input_layernorm is missing RMSNorm weight/eps")
@@ -802,8 +828,8 @@ def enable_vllm_layer0_input_rmsnorm(
             )
 
         module.forward = types.MethodType(forward, module)
-        module._slime_vllm_pipeline_input_rmsnorm_wrapped = True
-        module._slime_vllm_pipeline_input_rmsnorm_original = original_forward
+        module._vime_vllm_pipeline_input_rmsnorm_wrapped = True
+        module._vime_vllm_pipeline_input_rmsnorm_original = original_forward
         patched.append(f"{layer_name}.input_layernorm")
 
     if patched and _should_log_deepgemm_summary():
@@ -856,7 +882,7 @@ def enable_vllm_absorbed_kv_rmsnorm(
             target_weight = getattr(kv_up, "layer_norm_weight", None)
             if attention is None or target_weight is None:
                 continue
-            if getattr(attention, "_slime_vllm_absorbed_kv_rmsnorm_wrapped", False):
+            if getattr(attention, "_vime_vllm_absorbed_kv_rmsnorm_wrapped", False):
                 continue
 
             original_forward = attention.forward
@@ -902,8 +928,8 @@ def enable_vllm_absorbed_kv_rmsnorm(
                     torch.nn.functional.rms_norm = original_rms_norm
 
             attention.forward = types.MethodType(forward, attention)
-            attention._slime_vllm_absorbed_kv_rmsnorm_wrapped = True
-            attention._slime_vllm_absorbed_kv_rmsnorm_original = original_forward
+            attention._vime_vllm_absorbed_kv_rmsnorm_wrapped = True
+            attention._vime_vllm_absorbed_kv_rmsnorm_original = original_forward
             wrapped.append(f"{layer_name}.self_attention")
 
     if wrapped and _should_log_deepgemm_summary():
@@ -952,7 +978,7 @@ def enable_vllm_final_rmsnorm(
         for module_name, module in named_modules.items():
             if not module_name.endswith("decoder.final_layernorm"):
                 continue
-            if getattr(module, "_slime_vllm_final_rmsnorm_wrapped", False):
+            if getattr(module, "_vime_vllm_final_rmsnorm_wrapped", False):
                 continue
             if not hasattr(module, "weight") or not hasattr(module, "eps"):
                 raise RuntimeError(f"{module_name} is missing RMSNorm weight/eps")
@@ -992,8 +1018,8 @@ def enable_vllm_final_rmsnorm(
                 )
 
             module.forward = types.MethodType(forward, module)
-            module._slime_vllm_final_rmsnorm_wrapped = True
-            module._slime_vllm_final_rmsnorm_original = original_forward
+            module._vime_vllm_final_rmsnorm_wrapped = True
+            module._vime_vllm_final_rmsnorm_original = original_forward
             patched.append(module_name)
 
     if patched and _should_log_deepgemm_summary():
@@ -1016,7 +1042,7 @@ def _wrap_vllm_swiglu_mlp(
     *,
     return_tuple: bool,
 ) -> bool:
-    if getattr(module, "_slime_vllm_swiglu_wrapped", False):
+    if getattr(module, "_vime_vllm_swiglu_wrapped", False):
         return False
     if not hasattr(module, "linear_fc1") or not hasattr(module, "linear_fc2"):
         raise RuntimeError(f"SwiGLU target {module_name} is not an MLP")
@@ -1049,8 +1075,8 @@ def _wrap_vllm_swiglu_mlp(
         return output, None
 
     module.forward = types.MethodType(forward, module)
-    module._slime_vllm_swiglu_wrapped = True
-    module._slime_vllm_swiglu_module_name = module_name
+    module._vime_vllm_swiglu_wrapped = True
+    module._vime_vllm_swiglu_module_name = module_name
     return True
 
 
@@ -1131,7 +1157,7 @@ def _enable_deepgemm_all_forward(
         enable_deepgemm_forward(args, model, store_prefix)
         enable_vllm_swiglu_forward(args, model, store_prefix)
     if moe_layers:
-        from slime.backends.megatron_utils.alignment.deepgemm_moe_forward import (
+        from vime.backends.megatron_utils.alignment.deepgemm_moe_forward import (
             enable_deepgemm_moe_forward,
             enable_vllm_deepep_moe_alignment,
         )
@@ -1141,8 +1167,8 @@ def _enable_deepgemm_all_forward(
             enable_vllm_router_gemm(args, model, store_prefix)
         enable_vllm_deepep_moe_alignment(args, model, store_prefix)
 
-    if os.getenv("SLIME_LAYERWISE_ALIGNMENT_DUMP_DIR"):
-        from slime.backends.megatron_utils.alignment.layerwise_alignment import enable_megatron_layerwise_dump
+    if os.getenv("VIME_LAYERWISE_ALIGNMENT_DUMP_DIR"):
+        from vime.backends.megatron_utils.alignment.layerwise_alignment import enable_megatron_layerwise_dump
 
         enable_megatron_layerwise_dump(args, model, store_prefix)
 

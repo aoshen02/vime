@@ -9,12 +9,6 @@ proxy, IBGDA handler), which are cluster-specific and intentionally not here.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-# slime/backends/vllm_utils/jit_kernels — the slime-hosted custom VLLM
-# kernels (e.g. glm5_router_gemm) that vllm's JIT loader try-cache compiles.
-_JIT_KERNELS_DIR = Path(__file__).resolve().parents[2] / "vllm_utils" / "jit_kernels"
-
 
 def alignment_env(*, kv_fp8_qat: bool = False) -> dict[str, str]:
     """Return the shared deterministic-alignment env vars.
@@ -32,18 +26,7 @@ def alignment_env(*, kv_fp8_qat: bool = False) -> dict[str, str]:
         "TE_DISABLE_FA3": "TRUE",
         "NVSHMEM_DISABLE_NCCL": "1",
         # DeepGEMM batch-invariant FP8 forward.
-        "VLLM_DEEPGEMM_BATCH_INVARIANT": "1",
-        "VLLM_DEEPGEMM_PAD_EXPERT_M": "1",
-        "VLLM_JIT_DEEPGEMM_PRECOMPILE": "false",
-        "VLLM_JIT_KERNEL_EXTRA_PATH": str(_JIT_KERNELS_DIR),
-        "VLLM_MASKED_GEMM_FAST_ACT": "1",
-        # DeepEP low-latency dispatch + DSA indexer.
-        "VLLM_DEEPEP_LL_PREFILL_STAGING": "1",
-        "VLLM_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "64",
-        "VLLM_DSA_FUSE_TOPK": "0",
-        "VLLM_DISABLE_DSA_INDEXER_FUSION": "1",
-        "VLLM_DSA_PREFILL_DENSE_ATTN_KV_LEN_THRESHOLD": "0",
-        "INDEXER_ROPE_NEOX_STYLE": "0",
+        "VLLM_BATCH_INVARIANT": "1",
         # Megatron train side borrows VLLM's aligned kernels.
         "MEGATRON_USE_VLLM_FUSED_RESIDUAL_RMS": "1",
         "MEGATRON_USE_VLLM_FP8_INDEXER": "1",

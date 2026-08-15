@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from slime.backends.megatron_utils.alignment.layerwise_alignment import enable_megatron_layerwise_dump
+from vime.backends.megatron_utils.alignment.layerwise_alignment import enable_megatron_layerwise_dump
 
 NUM_GPUS = 0
 
@@ -40,7 +40,7 @@ class _Model(nn.Module):
 
 
 def test_megatron_layerwise_dump(monkeypatch, tmp_path):
-    monkeypatch.setenv("SLIME_LAYERWISE_ALIGNMENT_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("VIME_LAYERWISE_ALIGNMENT_DUMP_DIR", str(tmp_path))
     args = SimpleNamespace(megatron_deepgemm_forward_layers=[0, 1])
     model = _Model()
     enable_megatron_layerwise_dump(args, [model], store_prefix="actor_")
@@ -58,9 +58,9 @@ def test_megatron_layerwise_dump(monkeypatch, tmp_path):
 
 
 def test_megatron_layerwise_dump_is_enabled_on_nonzero_rank(monkeypatch, tmp_path):
-    monkeypatch.setenv("SLIME_LAYERWISE_ALIGNMENT_DUMP_DIR", str(tmp_path))
-    monkeypatch.setenv("SLIME_LAYERWISE_ALIGNMENT_MODULE_SUFFIXES", "decoder.layers.0")
-    monkeypatch.setattr("slime.backends.megatron_utils.alignment.layerwise_alignment._global_rank", lambda: 3)
+    monkeypatch.setenv("VIME_LAYERWISE_ALIGNMENT_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("VIME_LAYERWISE_ALIGNMENT_MODULE_SUFFIXES", "decoder.layers.0")
+    monkeypatch.setattr("vime.backends.megatron_utils.alignment.layerwise_alignment._global_rank", lambda: 3)
     args = SimpleNamespace(megatron_deepgemm_forward_layers=[0, 1])
     model = _Model()
 

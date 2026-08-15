@@ -46,7 +46,7 @@ class _MegatronLayerwiseDumper:
         self.store_prefix = store_prefix.rstrip("_") or "actor"
         self.module_suffixes = tuple(
             suffix.strip()
-            for suffix in os.getenv("SLIME_LAYERWISE_ALIGNMENT_MODULE_SUFFIXES", "").split(",")
+            for suffix in os.getenv("VIME_LAYERWISE_ALIGNMENT_MODULE_SUFFIXES", "").split(",")
             if suffix.strip()
         )
         self.pass_id = 0
@@ -116,25 +116,25 @@ class _MegatronLayerwiseDumper:
 def enable_megatron_layerwise_dump(args, model, store_prefix: str) -> None:
     """Register one dump hook per selected layer on every model rank."""
 
-    dump_dir = os.getenv("SLIME_LAYERWISE_ALIGNMENT_DUMP_DIR")
+    dump_dir = os.getenv("VIME_LAYERWISE_ALIGNMENT_DUMP_DIR")
     if not dump_dir:
         return
 
     selected_layers = set(getattr(args, "megatron_deepgemm_forward_layers", []) or [])
     if not selected_layers:
-        raise RuntimeError("SLIME_LAYERWISE_ALIGNMENT_DUMP_DIR requires " "--megatron-deepgemm-forward-layers")
+        raise RuntimeError("VIME_LAYERWISE_ALIGNMENT_DUMP_DIR requires " "--megatron-deepgemm-forward-layers")
 
     registered_layers = 0
     for model_chunk in model:
-        if getattr(model_chunk, "_slime_layerwise_dump_registered", False):
+        if getattr(model_chunk, "_vime_layerwise_dump_registered", False):
             continue
         dumper = _MegatronLayerwiseDumper(dump_dir, selected_layers, store_prefix)
         registered_layers += dumper.register(model_chunk)
-        model_chunk._slime_layerwise_dump_registered = True
-        model_chunk._slime_layerwise_dumper = dumper
+        model_chunk._vime_layerwise_dump_registered = True
+        model_chunk._vime_layerwise_dumper = dumper
 
     if registered_layers == 0 and not any(
-        getattr(model_chunk, "_slime_layerwise_dump_registered", False) for model_chunk in model
+        getattr(model_chunk, "_vime_layerwise_dump_registered", False) for model_chunk in model
     ):
         raise RuntimeError("Could not find selected Megatron decoder layers to dump")
     if registered_layers:

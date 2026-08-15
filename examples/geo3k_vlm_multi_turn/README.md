@@ -27,15 +27,7 @@ The reward model is the default math RM.
 ```bash
 # 1) Set environment variable
 export WANDB_API_KEY=...
-<<<<<<< ours (vime current)
-export VIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct
-export VIME_SCRIPT_NUM_GPUS=4
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-export SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct
-export SLIME_SCRIPT_NUM_GPUS=4
-=======
-export SLIME_SCRIPT_NUM_GPUS=8
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+export VIME_SCRIPT_NUM_GPUS=8
 
 # 2) Download the dataset
 hf download --repo-type dataset VeraIsHere/geo3k_imgurl_processed --local-dir /root/datasets/geo3k_imgurl_processed

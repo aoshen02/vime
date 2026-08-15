@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from slime.utils.data import _parse_generalized_path, read_file
+from vime.utils.data import _parse_generalized_path, read_file
 
 
 NUM_GPUS = 0

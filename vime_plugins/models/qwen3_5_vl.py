@@ -61,7 +61,7 @@ def _load_vision_model(hf_config, dtype: torch.dtype, use_cpu_initialization: bo
         vision_model = vision_model_cls._from_config(hf_config.vision_config)
     vision_model.to(dtype=dtype)
 
-    # HF modules are replicated across TP ranks. Mark them explicitly so slime's
+    # HF modules are replicated across TP ranks. Mark them explicitly so vime's
     # direct weight exporter does not try to tensor-parallel all-gather them.
     for parameter in vision_model.parameters():
         parameter.tensor_model_parallel = False

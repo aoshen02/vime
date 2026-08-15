@@ -1,6 +1,6 @@
 # On-Policy Distillation
 
-On-policy distillation (OPD) trains a student on response tokens sampled from the student's current policy. At every visited prefix, a fixed teacher scores the same next token, providing a dense token-level learning signal along the student's own trajectories. In slime, this signal is a sampled reverse-KL penalty applied to the advantage, so it can be combined with an advantage estimator such as GRPO, PPO, or REINFORCE++. With zero task reward, the same mechanism performs pure distillation.
+On-policy distillation (OPD) trains a student on response tokens sampled from the student's current policy. At every visited prefix, a fixed teacher scores the same next token, providing a dense token-level learning signal along the student's own trajectories. In vime, this signal is a sampled reverse-KL penalty applied to the advantage, so it can be combined with an advantage estimator such as GRPO, PPO, or REINFORCE++. With zero task reward, the same mechanism performs pure distillation.
 
 ## Key Arguments
 
@@ -11,6 +11,7 @@ On-policy distillation (OPD) trains a student on response tokens sampled from th
 | `--opd-kl-coef` | OPD KL penalty coefficient (default: 1.0). Controls the weight of the distillation signal relative to the RL advantage. |
 | `--opd-teacher-load` | Path to teacher Megatron checkpoint. **Required** when `--opd-type=megatron`, **must not be set** when `--opd-type=vllm`. |
 | `--opd-teacher-ckpt-step` | Optional checkpoint step for teacher model. |
+| `--opd-teacher-model` | Optional served model name sent to the external VLLM teacher when `--opd-type=vllm`. |
 
 ## How It Works
 
@@ -25,7 +26,7 @@ $$
 
 The order is important: the student is the first argument of the KL, and the expectation is also over the student distribution. The teacher does not generate the training trajectory; it evaluates the token that the student actually sampled.
 
-slime does not enumerate the full vocabulary to compute this expectation. For each sampled token, it uses the Monte Carlo contribution
+vime does not enumerate the full vocabulary to compute this expectation. For each sampled token, it uses the Monte Carlo contribution
 
 $$
 \hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
@@ -50,18 +51,18 @@ The teacher runs on an external VLLM server. Teacher log-probs are obtained duri
 
 **How it works**:
 1. An external VLLM server runs the teacher model.
-2. During rollout, the custom reward function (`slime.rollout.on_policy_distillation.reward_func`) sends the student's sampled token IDs to the teacher server and obtains the teacher log-probability of those same tokens.
-3. The custom post-processing function (`slime.rollout.on_policy_distillation.post_process_rewards`) trims the teacher log-probs to the response span and stores them in `sample.teacher_log_probs`.
-4. During training, slime subtracts the sampled log-probability difference, scaled by `--opd-kl-coef`, from the base advantage.
+2. During rollout, the custom reward function (`vime.rollout.on_policy_distillation.reward_func`) sends the student's sampled token IDs to the teacher server and obtains the teacher log-probability of those same tokens.
+3. The custom post-processing function (`vime.rollout.on_policy_distillation.post_process_rewards`) trims the teacher log-probs to the response span and stores them in `sample.teacher_log_probs`.
+4. During training, vime subtracts the sampled log-probability difference, scaled by `--opd-kl-coef`, from the base advantage.
 
 **Configuration**:
 ```bash
 --use-opd
 --opd-type vllm
 --opd-kl-coef 1.0
---custom-rm-path slime.rollout.on_policy_distillation.reward_func
---custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
---rm-url http://<TEACHER_IP>:<TEACHER_PORT>/generate
+--custom-rm-path vime.rollout.on_policy_distillation.reward_func
+--custom-reward-post-process-path vime.rollout.on_policy_distillation.post_process_rewards
+--rm-url http://<TEACHER_IP>:<TEACHER_PORT>/inference/v1/generate
 ```
 
 ### Megatron Mode (`--opd-type megatron`)
@@ -98,7 +99,7 @@ hf download Qwen/Qwen3-8B --local-dir /root/Qwen3-8B
 hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k
 
 # 2. Convert student model
-cd /root/slime
+cd /root/vime
 source scripts/models/qwen3-8B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \

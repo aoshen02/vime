@@ -28,7 +28,7 @@ import os
 import time
 
 # Megatron stub must land in sys.modules before anything imports
-# slime.backends.megatron_utils. pytest's prepend importmode puts ``tests/`` on
+# vime.backends.megatron_utils. pytest's prepend importmode puts ``tests/`` on
 # sys.path, so the bare-name import works without an ``__init__.py``.
 import _cp_dist_helpers  # noqa: F401
 import pytest
@@ -89,8 +89,8 @@ def _whiten_worker(rank, world_size, cp_size, dp_size, master_port, result_dir):
             dp_cp_group if with_context_parallel else dp_only_groups[cp_rank]
         )
 
-        from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
-        from slime.backends.megatron_utils.loss import compute_advantages_and_returns
+        from vime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
+        from vime.backends.megatron_utils.loss import compute_advantages_and_returns
 
         def cp_slice(x, total_len, response_len):
             """Keep only the response positions this CP rank owns."""

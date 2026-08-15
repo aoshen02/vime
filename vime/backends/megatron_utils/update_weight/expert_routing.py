@@ -8,8 +8,8 @@ from typing import Any
 
 import torch.distributed as dist
 
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.types import ParamInfo
+from vime.utils.distributed_utils import get_gloo_group
+from vime.utils.types import ParamInfo
 
 __all__ = ["configure_expert_routing"]
 
@@ -42,8 +42,10 @@ _ExpertTransferGroup = tuple[_ExpertTransferBatch, ...]
 class _VLLMMoeTopology:
     tp_size: int
     pp_size: int
+    pcp_size: int
+    dp_size: int
+    enable_expert_parallel: bool
     ep_size: int
-    moe_dp_size: int
 
 
 def _config_value(
@@ -61,26 +63,56 @@ def _get_vllm_moe_topology(
     engine_gpu_count: int,
     parallel_config: Mapping[str, Any] | None = None,
 ) -> _VLLMMoeTopology:
-    pp_size = int(_config_value(parallel_config, "pp_size", getattr(args, "vllm_pp_size", 1)))
-    default_tp_size = engine_gpu_count // pp_size
-    tp_size = int(_config_value(parallel_config, "tp_size", default_tp_size))
-    ep_size = int(_config_value(parallel_config, "ep_size", getattr(args, "vllm_ep_size", 1)))
-    moe_dp_size = int(_config_value(parallel_config, "moe_dp_size", getattr(args, "vllm_moe_dp_size", 1)))
+    pp_size = int(_config_value(parallel_config, "pp_size", getattr(args, "vllm_pp_size", 1)) or 1)
+    pcp_size = int(
+        _config_value(
+            parallel_config,
+            "pcp_size",
+            getattr(args, "vllm_prefill_context_parallel_size", 1),
+        )
+        or 1
+    )
+    dp_size = int(_config_value(parallel_config, "dp_size", getattr(args, "vllm_dp_size", 1)) or 1)
+    parallel_divisor = pp_size * pcp_size * dp_size
+    if engine_gpu_count % parallel_divisor:
+        raise ValueError(
+            f"VLLM engine GPU count {engine_gpu_count} is not divisible by PP*PCP*DP "
+            f"({pp_size}*{pcp_size}*{dp_size})"
+        )
+    default_tp_size = engine_gpu_count // parallel_divisor
+    tp_size = int(_config_value(parallel_config, "tp_size", default_tp_size) or default_tp_size)
+    if tp_size * parallel_divisor != engine_gpu_count:
+        raise ValueError(
+            f"VLLM engine GPU count {engine_gpu_count} does not match TP*PP*PCP*DP "
+            f"({tp_size}*{pp_size}*{pcp_size}*{dp_size})"
+        )
+    enable_expert_parallel = bool(
+        _config_value(
+            parallel_config,
+            "enable_expert_parallel",
+            getattr(args, "vllm_enable_expert_parallel", False),
+        )
+    )
+    ep_size = tp_size * pcp_size * dp_size if enable_expert_parallel else 1
 
     return _VLLMMoeTopology(
         tp_size=tp_size,
         pp_size=pp_size,
+        pcp_size=pcp_size,
+        dp_size=dp_size,
+        enable_expert_parallel=enable_expert_parallel,
         ep_size=ep_size,
-        moe_dp_size=moe_dp_size,
     )
 
 
-def _vllm_topology_signature(topology: _VLLMMoeTopology) -> tuple[int, int, int, int]:
+def _vllm_topology_signature(topology: _VLLMMoeTopology) -> tuple[int, int, int, int, bool, int]:
     return (
         topology.tp_size,
         topology.pp_size,
+        topology.pcp_size,
+        topology.dp_size,
+        topology.enable_expert_parallel,
         topology.ep_size,
-        topology.moe_dp_size,
     )
 
 
@@ -114,13 +146,20 @@ def _can_route_experts(
 ) -> bool:
     from megatron.core import mpu
 
+    eplb_config = getattr(args, "vllm_eplb_config", None)
+    if isinstance(eplb_config, Mapping):
+        num_redundant_experts = eplb_config.get("num_redundant_experts", 0)
+    else:
+        num_redundant_experts = getattr(eplb_config, "num_redundant_experts", 0)
+
     return (
         vllm_moe_topology.pp_size == 1
+        and vllm_moe_topology.enable_expert_parallel
         and vllm_moe_topology.ep_size > 1
         and not getattr(args, "vllm_enable_eplb", False)
-        and getattr(args, "vllm_ep_num_redundant_experts", 0) == 0
-        and getattr(args, "vllm_init_expert_location", "trivial") == "trivial"
-        and not getattr(args, "vllm_enable_elastic_expert_backup", False)
+        and num_redundant_experts == 0
+        and getattr(args, "vllm_expert_placement_strategy", "linear") == "linear"
+        and not getattr(args, "vllm_enable_elastic_ep", False)
         and mpu.get_expert_tensor_parallel_world_size() == 1
         and _vllm_moe_tp_is_one(engine_gpu_counts, vllm_moe_topology)
     )
@@ -133,7 +172,7 @@ def _vllm_moe_tp_is_one(
     """Return whether each VLLM engine has no tensor parallelism inside experts."""
     if topology.pp_size != 1:
         return False
-    expected_size = topology.ep_size * topology.moe_dp_size
+    expected_size = topology.pp_size * topology.ep_size
     return all(gpu_count == expected_size for gpu_count in engine_gpu_counts)
 
 
@@ -142,22 +181,18 @@ def _get_expert_target_ranks(
     engine_gpu_offsets: Sequence[int],
     *,
     ep_size: int,
-    moe_dp_size: int,
     world_size: int,
 ) -> tuple[tuple[int, ...], ...]:
-    """Map each EP shard to colocated ranks; engine_size=EP*MoE-DP means MoE-TP=1."""
-    expected_size = ep_size * moe_dp_size
+    """Map each EP shard to the corresponding colocated rank."""
+    expected_size = ep_size
     targets = [[] for _ in range(ep_size)]
     for gpu_count, gpu_offset in zip(engine_gpu_counts, engine_gpu_offsets, strict=True):
         if gpu_count != expected_size:
-            raise ValueError(
-                f"VLLM MoE TP must be 1, got engine_size={gpu_count}, EP={ep_size}, MoE-DP={moe_dp_size}"
-            )
+            raise ValueError(f"VLLM MoE TP must be 1, got engine_size={gpu_count}, EP={ep_size}")
         if gpu_offset < 0 or gpu_offset + gpu_count > world_size:
             raise ValueError("VLLM engine is outside the Megatron world")
-        for dp_rank in range(moe_dp_size):
-            for ep_rank in range(ep_size):
-                targets[ep_rank].append(gpu_offset + dp_rank * ep_size + ep_rank)
+        for ep_rank in range(ep_size):
+            targets[ep_rank].append(gpu_offset + ep_rank)
     return tuple(tuple(ranks) for ranks in targets)
 
 
@@ -347,7 +382,6 @@ def configure_expert_routing(
             engine_gpu_counts,
             engine_gpu_offsets,
             ep_size=vllm_moe_topology.ep_size,
-            moe_dp_size=vllm_moe_topology.moe_dp_size,
             world_size=dist.get_world_size(),
         )
         expert_params = _build_expert_params(
@@ -366,11 +400,10 @@ def configure_expert_routing(
     if dist.get_rank() == 0:
         logger.info(
             "Enabled rank-local expert update: Megatron PP=%d EP=%d, VLLM EP=%d, "
-            "MoE-DP=%d, %d -> %d transfer groups (%d dense + %d expert, %d expert transfer batches)",
+            "%d -> %d transfer groups (%d dense + %d expert, %d expert transfer batches)",
             mpu.get_pipeline_model_parallel_world_size(),
             mpu.get_expert_model_parallel_world_size(),
             vllm_moe_topology.ep_size,
-            vllm_moe_topology.moe_dp_size,
             len(full_param_info_buckets),
             len(dense_buckets) + len(expert_transfer_plan),
             len(dense_buckets),

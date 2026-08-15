@@ -1,6 +1,6 @@
 # 在策略蒸馏 (On-Policy Distillation)
 
-在策略蒸馏 (OPD) 使用学生当前策略采样的 response token 来训练学生。对于学生轨迹中访问到的每个前缀，固定的教师模型为同一个 next token 评分，从而沿学生自己的轨迹提供稠密的 token 级学习信号。在 slime 中，这一信号以逆 KL 的采样估计惩罚 advantage，因此可以与 GRPO、PPO、REINFORCE++ 等 advantage estimator 组合；当任务奖励为零时，同一机制就是纯蒸馏。
+在策略蒸馏 (OPD) 使用学生当前策略采样的 response token 来训练学生。对于学生轨迹中访问到的每个前缀，固定的教师模型为同一个 next token 评分，从而沿学生自己的轨迹提供稠密的 token 级学习信号。在 vime 中，这一信号以逆 KL 的采样估计惩罚 advantage，因此可以与 GRPO、PPO、REINFORCE++ 等 advantage estimator 组合；当任务奖励为零时，同一机制就是纯蒸馏。
 
 ## 关键参数
 
@@ -11,6 +11,7 @@
 | `--opd-kl-coef` | OPD KL 惩罚系数（默认值：1.0）。控制蒸馏信号相对于 RL advantage 的权重。 |
 | `--opd-teacher-load` | 教师模型的 Megatron checkpoint 路径。`--opd-type=megatron` 时**必须**设置，`--opd-type=vllm` 时**不可**设置。 |
 | `--opd-teacher-ckpt-step` | 可选的教师模型 checkpoint 步数。 |
+| `--opd-teacher-model` | `--opd-type=vllm` 时发送给外部 VLLM 教师服务的可选模型名。 |
 
 ## 原理
 
@@ -25,7 +26,7 @@ $$
 
 这里的顺序很重要：KL 的第一个参数是学生分布，期望同样对学生分布取值。教师不生成训练轨迹，而是评估学生实际采样的 token。
 
-slime 不会遍历完整词表来精确计算这个期望。对于每个采样 token，它使用如下 Monte Carlo 贡献：
+vime 不会遍历完整词表来精确计算这个期望。对于每个采样 token，它使用如下 Monte Carlo 贡献：
 
 $$
 \hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
@@ -50,18 +51,18 @@ $$
 
 **工作流程**：
 1. 外部 VLLM 服务器运行教师模型。
-2. 在 rollout 阶段，自定义 reward 函数（`slime.rollout.on_policy_distillation.reward_func`）将学生采样的 token ID 发送给教师服务器，并获取教师对这些相同 token 的 log-probability。
-3. 自定义后处理函数（`slime.rollout.on_policy_distillation.post_process_rewards`）将教师 log-probs 裁剪到 response 范围并存储到 `sample.teacher_log_probs` 中。
-4. 在训练阶段，slime 从基础 advantage 中减去按 `--opd-kl-coef` 缩放后的采样 log-probability 差值。
+2. 在 rollout 阶段，自定义 reward 函数（`vime.rollout.on_policy_distillation.reward_func`）将学生采样的 token ID 发送给教师服务器，并获取教师对这些相同 token 的 log-probability。
+3. 自定义后处理函数（`vime.rollout.on_policy_distillation.post_process_rewards`）将教师 log-probs 裁剪到 response 范围并存储到 `sample.teacher_log_probs` 中。
+4. 在训练阶段，vime 从基础 advantage 中减去按 `--opd-kl-coef` 缩放后的采样 log-probability 差值。
 
 **配置**：
 ```bash
 --use-opd
 --opd-type vllm
 --opd-kl-coef 1.0
---custom-rm-path slime.rollout.on_policy_distillation.reward_func
---custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
---rm-url http://<TEACHER_IP>:<TEACHER_PORT>/generate
+--custom-rm-path vime.rollout.on_policy_distillation.reward_func
+--custom-reward-post-process-path vime.rollout.on_policy_distillation.post_process_rewards
+--rm-url http://<TEACHER_IP>:<TEACHER_PORT>/inference/v1/generate
 ```
 
 ### Megatron 模式 (`--opd-type megatron`)
@@ -98,7 +99,7 @@ hf download Qwen/Qwen3-8B --local-dir /root/Qwen3-8B
 hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k
 
 # 2. 转换学生模型
-cd /root/slime
+cd /root/vime
 source scripts/models/qwen3-8B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \

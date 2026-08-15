@@ -3,8 +3,8 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
+from vime.utils.misc import load_function
+from vime.utils.types import Sample
 
 _current_rollout_id: int | None = None
 

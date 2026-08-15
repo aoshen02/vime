@@ -1,4 +1,4 @@
-"""CPU unit tests for ``slime.utils.eval_config.build_eval_dataset_configs``.
+"""CPU unit tests for ``vime.utils.eval_config.build_eval_dataset_configs``.
 
 The documented contract (examples/eval_multi_task/README.md) is that
 ``eval.defaults`` "defines inference parameters shared by every dataset entry.
@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from slime.utils.eval_config import build_eval_dataset_configs
+from vime.utils.eval_config import build_eval_dataset_configs
 
 
 NUM_GPUS = 0

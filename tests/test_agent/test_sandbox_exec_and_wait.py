@@ -1,4 +1,4 @@
-"""CPU tests for ``slime.agent.sandbox.exec_and_wait``'s spawn-lock contract.
+"""CPU tests for ``vime.agent.sandbox.exec_and_wait``'s spawn-lock contract.
 
 The detached spawn is guarded by ``mkdir {lock_dir} || exit 0`` so that a
 transport-level retry of the *same* spawn RPC (a severed response replayed by
@@ -27,8 +27,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import slime.agent.sandbox as sandbox_mod
-from slime.agent.sandbox import exec_and_wait
+import vime.agent.sandbox as sandbox_mod
+from vime.agent.sandbox import exec_and_wait
 
 
 _POLL_RE = re.compile(r"test -f (\S+) && cat \1")

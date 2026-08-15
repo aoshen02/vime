@@ -3,7 +3,6 @@
 import sys
 import tempfile
 from argparse import Namespace
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -169,14 +168,15 @@ class TestZeroGpuRolloutConfig:
         assert args.vllm_model_routers == {"default": ("127.0.0.1", 3456)}
 
     def test_server_group_parallel_config_derives_tp_from_overridden_pp(self):
-        from slime.ray.rollout import ServerGroup
+        from vime.ray.rollout import ServerGroup
 
         args = Namespace(
             num_gpus_per_node=8,
-            vllm_pp_size=1,
-            vllm_ep_size=32,
-            vllm_moe_dp_size=1,
-            vllm_moe_a2a_backend="deepep",
+            vllm_pipeline_parallel_size=1,
+            vllm_prefill_context_parallel_size=1,
+            vllm_data_parallel_size=1,
+            vllm_dp_size=1,
+            vllm_enable_expert_parallel=True,
         )
 
         group = ServerGroup(
@@ -185,14 +185,51 @@ class TestZeroGpuRolloutConfig:
             all_engines=[object()],
             num_gpus_per_engine=32,
             num_new_engines=1,
-            vllm_overrides={"pp_size": 2},
+            vllm_overrides={"pipeline_parallel_size": 2},
         )
 
-        assert group.parallel_config()["pp_size"] == 2
-        assert group.parallel_config()["tp_size"] == 16
+        assert group.parallel_config() == {
+            "tp_size": 16,
+            "pp_size": 2,
+            "pcp_size": 1,
+            "dp_size": 1,
+            "enable_expert_parallel": True,
+            "ep_size": 16,
+        }
 
-    def test_vllm_server_args_derive_tp_from_overridden_pp(self):
-        from slime.backends.vllm_utils.vllm_engine import _compute_server_args
+    def test_server_group_parallel_config_derives_tp_from_overridden_pcp(self):
+        from vime.ray.rollout import ServerGroup
+
+        args = Namespace(
+            num_gpus_per_node=8,
+            vllm_pipeline_parallel_size=1,
+            vllm_prefill_context_parallel_size=1,
+            vllm_data_parallel_size=1,
+            vllm_dp_size=1,
+            vllm_enable_expert_parallel=True,
+        )
+        group = ServerGroup(
+            args=args,
+            pg=None,
+            all_engines=[object()],
+            num_gpus_per_engine=8,
+            num_new_engines=1,
+            vllm_overrides={"prefill_context_parallel_size": 2, "data_parallel_size": 2},
+        )
+
+        assert group.parallel_config() == {
+            "tp_size": 2,
+            "pp_size": 1,
+            "pcp_size": 2,
+            "dp_size": 2,
+            "enable_expert_parallel": True,
+            "ep_size": 8,
+        }
+
+    def test_vllm_server_args_derive_tp_from_overridden_pp(self, monkeypatch):
+        from vime.backends.vllm_utils import vllm_engine
+
+        monkeypatch.setattr(vllm_engine, "_VLLM_SERVER_FIELDS", frozenset())
 
         args = Namespace(
             hf_checkpoint="/tmp/hf",
@@ -200,39 +237,36 @@ class TestZeroGpuRolloutConfig:
             offload_rollout=False,
             rollout_num_gpus_per_engine=32,
             num_gpus_per_node=8,
-            vllm_pp_size=1,
-            vllm_dp_size=16,
-            vllm_ep_size=32,
+            vllm_pipeline_parallel_size=1,
+            vllm_prefill_context_parallel_size=1,
+            vllm_data_parallel_size=1,
+            vllm_dp_size=1,
+            vllm_enable_expert_parallel=True,
             use_rollout_routing_replay=False,
             fp16=False,
+            colocate=False,
+            rollout_max_context_len=None,
+            vllm_max_model_len=None,
         )
 
-        kwargs, _ = _compute_server_args(
+        kwargs, _ = vllm_engine._compute_server_args(
             args,
             rank=0,
             dist_init_addr="127.0.0.1:12345",
-            nccl_port=12346,
             host="127.0.0.1",
             port=30000,
             base_gpu_id=0,
-            vllm_overrides={"pp_size": 2},
+            vllm_overrides={"pipeline_parallel_size": 2},
             num_gpus_per_engine=32,
         )
 
-        assert kwargs["pp_size"] == 2
-        assert kwargs["tp_size"] == 16
+        assert kwargs["pipeline_parallel_size"] == 2
+        assert kwargs["tensor_parallel_size"] == 16
 
-    def test_memory_saver_disables_default_breakable_prefill_cuda_graph(self, monkeypatch):
-        from slime.backends.vllm_utils import vllm_engine
+    def test_offload_rollout_enables_vllm_sleep_mode(self, monkeypatch):
+        from vime.backends.vllm_utils import vllm_engine
 
-        @dataclass
-        class CurrentServerArgs:
-            enable_memory_saver: bool = False
-            cuda_graph_backend_prefill: str | None = None
-
-        @dataclass
-        class LegacyServerArgs:
-            enable_memory_saver: bool = False
+        monkeypatch.setattr(vllm_engine, "_VLLM_SERVER_FIELDS", frozenset())
 
         args = Namespace(
             hf_checkpoint="/tmp/hf",
@@ -240,32 +274,29 @@ class TestZeroGpuRolloutConfig:
             offload_rollout=True,
             rollout_num_gpus_per_engine=1,
             num_gpus_per_node=8,
-            vllm_pp_size=1,
+            vllm_pipeline_parallel_size=1,
+            vllm_prefill_context_parallel_size=1,
+            vllm_data_parallel_size=1,
             vllm_dp_size=1,
-            vllm_ep_size=1,
+            vllm_enable_expert_parallel=False,
             use_rollout_routing_replay=False,
             fp16=False,
+            colocate=False,
+            rollout_max_context_len=None,
+            vllm_max_model_len=None,
+            vllm_enable_sleep_mode=False,
         )
         compute_kwargs = {
             "rank": 0,
             "dist_init_addr": "127.0.0.1:12345",
-            "nccl_port": 12346,
             "host": "127.0.0.1",
             "port": 30000,
             "base_gpu_id": 0,
         }
 
-        monkeypatch.setattr(vllm_engine, "ServerArgs", CurrentServerArgs)
         kwargs, _ = vllm_engine._compute_server_args(args, **compute_kwargs)
-        assert kwargs["cuda_graph_backend_prefill"] == "disabled"
-
-        args.vllm_cuda_graph_backend_prefill = "full"
-        kwargs, _ = vllm_engine._compute_server_args(args, **compute_kwargs)
-        assert kwargs["cuda_graph_backend_prefill"] == "full"
-
-        monkeypatch.setattr(vllm_engine, "ServerArgs", LegacyServerArgs)
-        kwargs, _ = vllm_engine._compute_server_args(args, **compute_kwargs)
-        assert "cuda_graph_backend_prefill" not in kwargs
+        assert kwargs["enable_sleep_mode"] is True
+        assert args.vllm_enable_sleep_mode is True
 
     def test_start_rollout_servers_defers_engine_wait(self, monkeypatch):
         from vime.ray import rollout as rollout_module

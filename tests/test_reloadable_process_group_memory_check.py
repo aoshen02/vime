@@ -101,6 +101,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
         world_size=4,
     )
     monkeypatch.setattr(rpg, "default_process_group_states", {rpg.os.getpid(): state})
+    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
 
     events = []
 
@@ -120,8 +121,8 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
     monkeypatch.setattr(rpg, "init_gloo_group", lambda: events.append(("init_canonical_gloo",)))
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
-        "destroy_process_groups",
-        staticmethod(lambda: events.append(("destroy_subgroups",))),
+        "invalidate_process_groups",
+        staticmethod(lambda: events.append(("invalidate_subgroups",))),
     )
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
@@ -135,9 +136,8 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
     assert state.generation == 1
     assert events == [
         ("barrier", "canonical-gloo"),
-        ("destroy_subgroups",),
-        ("barrier", "canonical-gloo"),
         ("destroy_world",),
+        ("invalidate_subgroups",),
         ("set_gloo", None),
         (
             "init",
@@ -180,6 +180,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
 def test_unregistered_world_preserves_subgroup_only_behavior(monkeypatch):
     events = []
     monkeypatch.setattr(rpg, "default_process_group_states", {})
+    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
         "destroy_process_groups",

@@ -3,37 +3,9 @@ import os
 import vime.utils.misc as U
 from vime.utils.external_utils.command_utils import execute_train
 
-<<<<<<< ours (vime current)
-MODEL_NAME = os.environ.get("VIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
-assert MODEL_NAME in {
-    "Qwen3-VL-2B-Instruct",
-    "Qwen3-VL-4B-Instruct",
-    "Qwen3-VL-8B-Instruct",
-    "Qwen3-VL-2B-Thinking",
-    "Qwen3-VL-4B-Thinking",
-    "Qwen3-VL-8B-Thinking",
-}
-
-NUM_GPUS = int(os.environ.get("VIME_SCRIPT_NUM_GPUS", "8"))
-EXTERNAL_RAY = int(os.environ.get("VIME_SCRIPT_EXTERNAL_RAY", "0"))
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
-assert MODEL_NAME in {
-    "Qwen3-VL-2B-Instruct",
-    "Qwen3-VL-4B-Instruct",
-    "Qwen3-VL-8B-Instruct",
-    "Qwen3-VL-2B-Thinking",
-    "Qwen3-VL-4B-Thinking",
-    "Qwen3-VL-8B-Thinking",
-}
-
-NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "4"))
-EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
-=======
 MODEL_NAME = "Qwen3.5-35B-A3B"
 
-NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "8"))
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+NUM_GPUS = int(os.environ.get("VIME_SCRIPT_NUM_GPUS", "8"))
 
 DATASET_NAME = "VeraIsHere/geo3k_imgurl_processed"
 DATA_ROOT = "/root/datasets/geo3k_imgurl_processed"
@@ -110,36 +82,20 @@ def execute():
 
     cudagraph_sizes = " ".join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))
     vllm_args = (
-<<<<<<< ours (vime current)
-        "--rollout-num-gpus-per-engine 1 "
+        f"--rollout-num-gpus-per-engine {NUM_GPUS} "
         "--router-policy consistent_hash "
         "--vllm-max-model-len 32768 "
-        "--vllm-gpu-memory-utilization 0.9 "
+        "--vllm-enable-expert-parallel "
+        "--vllm-gpu-memory-utilization 0.6 "
         "--vllm-generation-config vllm "
         f"--vllm-cudagraph-capture-sizes {cudagraph_sizes} "
         "--vllm-logprobs-mode processed_logprobs "
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-        "--rollout-num-gpus-per-engine 1 "
-        "--vllm-mem-fraction-static 0.6 "
-        f"--vllm-cuda-graph-bs {' '.join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))} "
-=======
-        f"--rollout-num-gpus-per-engine {NUM_GPUS} "
-        f"--vllm-ep-size {NUM_GPUS} "
-        "--vllm-mem-fraction-static 0.6 "
-        f"--vllm-cuda-graph-bs {' '.join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))} "
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     )
 
     backend_args = (
         "--train-backend megatron "
         f"--load /root/models/{MODEL_NAME} "
-<<<<<<< ours (vime current)
-        "--tensor-model-parallel-size 1 "
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-        "--tensor-model-parallel-size 4 "
-=======
         "--tensor-model-parallel-size 2 "
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
         "--context-parallel-size 1 "

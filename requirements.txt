@@ -19,15 +19,9 @@ qwen_vl_utils # for VLM
 ray[default]
 ring_flash_attn
 safetensors
-<<<<<<< ours (vime current)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-vllm-router>=0.2.3
-=======
-vllm-router>=0.3.0
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 tensorboard
 transformers
 vllm-router>=0.1.15
 wandb
-xxhash  # disk delta weight sync (checksum + codec)
+xxhash  # disk delta weight sync checksum
 zstandard

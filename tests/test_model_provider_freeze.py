@@ -23,7 +23,7 @@ def _load_model_provider(monkeypatch):
         ),
         "megatron.training": types.ModuleType("megatron.training"),
         "megatron.training.arguments": types.ModuleType("megatron.training.arguments"),
-        "slime.utils.misc": types.ModuleType("slime.utils.misc"),
+        "vime.utils.misc": types.ModuleType("vime.utils.misc"),
     }
     modules["megatron.core"].tensor_parallel = types.SimpleNamespace()
     modules["megatron.core.models.gpt"].GPTModel = torch.nn.Module
@@ -34,11 +34,11 @@ def _load_model_provider(monkeypatch):
     modules["megatron.core.transformer.spec_utils"].import_module = lambda value: value
     modules["megatron.core.transformer.transformer_config"].TransformerConfig = object
     modules["megatron.training.arguments"].core_transformer_config_from_args = lambda args: object()
-    modules["slime.utils.misc"].load_function = lambda value: value
+    modules["vime.utils.misc"].load_function = lambda value: value
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
 
-    module_path = Path(__file__).resolve().parents[1] / "slime" / "backends" / "megatron_utils" / "model_provider.py"
+    module_path = Path(__file__).resolve().parents[1] / "vime" / "backends" / "megatron_utils" / "model_provider.py"
     module_name = "test_model_provider_freeze_module"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -96,7 +96,7 @@ def test_freeze_indexer_covers_glm_and_upstream_dsa_names(monkeypatch):
 
     model_provider.freeze_model_params(model, args)
 
-    frozen = set(model._slime_frozen_indexer_param_names)
+    frozen = set(model._vime_frozen_indexer_param_names)
     assert frozen
     for name, parameter in model.named_parameters():
         if name in frozen:

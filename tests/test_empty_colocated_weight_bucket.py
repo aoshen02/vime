@@ -86,7 +86,11 @@ def _install_fake_deps(monkeypatch):
     torch_mod.distributed = dist_mod
     torch_mod.empty = lambda size, dtype, device: {"size": size, "dtype": dtype, "device": device}
     torch_mod.no_grad = lambda: (lambda fn: fn)
-    torch_mod.cuda = types.SimpleNamespace(current_device=lambda: "cuda:0", ipc_collect=lambda: None)
+    torch_mod.cuda = types.SimpleNamespace(
+        current_device=lambda: 0,
+        get_device_properties=lambda _device: types.SimpleNamespace(uuid="gpu-0"),
+        ipc_collect=lambda: None,
+    )
     torch_mod.nn = types.SimpleNamespace(Module=object)
 
     ray_mod = types.ModuleType("ray")
@@ -103,27 +107,21 @@ def _install_fake_deps(monkeypatch):
     vllm_mod.FlattenedTensorBucket = _FakeFlattenedTensorBucket
     vllm_mod.MultiprocessingSerializer = _FakeMultiprocessingSerializer
 
-<<<<<<< ours (vime current)
-    distributed_utils_mod = types.ModuleType("vime.utils.distributed_utils")
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    distributed_utils_mod = types.ModuleType("slime.utils.distributed_utils")
-=======
-    megatron_to_hf_mod = types.ModuleType("slime.backends.megatron_utils.megatron_to_hf")
+    megatron_to_hf_mod = types.ModuleType("vime.backends.megatron_utils.megatron_to_hf")
     megatron_to_hf_mod.convert_to_hf = lambda *args, **kwargs: []
 
-    expert_routing_mod = types.ModuleType("slime.backends.megatron_utils.update_weight.expert_routing")
+    expert_routing_mod = types.ModuleType("vime.backends.megatron_utils.update_weight.expert_routing")
     expert_routing_mod.configure_expert_routing = lambda *args, **kwargs: (None, [])
 
     hf_weight_iterator_base_mod = types.ModuleType(
-        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_base"
+        "vime.backends.megatron_utils.update_weight.hf_weight_iterator_base"
     )
     hf_weight_iterator_base_mod.HfWeightIteratorBase = types.SimpleNamespace(create=lambda *args, **kwargs: None)
 
-    slime_utils_types_mod = types.ModuleType("slime.utils.types")
-    slime_utils_types_mod.ParamInfo = type("ParamInfo", (), {})
+    vime_utils_types_mod = types.ModuleType("vime.utils.types")
+    vime_utils_types_mod.ParamInfo = type("ParamInfo", (), {})
 
-    distributed_utils_mod = types.ModuleType("slime.utils.distributed_utils")
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+    distributed_utils_mod = types.ModuleType("vime.utils.distributed_utils")
     distributed_utils_mod.get_gloo_group = lambda: object()
 
     update_from_distributed_mod = types.ModuleType(
@@ -146,24 +144,16 @@ def _install_fake_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "megatron", megatron_mod)
     monkeypatch.setitem(sys.modules, "megatron.core", megatron_core_mod)
     monkeypatch.setitem(sys.modules, "megatron.core.mpu", mpu_mod)
-<<<<<<< ours (vime current)
     monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.vllm", vllm_mod)
-    monkeypatch.setitem(sys.modules, "vime.utils.distributed_utils", distributed_utils_mod)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.vllm", vllm_mod)
-    monkeypatch.setitem(sys.modules, "slime.utils.distributed_utils", distributed_utils_mod)
-=======
-    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.vllm", vllm_mod)
-    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.megatron_to_hf", megatron_to_hf_mod)
-    monkeypatch.setitem(sys.modules, "slime.backends.megatron_utils.update_weight.expert_routing", expert_routing_mod)
+    monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.megatron_to_hf", megatron_to_hf_mod)
+    monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.update_weight.expert_routing", expert_routing_mod)
     monkeypatch.setitem(
         sys.modules,
-        "slime.backends.megatron_utils.update_weight.hf_weight_iterator_base",
+        "vime.backends.megatron_utils.update_weight.hf_weight_iterator_base",
         hf_weight_iterator_base_mod,
     )
-    monkeypatch.setitem(sys.modules, "slime.utils.types", slime_utils_types_mod)
-    monkeypatch.setitem(sys.modules, "slime.utils.distributed_utils", distributed_utils_mod)
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+    monkeypatch.setitem(sys.modules, "vime.utils.types", vime_utils_types_mod)
+    monkeypatch.setitem(sys.modules, "vime.utils.distributed_utils", distributed_utils_mod)
     monkeypatch.setitem(
         sys.modules,
         "vime.backends.megatron_utils.update_weight.update_weight_from_distributed",
@@ -189,12 +179,12 @@ def _load_update_weight_module(monkeypatch):
 
 def test_packed_colocated_bucket_rejects_mismatched_rank_metadata(monkeypatch):
     module, _ = _load_update_weight_module(monkeypatch)
-    empty = {
-        "names": [],
-        "dtype_names": [],
-        "shapes": [],
-        "tensor_sizes": [],
-        "ipc_handles": {"gpu-0": ("empty",)},
+    first = {
+        "names": ["shared.weight"],
+        "dtype_names": ["float16"],
+        "shapes": [[2, 2]],
+        "tensor_sizes": [8],
+        "ipc_handles": {"gpu-0": ("first",)},
     }
     remote = {
         "names": ["expert.weight"],
@@ -205,7 +195,7 @@ def test_packed_colocated_bucket_rejects_mismatched_rank_metadata(monkeypatch):
     }
 
     with pytest.raises(ValueError, match="packed IPC metadata must match"):
-        module._merge_ipc_update_infos([empty, remote])
+        module._merge_ipc_update_infos([first, remote])
 
 
 def test_packed_colocated_bucket_merges_rank_handles(monkeypatch):
@@ -226,6 +216,111 @@ def test_packed_colocated_bucket_merges_rank_handles(monkeypatch):
         **first,
         "ipc_handles": {"gpu-0": ("first",), "gpu-1": ("second",)},
     }
+
+
+def test_packed_colocated_bucket_groups_different_rank_metadata(monkeypatch):
+    module, _ = _load_update_weight_module(monkeypatch)
+    first = {
+        "names": ["experts.0.weight"],
+        "dtype_names": ["bfloat16"],
+        "shapes": [[4, 8]],
+        "tensor_sizes": [64],
+        "ipc_handles": {"gpu-0": ("first",)},
+    }
+    second = {
+        **first,
+        "names": ["experts.1.weight"],
+        "ipc_handles": {"gpu-1": ("second",)},
+    }
+
+    assert module._group_ipc_update_infos([first, second]) == [
+        {**first, "empty_gpu_uuids": ["gpu-1"]},
+        {**second, "empty_gpu_uuids": ["gpu-0"]},
+    ]
+
+
+def test_empty_colocated_bucket_still_participates_in_gather(monkeypatch):
+    module, dist_state = _load_update_weight_module(monkeypatch)
+    dist_state.gathered = lambda local: [local, local]
+    engine = _FakeEngine()
+
+    refs, long_lived_tensor = module._send_to_colocated_engine(
+        [],
+        ipc_engine=engine,
+        ipc_gather_src=0,
+        ipc_gather_group=object(),
+        weight_version=3,
+    )
+
+    assert module._deserialize_ipc_update_info(dist_state.local_object)["empty_gpu_uuids"] == ["gpu-0"]
+    assert refs == []
+    assert long_lived_tensor is None
+    assert engine.update_weights_from_tensor.calls == []
+
+
+def test_source_rank_marks_empty_colocated_bucket_gpu(monkeypatch):
+    module, dist_state = _load_update_weight_module(monkeypatch)
+    remote_info = {
+        "names": ["expert.weight"],
+        "dtype_names": ["bfloat16"],
+        "shapes": [[4, 8]],
+        "tensor_sizes": [64],
+        "ipc_handles": {"gpu-1": ("remote",)},
+    }
+    dist_state.gathered = lambda local: [local, module._serialize_ipc_update_info(remote_info)]
+    engine = _FakeEngine()
+
+    refs, long_lived_tensor = module._send_to_colocated_engine(
+        [],
+        ipc_engine=engine,
+        ipc_gather_src=0,
+        ipc_gather_group=object(),
+        weight_version=7,
+    )
+
+    assert refs == ["ref-1"]
+    assert long_lived_tensor is None
+    assert engine.update_weights_from_tensor.calls == [
+        {
+            **remote_info,
+            "empty_gpu_uuids": ["gpu-0"],
+            "weight_version": "7",
+        }
+    ]
+
+
+def test_source_rank_sends_different_expert_metadata_as_separate_updates(monkeypatch):
+    module, dist_state = _load_update_weight_module(monkeypatch)
+    local_info = {
+        "names": ["experts.0.weight"],
+        "dtype_names": ["bfloat16"],
+        "shapes": [[4, 8]],
+        "tensor_sizes": [64],
+        "ipc_handles": {"gpu-0": ("local",)},
+    }
+    remote_info = {
+        **local_info,
+        "names": ["experts.1.weight"],
+        "ipc_handles": {"gpu-1": ("remote",)},
+    }
+    dist_state.gathered = lambda local: [local, module._serialize_ipc_update_info(remote_info)]
+    engine = _FakeEngine()
+
+    monkeypatch.setattr(module, "_build_packed_ipc_update_info", lambda _tensors: (local_info, "packed"))
+    refs, long_lived_tensor = module._send_to_colocated_engine(
+        [("experts.0.weight", object())],
+        ipc_engine=engine,
+        ipc_gather_src=0,
+        ipc_gather_group=object(),
+        weight_version=8,
+    )
+
+    assert refs == ["ref-1", "ref-2"]
+    assert long_lived_tensor == "packed"
+    assert engine.update_weights_from_tensor.calls == [
+        {**local_info, "empty_gpu_uuids": ["gpu-1"], "weight_version": "8"},
+        {**remote_info, "empty_gpu_uuids": ["gpu-0"], "weight_version": "8"},
+    ]
 
 
 if __name__ == "__main__":

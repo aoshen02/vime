@@ -23,24 +23,10 @@ import os
 import subprocess
 
 GPU_QUEUE = "mithril-h100-pool"
-CI_IMAGE = "vllm/vime:latest"
+CI_IMAGE = os.environ.get("VIME_CI_IMAGE", "vllm/vime:latest")
 HF_CACHE_HOST_PATH = "/mnt/hf-cache"
 HF_HOME = "/root/.cache/huggingface"
 NODE_INSTANCE_TYPE = "gpu-h100-sxm"
-
-# Known hardware-fit failures on the pool's 80 GB H100s — test-level issues,
-# not pipeline ones (PR #239, builds #6/#7):
-#   * gsm8k_async_short: FIXED — max-tokens-per-gpu reduced 9216→2048 (peak
-#     39.6 GB on H200, well within H100 80 GB). Root cause was Qwen3.5 248k
-#     vocab × 5 logits copies in calculate_log_probs_and_entropy.
-#   * parallel_check: cross-layout grad-norm invariance (TP4+per-token-loss)
-#     diverges ~12% on ~11% of rollout data (bimodal: most <1.5%, outliers
-#     10-20%). Confirmed same behavior in slime — Megatron FP reduction-order
-#     non-invariance, not a vime bug.
-# soft_fail keeps them running and visible (orange) without failing the build.
-SOFT_FAIL_ON_H100 = {
-    "test_qwen3_0.6B_parallel_check.py",
-}
 
 # (test_file, num_gpus, extra_args, env overrides)
 SUITES = {
@@ -59,7 +45,12 @@ SUITES = {
         ("test_full_disk_weight_update.py", 4, "", {}),
         ("test_quick_start_glm4_9B.py", 8, "", {}),
         ("test_glm4.7_30B_A3B_pd_mooncake.py", 8, "", {}),
-        ("test_qwen3_30B_A3B.py", 8, "", {"USE_DEEPEP": "1", "USE_FP8_ROLLOUT": "1"}),
+        (
+            "test_qwen3_30B_A3B.py",
+            8,
+            "",
+            {"USE_DEEPEP": "1", "USE_FP8_ROLLOUT": "1"},
+        ),
         ("test_qwen3.6_35B_A3B_pd_mooncake.py", 8, "", {"USE_DEEPEP": "1"}),
         ("test_qwen3_30B_A3B_r3.py", 8, "", {"USE_DEEPEP": "1", "USE_FP8_ROLLOUT": "1", "ENABLE_EVAL": "0"}),
         ("test_qwen3_30B_A3B_r3.py", 8, "", {"ENABLE_EVAL": "0"}),
@@ -74,10 +65,15 @@ SUITES = {
         ("test_mimo_7B_mtp_only_grad.py", 8, "", {}),
         ("test_qwen2.5_0.5B_debug_rollout_then_train.py", 8, "", {}),
         ("test_qwen2.5_0.5B_opd_vllm.py", 8, "", {}),
-        ("test_qwen3_4B_external_pd.py", 6, "", {}),
         ("test_qwen2.5_0.5B_fanout_short.py", 4, "", {}),
+        ("test_qwen2.5_0.5B_debug_train_dump_e2e.py", 8, "", {}),
+        ("test_qwen3_4B_external_pd.py", 6, "", {}),
     ],
     "vime-customized": [
+        ("test_deepgemm_forward.py", 1, "", {}),
+        ("test_deepgemm_moe_forward.py", 1, "", {}),
+        ("test_glm5_vllm_alignment.py", 1, "", {}),
+        ("test_glm5_vllm_ops.py", 1, "", {}),
         ("test_qwen2_5_0_5B_non_colocate_pp.py", 4, "", {}),
         ("test_geo3k_vlm_multi_turn_e2e.py", 1, "", {}),
         ("test_qwen2.5_vl_3B_ep_disaggregation.py", 3, "", {}),
@@ -172,9 +168,6 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
             }
         ],
     }
-    if test_file in SOFT_FAIL_ON_H100:
-        step["soft_fail"] = True
-        step["label"] = ":warning: " + step["label"]
     return step
 
 

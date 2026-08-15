@@ -7,8 +7,8 @@ import pytest
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from slime.utils import distributed_utils
-from slime.utils import reloadable_process_group as rpg
+from vime.utils import distributed_utils
+from vime.utils import reloadable_process_group as rpg
 
 NUM_GPUS = 0
 
@@ -25,6 +25,7 @@ def _run_pp_group_reload_worker(rank: int, world_size: int, rendezvous_path: str
     )
     distributed_utils.init_gloo_group()
     rpg.register_default_process_group(timeout=timeout)
+    rpg._python_process_group_reload_supported = lambda: True
 
     # Exercise the NCCL lifecycle with Gloo so this remains a CPU test.  The
     # relevant contract is the global ordering of WORLD and subgroup teardown,
@@ -97,6 +98,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
         world_size=4,
     )
     monkeypatch.setattr(rpg, "default_process_group_states", {rpg.os.getpid(): state})
+    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
 
     events = []
 
@@ -138,7 +140,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
             "init",
             {
                 "backend": "gloo",
-                "store": ("slime-reloadable-world-1-gloo", "base-store"),
+                "store": ("vime-reloadable-world-1-gloo", "base-store"),
                 "rank": 1,
                 "world_size": 4,
                 "timeout": timeout,
@@ -160,7 +162,7 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
             "init",
             {
                 "backend": "nccl",
-                "store": ("slime-reloadable-world-2-nccl", "base-store"),
+                "store": ("vime-reloadable-world-2-nccl", "base-store"),
                 "rank": 1,
                 "world_size": 4,
                 "timeout": timeout,
@@ -196,6 +198,7 @@ def test_pp_topology_survives_repeated_world_and_subgroup_reload(tmp_path):
 def test_unregistered_world_preserves_subgroup_only_behavior(monkeypatch):
     events = []
     monkeypatch.setattr(rpg, "default_process_group_states", {})
+    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
         "destroy_process_groups",
@@ -216,6 +219,55 @@ def test_unregistered_world_preserves_subgroup_only_behavior(monkeypatch):
     rpg.reload_process_groups()
 
     assert events == ["destroy_subgroups", "reload_subgroups"]
+
+
+@pytest.mark.unit
+def test_unsupported_torch_keeps_process_groups_alive(monkeypatch):
+    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: False)
+    monkeypatch.setattr(
+        rpg.ReloadableProcessGroup,
+        "destroy_process_groups",
+        staticmethod(lambda: pytest.fail("unsupported reload must not destroy subgroups")),
+    )
+    monkeypatch.setattr(
+        rpg.ReloadableProcessGroup,
+        "reload_process_groups",
+        staticmethod(lambda: pytest.fail("unsupported reload must not rebuild subgroups")),
+    )
+
+    rpg.destroy_process_groups()
+    rpg.reload_process_groups()
+
+
+@pytest.mark.unit
+def test_torch_213_supports_process_group_reload(monkeypatch):
+    monkeypatch.setattr(rpg.torch, "__version__", "2.13.0+cu130")
+    assert rpg._python_process_group_reload_supported()
+
+    monkeypatch.setattr(rpg.torch, "__version__", "2.14.0+cu130")
+    assert not rpg._python_process_group_reload_supported()
+
+
+@pytest.mark.unit
+def test_torch_213_collectives_forward_to_inner_group():
+    calls = []
+
+    class Recorder:
+        def _fwd(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+
+    recorder = Recorder()
+    methods = [
+        "all_gather_single",
+        "all_gather_single_coalesced",
+        "reduce_scatter_single",
+        "reduce_scatter_single_coalesced",
+        "monitored_barrier",
+    ]
+    for method in methods:
+        getattr(rpg.ReloadableProcessGroup, method)(recorder, "tensor", async_op=True)
+
+    assert calls == [(method, ("tensor",), {"async_op": True}) for method in methods]
 
 
 if __name__ == "__main__":

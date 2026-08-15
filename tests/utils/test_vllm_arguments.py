@@ -1,4 +1,3 @@
-<<<<<<< ours (vime current)
 """CPU unit tests for ``vime.backends.vllm_utils.arguments``."""
 
 from __future__ import annotations
@@ -34,6 +33,7 @@ def _ns(**overrides):
     base = dict(
         vllm_data_parallel_size=1,
         vllm_pipeline_parallel_size=1,
+        vllm_prefill_context_parallel_size=1,
         rollout_num_gpus_per_engine=4,
         vllm_router_ip=None,
     )
@@ -53,7 +53,7 @@ def test_validate_args_pp1(args_mod):
 @pytest.mark.unit
 def test_validate_args_records_pp_dp_but_no_global_tp(args_mod):
     # validate_args records pp/dp on the namespace but must not precompute a global TP, even when
-    # pp>1 and dp>1. Per-engine TP = gpus_per_engine // (pp * dp) is resolved at launch time.
+    # pp>1 and dp>1. Per-engine TP = gpus_per_engine // (pp * pcp * dp) is resolved at launch time.
     ns = _ns(vllm_pipeline_parallel_size=2, vllm_data_parallel_size=2)
     args_mod.validate_args(ns)
     assert ns.vllm_pp_size == 2
@@ -239,7 +239,7 @@ def test_parse_args_default_attribute_set_even_without_register(args_mod, monkey
 
 @pytest.mark.unit
 def test_parse_args_tp_default_with_dp(args_mod, monkeypatch):
-    """TP auto-compute must divide by DP: TP = gpus / (PP * DP)."""
+    """TP auto-compute must divide by DP: TP = gpus / (PP * PCP * DP)."""
     monkeypatch.setattr(args_mod, "add_vllm_arguments", lambda p: p)
     monkeypatch.setattr(
         sys,
@@ -248,6 +248,28 @@ def test_parse_args_tp_default_with_dp(args_mod, monkeypatch):
     )
     ns = args_mod.vllm_parse_args()
     assert ns.vllm_tensor_parallel_size == 2  # 8 / (1 * 4) = 2
+
+
+@pytest.mark.unit
+def test_parse_args_tp_default_with_pcp_and_dp(args_mod, monkeypatch):
+    monkeypatch.setattr(args_mod, "add_vllm_arguments", lambda p: p)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train.py",
+            "--rollout-num-gpus-per-engine",
+            "8",
+            "--vllm-prefill-context-parallel-size",
+            "2",
+            "--vllm-data-parallel-size",
+            "2",
+        ],
+    )
+
+    ns = args_mod.vllm_parse_args()
+
+    assert ns.vllm_tensor_parallel_size == 2
 
 
 @pytest.mark.unit
@@ -307,40 +329,3 @@ def test_validate_args_rejects_prefill_and_rollout_external(args_mod):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-=======
-from argparse import Namespace
-
-import pytest
-
-from slime.backends.vllm_utils.arguments import validate_args
-
-NUM_GPUS = 0
-
-
-def test_validate_args_canonicalizes_moe_data_parallel_size():
-    args = Namespace(
-        vllm_data_parallel_size=8,
-        vllm_pipeline_parallel_size=7,
-        vllm_expert_parallel_size=8,
-        vllm_moe_data_parallel_size=1,
-        rollout_num_gpus_per_engine=56,
-        vllm_enable_dp_attention=True,
-        vllm_router_ip=None,
-        prefill_num_servers=None,
-        rollout_external=False,
-        vllm_config=None,
-    )
-
-    validate_args(args)
-
-    assert args.vllm_tp_size == 8
-    assert args.vllm_pp_size == 7
-    assert args.vllm_dp_size == 8
-    assert args.vllm_ep_size == 8
-    assert args.vllm_moe_dp_size == 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)

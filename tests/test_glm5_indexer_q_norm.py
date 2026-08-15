@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from slime_plugins.models.glm5.glm5 import DSAMLASelfAttention, IdentityOp
+from vime_plugins.models.glm5.glm5 import DSAMLASelfAttention, IdentityOp
 
 NUM_GPUS = 0
 

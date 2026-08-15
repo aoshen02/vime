@@ -10,13 +10,17 @@ build (PR and push to `main`):
 | `pre-commit` | pre-commit gate | `small_cpu_queue_premerge` (r6in.large) |
 | `plugin-contracts` | plugin contracts and CPU tests (23 files) | `medium_cpu_queue_premerge` (r6in.4xlarge) |
 | `agent-adapter` | agent adapter tests (4 files) | `small_cpu_queue_premerge` |
+| `upstream-sync-cpu` | mechanically synchronized upstream CPU tests | `medium_cpu_queue_premerge` |
 | `utils` | utils tests (`pytest tests/utils`) | `medium_cpu_queue_premerge` |
 
-The three test steps depend on the pre-commit gate. Each suite runs its files
+The four test steps depend on the pre-commit gate. Each suite runs its files
 sequentially inside one step because these queues boot a fresh EC2 instance
-per job — a per-file matrix would be mostly boot + pip-install time. All
-always-on CPU steps use the standard `python:3.11` image and install their
-lightweight dependencies at runtime.
+per job — a per-file matrix would be mostly boot + pip-install time.
+Most always-on CPU steps use the standard `python:3.11` image and install their
+lightweight dependencies at runtime. `upstream-sync-cpu` uses
+`VIME_CI_IMAGE` (default `vllm/vime:latest`) because the synchronized GLM and
+checkpoint tests import the image-pinned Megatron stack even though they do
+not allocate a GPU.
 
 ## Creating the pipeline (one-time, Buildkite UI)
 
@@ -66,6 +70,10 @@ pattern vllm-omni uses for it: each job is a Kubernetes pod (agent-stack-k8s
 startup, so a warm HF cache is all they need. `WANDB_API_KEY` is not wired up
 yet; runs report without wandb until it's added (e.g. as a k8s secret in the
 pod spec).
+
+GPU jobs use `vllm/vime:latest` by default. Set the Buildkite build environment
+variable `VIME_CI_IMAGE` to an immutable release or PR image tag when validating
+Dockerfile or vLLM patch changes before that image is promoted to `latest`.
 
 ## Keeping it in sync
 

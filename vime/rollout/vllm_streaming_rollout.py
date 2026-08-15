@@ -92,34 +92,15 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     prompt_ids = _prepare_prompt_ids(sample, state.tokenizer, state.processor)
     base_prompt_ids = _base_dataset_prompt_ids(sample, state.tokenizer, state.processor)
 
-<<<<<<< ours (vime current)
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    assert (
-        sampling_params["max_new_tokens"] >= 0
-    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
-    if sampling_params["max_new_tokens"] == 0:
-        sample.status = Sample.Status.TRUNCATED
-        return sample
-=======
-    sampling_params["max_new_tokens"] -= sample.response_length
-
-    assert (
-        sampling_params["max_new_tokens"] >= 0
-    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
-    if sampling_params["max_new_tokens"] == 0:
-        sample.status = Sample.Status.TRUNCATED
-        return sample
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     params = dict(sampling_params)
     if len(sample.response) > 0:
         params["max_new_tokens"] -= len(sample.tokens) - len(base_prompt_ids)
 
-    assert params["max_new_tokens"] >= 0, (
-        f"max_new_tokens: {params['max_new_tokens']} should not be less than 0 "
-        f"(after partial continuation adjustment; tokens={len(sample.tokens)}, base_prompt={len(base_prompt_ids)})"
-    )
+    assert (
+        params["max_new_tokens"] >= 0
+    ), f"max_new_tokens: {params['max_new_tokens']} should not be less than 0 (after partial continuation adjustment; tokens={len(sample.tokens)}, base_prompt={len(base_prompt_ids)})"
     if params["max_new_tokens"] == 0:
         sample.status = Sample.Status.TRUNCATED
         return sample
@@ -179,6 +160,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     call_log_probs: list[float] = []
     last_choice: dict[str, Any] | None = None
     last_usage: dict[str, Any] | None = None
+    weight_version: str | None = None
     finish_reason: Any = None
 
     client = http_utils._http_client
@@ -200,6 +182,9 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                 except json.JSONDecodeError:
                     logger.warning("vllm_streaming: skipping non-JSON chunk: %r", data_str[:120])
                     continue
+
+                if chunk.get("weight_version") is not None:
+                    weight_version = str(chunk["weight_version"])
 
                 choices = chunk.get("choices") or []
                 if not choices:
@@ -268,6 +253,8 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
         else:
             finish = {"type": "stop"}
         meta: dict[str, Any] = {"finish_reason": finish}
+        if weight_version is not None:
+            meta["weight_version"] = weight_version
         if last_usage:
             meta["prompt_tokens"] = last_usage.get("prompt_tokens", 0)
             meta["completion_tokens"] = last_usage.get("completion_tokens", 0)
@@ -285,6 +272,8 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
         # tokens already accumulated above; finalize metadata only (no token re-append).
         sample.append_response_tokens(args, meta_info=meta)
     elif state.aborted:
+        if weight_version is not None:
+            sample.weight_versions.append(weight_version)
         sample.status = Sample.Status.ABORTED
 
     return sample

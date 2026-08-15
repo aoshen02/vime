@@ -48,16 +48,11 @@ And to run training,
 bash scripts/run-qwen2.5-0.5B-reproducibility.sh
 ```
 
-<<<<<<< ours (vime current)
 For screen shots of the wandb, please refer to [pull#370](https://github.com/THUDM/slime/pull/370).
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-The wandb screenshots are recorded in [pull#370](https://github.com/THUDM/vime/pull/370).
-=======
-The wandb screenshots are recorded in [pull#370](https://github.com/THUDM/vime/pull/370).
 
 ## Train/rollout log-prob alignment (GLM-5)
 
-Beyond single-side bitwise reproduction, slime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the **GLM-5 structure** (MLA + DSA sparse attention), and requires the deterministic VLLM / batch-invariant DeepGEMM / DeepEP build plus the `megatron-vllm-aligned.patch` Megatron.
+Beyond single-side bitwise reproduction, vime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the **GLM-5 structure** (MLA + DSA sparse attention), and requires the deterministic VLLM / batch-invariant DeepGEMM / DeepEP build plus the `megatron-vllm-aligned.patch` Megatron.
 
 Supported in this path:
 
@@ -80,4 +75,3 @@ The regression gate is `tests/test_glm52_6layer_deterministic_e2e.py` (6-layer G
 An additional short EP8 gate, `tests/test_glm52_layerwise_zero_e2e.py`, records
 the visible output of decoder layers 0–5 on both sides and requires every
 matched hidden-state element to have an absolute difference of exactly zero.
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)

@@ -66,7 +66,6 @@ CKPT_ARGS=(
    --load /root/Qwen3-8B_torch_dist
    --save /root/Qwen3-8B_vime/
    --save-interval 20
-   --megatron-to-hf-mode bridge
 )
 
 ROLLOUT_ARGS=(

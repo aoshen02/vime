@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import sys
 import types
 from pathlib import Path
@@ -15,32 +16,41 @@ try:
 except ModuleNotFoundError:
     _has_megatron = False
 if not _has_megatron:
-    _megatron_utils = types.ModuleType("slime.backends.megatron_utils")
-    _megatron_utils.__path__ = [str(Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils")]
-    sys.modules["slime.backends.megatron_utils"] = _megatron_utils
+    _megatron_utils = types.ModuleType("vime.backends.megatron_utils")
+    _megatron_utils.__path__ = [str(Path(__file__).resolve().parents[1] / "vime/backends/megatron_utils")]
+    sys.modules["vime.backends.megatron_utils"] = _megatron_utils
 
-from slime.backends.megatron_utils.hf_to_megatron import _LOADERS
-from slime.backends.megatron_utils.hf_to_megatron.common import SafetensorReader
-from slime.backends.megatron_utils.hf_to_megatron.deepseek import deepseek_hf_tensor
-from slime.backends.megatron_utils.hf_to_megatron.glm import glm4_hf_tensor, glm4_moe_hf_tensor
-from slime.backends.megatron_utils.hf_to_megatron.qwen import (
+from vime.backends.megatron_utils import megatron_to_hf as megatron_to_hf_module
+from vime.backends.megatron_utils.hf_to_megatron import _LOADERS
+from vime.backends.megatron_utils.hf_to_megatron.common import SafetensorReader
+from vime.backends.megatron_utils.hf_to_megatron.deepseek import deepseek_hf_tensor
+from vime.backends.megatron_utils.hf_to_megatron.glm import glm4_hf_tensor, glm4_moe_hf_tensor
+from vime.backends.megatron_utils.hf_to_megatron.qwen import (
     mimo_hf_tensor,
     minimax_m2_hf_tensor,
     qwen_hf_tensor,
     qwen_moe_hf_tensor,
 )
-from slime.backends.megatron_utils.hf_to_megatron.qwen3_next import qwen3_next_hf_tensor
-from slime.backends.megatron_utils.megatron_to_hf import _convert_to_hf_core
-from slime.backends.megatron_utils.megatron_to_hf.deepseekv3 import convert_deepseekv3_to_hf
-from slime.backends.megatron_utils.megatron_to_hf.glm4 import convert_glm4_to_hf
-from slime.backends.megatron_utils.megatron_to_hf.glm4moe import convert_glm4moe_to_hf
-from slime.backends.megatron_utils.megatron_to_hf.mimo import convert_mimo_to_hf
-from slime.backends.megatron_utils.megatron_to_hf.minimax_m2 import convert_minimax_m2_to_hf
-from slime.backends.megatron_utils.megatron_to_hf.qwen2 import convert_qwen2_to_hf
-from slime.backends.megatron_utils.megatron_to_hf.qwen3_next import convert_qwen3_next_to_hf
-from slime.backends.megatron_utils.megatron_to_hf.qwen3moe import convert_qwen3moe_to_hf
+from vime.backends.megatron_utils.hf_to_megatron.qwen3_next import qwen3_next_hf_tensor
+from vime.backends.megatron_utils.megatron_to_hf import _convert_to_hf_core, convert_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.deepseekv3 import convert_deepseekv3_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.glm4 import convert_glm4_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.glm4moe import convert_glm4moe_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.mimo import convert_mimo_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.minimax_m2 import convert_minimax_m2_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.qwen2 import convert_qwen2_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.qwen3_next import convert_qwen3_next_to_hf
+from vime.backends.megatron_utils.megatron_to_hf.qwen3moe import convert_qwen3moe_to_hf
+from vime.backends.megatron_utils.update_weight.hf_weight_iterator_base import HfWeightIteratorBase
+from vime.backends.megatron_utils.update_weight.hf_weight_iterator_bridge import HfWeightIteratorBridge
 
 NUM_GPUS = 0
+
+
+def test_bridge_weight_iterator_accepts_shared_bucket_argument():
+    signature = inspect.signature(HfWeightIteratorBridge.get_hf_weight_chunks)
+
+    assert "param_info_buckets" in signature.parameters
 
 
 class Reader:
@@ -74,6 +84,29 @@ _EXPORT_ARGS = types.SimpleNamespace(
     num_layers=2,
     q_lora_rank=None,
 )
+
+
+def test_vllm_fp8_weight_transfer_defaults_to_raw_ue8m0_scale(monkeypatch):
+    captured = {}
+    param = torch.ones(1, dtype=torch.bfloat16)
+    monkeypatch.setattr(megatron_to_hf_module, "remove_padding", lambda name, value, vocab_size: value)
+    monkeypatch.setattr(
+        megatron_to_hf_module,
+        "_convert_to_hf_core",
+        lambda args, model_name, name, value: [("model.weight", value)],
+    )
+    monkeypatch.setattr(
+        megatron_to_hf_module,
+        "quantize_params",
+        lambda args, name, tensors, config, transform_ue8m0: captured.setdefault("transform_ue8m0", transform_ue8m0)
+        or tensors,
+    )
+
+    convert_to_hf(types.SimpleNamespace(vocab_size=1), "qwen3", "model.weight", param, {"quant_method": "fp8"})
+
+    assert captured["transform_ue8m0"] is False
+    assert inspect.signature(convert_to_hf).parameters["transform_ue8m0"].default is False
+    assert inspect.signature(HfWeightIteratorBase.__init__).parameters["transform_ue8m0"].default is False
 
 
 @pytest.mark.unit

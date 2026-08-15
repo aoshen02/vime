@@ -200,7 +200,7 @@ def save_debug_train_data(args, *, rollout_id, rollout_data):
     if not mpu.is_pipeline_last_stage(ignore_virtual=True) or mpu.get_tensor_model_parallel_rank() != 0:
         return
 
-    from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+    from vime.backends.megatron_utils.cp_utils import all_gather_with_cp
 
     # All CP ranks in the selected PP/TP group must enter these collectives.
     # CP=1 follows the same normalization path but all_gather_with_cp is an identity.

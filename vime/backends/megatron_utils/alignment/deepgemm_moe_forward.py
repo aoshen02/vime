@@ -26,13 +26,14 @@ import torch
 import torch.nn.functional as F
 from megatron.core import parallel_state
 
-from slime.backends.megatron_utils.alignment.deepgemm_forward import (
+from vime.backends.megatron_utils.alignment.deepgemm_forward import (
     _deepgemm_bf16_gemm_nn,
     _deepgemm_bf16_gemm_nt,
     _deepgemm_bf16_gemm_tn,
     _format_int_ranges,
     _should_log_deepgemm_summary,
     _sum_to_parameter_dtype,
+    _vllm_silu_and_mul,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,9 @@ _DEFAULT_EXPERTS_PER_GROUP = 4
 _DEFAULT_BACKWARD_EXPERTS_PER_GROUP = 4
 _DEFAULT_BACKWARD_MAX_PADDED_BYTES = 256 * 1024 * 1024
 _DEFAULT_TARGET_SUFFIXES = ("mlp.experts",)
-_PREALLOCATED_COMBINE_BUFFER_ATTR = "_slime_preallocated_combine_buffer"
-_PREALLOCATED_TOKEN_COMBINE_ATTR = "_slime_preallocated_token_combine"
-_COMBINE_WORKSPACE_ATTR = "_slime_combine_workspace"
+_PREALLOCATED_COMBINE_BUFFER_ATTR = "_vime_preallocated_combine_buffer"
+_PREALLOCATED_TOKEN_COMBINE_ATTR = "_vime_preallocated_token_combine"
+_COMBINE_WORKSPACE_ATTR = "_vime_combine_workspace"
 _LAYER_PATH_RE = re.compile(r"^(?P<layer_path>(?:.*\.)?decoder\.layers\.(?P<local_layer_index>\d+))(?:\.|$)")
 
 
@@ -252,36 +253,35 @@ def _swiglu_backward_chunked(
 
 
 def _grouped_bf16_backward_experts_per_group(num_local_experts: int) -> int:
-    configured = os.environ.get("SLIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP")
+    configured = os.environ.get("VIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP")
     if configured is None:
         return min(_DEFAULT_BACKWARD_EXPERTS_PER_GROUP, num_local_experts)
     try:
         experts_per_group = int(configured)
     except ValueError as exc:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP must be a " f"positive integer, got {configured!r}"
+            "VIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP must be a " f"positive integer, got {configured!r}"
         ) from exc
     if experts_per_group <= 0:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP must be a "
-            f"positive integer, got {experts_per_group}"
+            "VIME_DEEPGEMM_MOE_BF16_BACKWARD_EXPERTS_PER_GROUP must be a " f"positive integer, got {experts_per_group}"
         )
     return min(experts_per_group, num_local_experts)
 
 
 def _grouped_bf16_backward_max_padded_bytes() -> int:
-    configured = os.environ.get("SLIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES")
+    configured = os.environ.get("VIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES")
     if configured is None:
         return _DEFAULT_BACKWARD_MAX_PADDED_BYTES
     try:
         max_padded_bytes = int(configured)
     except ValueError as exc:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES must be a " f"positive integer, got {configured!r}"
+            "VIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES must be a " f"positive integer, got {configured!r}"
         ) from exc
     if max_padded_bytes <= 0:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES must be a " f"positive integer, got {max_padded_bytes}"
+            "VIME_DEEPGEMM_MOE_BF16_BACKWARD_MAX_PADDED_BYTES must be a " f"positive integer, got {max_padded_bytes}"
         )
     return max_padded_bytes
 
@@ -331,7 +331,7 @@ def _use_grouped_bf16_backward(
     needs_fc1_weights: tuple[bool, ...],
     needs_fc2_weights: tuple[bool, ...],
 ) -> bool:
-    enabled = os.environ.get("SLIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", "1").lower() in {
+    enabled = os.environ.get("VIME_DEEPGEMM_MOE_GROUPED_BF16_BACKWARD", "1").lower() in {
         "1",
         "true",
         "yes",
@@ -694,7 +694,7 @@ def _ordered_route_backward(
 
         fused_route_grad = False
         if grad_routes is not None and grad_output.is_cuda:
-            from slime.backends.megatron_utils.alignment.deterministic_route_kernels import ordered_route_grad
+            from vime.backends.megatron_utils.alignment.deterministic_route_kernels import ordered_route_grad
 
             ordered_route_grad(
                 grad_output.contiguous(),
@@ -900,8 +900,8 @@ class _DeepGEMMMoEWithBF16Backward(torch.autograd.Function):
         ctx.layout = layout
         ctx.counts = counts
         ctx.module_name = module_name
-        ctx.defer_router_probabilities = bool(getattr(module, "_slime_defer_router_probabilities", False))
-        ctx.reuse_expert_input_for_grad = bool(getattr(module, "_slime_reuse_expert_input_for_grad", False))
+        ctx.defer_router_probabilities = bool(getattr(module, "_vime_defer_router_probabilities", False))
+        ctx.reuse_expert_input_for_grad = bool(getattr(module, "_vime_reuse_expert_input_for_grad", False))
         ctx.grad_workspace = getattr(module, _COMBINE_WORKSPACE_ATTR, None)
         ctx.save_for_backward(permuted_local_hidden_states, permuted_probs, *weights)
         return output
@@ -943,7 +943,7 @@ class _DeepGEMMMoEWithBF16Backward(torch.autograd.Function):
                         "Shared MoE backward workspace is too small: "
                         f"need {required_bytes} bytes for {tuple(hidden_states.shape)}, "
                         f"have {workspace.numel()} bytes; increase "
-                        "SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES"
+                        "VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES"
                     )
                 if workspace.device != hidden_states.device:
                     raise RuntimeError(
@@ -1087,34 +1087,21 @@ class _DeepGEMMMoEWithBF16Backward(torch.autograd.Function):
         )
 
 
-def _configure_batch_invariant(deep_gemm: Any, deep_gemm_wrapper: Any) -> bool:
-    enabled = os.environ.get("VLLM_DEEPGEMM_BATCH_INVARIANT", "").lower() in {
+def _configure_batch_invariant(deep_gemm: Any) -> bool:
+    enabled = os.environ.get("VLLM_BATCH_INVARIANT", "").lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
-    # The patched VLLM wrapper exposes configure_deep_gemm_batch_invariant, which
-    # is the H100 path and is used unchanged when present. Some VLLM builds (e.g.
-    # the current B300/cu130 image, without vllm-deterministic.patch) do not ship
-    # it; fall back to DeepGEMM's own set_batch_invariant so batch-invariant mode
-    # can still be toggled on Blackwell.
-    configure = getattr(deep_gemm_wrapper, "configure_deep_gemm_batch_invariant", None)
-    if configure is not None:
-        configure(enabled)
-    else:
-        setter = getattr(deep_gemm, "set_batch_invariant", None)
-        if setter is None:
-            raise RuntimeError(
-                "Neither deep_gemm_wrapper.configure_deep_gemm_batch_invariant nor "
-                "deep_gemm.set_batch_invariant is available; cannot configure "
-                "batch-invariant DeepGEMM kernels"
-            )
-        setter(enabled)
+    setter = getattr(deep_gemm, "set_batch_invariant", None)
+    if setter is None:
+        raise RuntimeError("deep_gemm.set_batch_invariant is unavailable")
+    setter(enabled)
     getter = getattr(deep_gemm, "get_batch_invariant", None)
     if enabled and (getter is None or not getter()):
         raise RuntimeError(
-            "VLLM_DEEPGEMM_BATCH_INVARIANT=1, but the Megatron actor's "
+            "VLLM_BATCH_INVARIANT=1, but the Megatron actor's "
             "DeepGEMM runtime did not enable batch-invariant kernels"
         )
     return enabled
@@ -1123,16 +1110,14 @@ def _configure_batch_invariant(deep_gemm: Any, deep_gemm_wrapper: Any) -> bool:
 def _load_deepgemm_ops() -> _DeepGEMMOps:
     """Load CUDA-only dependencies lazily so CPU tests can mock this boundary."""
     import deep_gemm
-    from sgl_kernel import silu_and_mul
-    from vllm.srt.layers import deep_gemm_wrapper
-    from vllm.srt.layers.moe.ep_moe.kernels import tma_align_input_scale
-    from vllm.srt.layers.quantization.fp8_kernel import vllm_per_token_group_quant_fp8
+    from vllm.model_executor.layers.quantization.utils.fp8_utils import per_token_group_quant_fp8
+    from vllm.utils import deep_gemm as vllm_deep_gemm
 
-    from slime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
+    from vime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
 
-    _configure_batch_invariant(deep_gemm, deep_gemm_wrapper)
-    scale_ue8m0 = bool(deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0)
-    m_alignment = int(deep_gemm.get_mk_alignment_for_contiguous_layout())
+    _configure_batch_invariant(deep_gemm)
+    scale_ue8m0 = vllm_deep_gemm.is_deep_gemm_e8m0_used()
+    m_alignment = int(vllm_deep_gemm.get_mk_alignment_for_contiguous_layout()[0])
     if m_alignment != _GROUPED_M_ALIGNMENT:
         raise RuntimeError(
             f"Unexpected DeepGEMM contiguous grouped M alignment: {m_alignment} != {_GROUPED_M_ALIGNMENT}"
@@ -1143,36 +1128,35 @@ def _load_deepgemm_ops() -> _DeepGEMMOps:
         # and activation/weight scales TMA-aligned as a separate step. Unchanged.
         return _DeepGEMMOps(
             quantize_weight=blockwise_cast_to_fp8_triton,
-            quantize_activation=vllm_per_token_group_quant_fp8,
-            align_input_scale=tma_align_input_scale,
-            grouped_gemm=deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_contig,
-            silu_and_mul=silu_and_mul,
+            quantize_activation=per_token_group_quant_fp8,
+            align_input_scale=vllm_deep_gemm.get_col_major_tma_aligned_tensor,
+            grouped_gemm=vllm_deep_gemm.m_grouped_fp8_gemm_nt_contiguous,
+            silu_and_mul=_vllm_silu_and_mul,
             scale_ue8m0=False,
-            need_tma_aligned_scales=bool(deep_gemm_wrapper.DEEPGEMM_NEED_TMA_ALIGNED_SCALES),
+            need_tma_aligned_scales=True,
             transform_weight_scale=None,
         )
 
-    # Blackwell (sm100+): UE8M0 (power-of-two) packed block scales. Weights are
-    # quantized with the same per-block cast the VLLM rollout uses
-    # (requant_weight_ue8m0 -> quant_weight_ue8m0), and the grouped weight scale
-    # is repacked with transform_scale_ue8m0. Activation scales are produced
-    # column-major / TMA-aligned / UE8M0 directly by the quant kernel.
-    from vllm.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, transform_scale_ue8m0
-
+    # Blackwell (sm100+): VLLM uses UE8M0 power-of-two block scales. Activation
+    # scales are produced column-major and TMA-aligned directly by the native
+    # quantization helper.
     def _quantize_weight_ue8m0(weight: torch.Tensor, block: tuple[int, int]):
         # Mirror the Hopper op signature (weight, (block_n, block_k)); UE8M0 quant
         # requires a [128, 128] block and a BF16 input.
-        return quant_weight_ue8m0(weight, [int(block[0]), int(block[1])])
+        return vllm_deep_gemm.per_block_cast_to_fp8(
+            weight,
+            block_size=(int(block[0]), int(block[1])),
+        )
 
     return _DeepGEMMOps(
         quantize_weight=_quantize_weight_ue8m0,
-        quantize_activation=vllm_per_token_group_quant_fp8,
-        align_input_scale=tma_align_input_scale,
-        grouped_gemm=deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_contig,
-        silu_and_mul=silu_and_mul,
+        quantize_activation=per_token_group_quant_fp8,
+        align_input_scale=vllm_deep_gemm.get_col_major_tma_aligned_tensor,
+        grouped_gemm=vllm_deep_gemm.m_grouped_fp8_gemm_nt_contiguous,
+        silu_and_mul=_vllm_silu_and_mul,
         scale_ue8m0=True,
-        need_tma_aligned_scales=bool(deep_gemm_wrapper.DEEPGEMM_NEED_TMA_ALIGNED_SCALES),
-        transform_weight_scale=transform_scale_ue8m0,
+        need_tma_aligned_scales=False,
+        transform_weight_scale=None,
     )
 
 
@@ -1262,9 +1246,7 @@ def _validate_te_grouped_mlp(module: torch.nn.Module, module_name: str) -> _MoEL
         raise RuntimeError(f"{module_name}.linear_fc2 num_gemms does not match local experts")
     if getattr(fc1, "use_bias", False) or getattr(fc2, "use_bias", False):
         raise RuntimeError(f"DeepGEMM MoE target {module_name} grouped linears must be bias-free")
-    if getattr(fc1, "_slime_deepgemm_forward_wrapped", False) or getattr(
-        fc2, "_slime_deepgemm_forward_wrapped", False
-    ):
+    if getattr(fc1, "_vime_deepgemm_forward_wrapped", False) or getattr(fc2, "_vime_deepgemm_forward_wrapped", False):
         raise RuntimeError(
             f"DeepGEMM MoE target {module_name} has an individually wrapped expert linear; "
             "remove that wrapper before installing the whole-MLP hook"
@@ -1436,11 +1418,9 @@ def _quantize_grouped_weights(
         # requant_weight_ue8m0). That requant is lossy, so a single quant here
         # would not bit-match the rollout. Replicate quant -> requant on the
         # grouped [E, N, K] weight to align to ~e-7.
-        from vllm.srt.layers.quantization.fp8_utils import requant_weight_ue8m0
+        from vllm.model_executor.layers.quantization.utils.fp8_utils import requant_weight_ue8m0_inplace
 
-        grouped_qweight, grouped_scale = requant_weight_ue8m0(
-            grouped_qweight, grouped_scale, [_BLOCK_SIZE, _BLOCK_SIZE]
-        )
+        requant_weight_ue8m0_inplace(grouped_qweight, grouped_scale, (_BLOCK_SIZE, _BLOCK_SIZE))
     return grouped_qweight, grouped_scale
 
 
@@ -1470,8 +1450,8 @@ def _quantize_activation(
         value.detach().contiguous(),
         _BLOCK_SIZE,
         column_major_scales=ue8m0,
-        scale_tma_aligned=ue8m0,
-        scale_ue8m0=ue8m0,
+        tma_aligned_scales=ue8m0,
+        use_ue8m0=ue8m0,
     )
     if qvalue.shape != value.shape:
         raise RuntimeError(f"quantized activation shape mismatch: {tuple(qvalue.shape)} != {tuple(value.shape)}")
@@ -1484,9 +1464,8 @@ def _quantize_activation(
                 f"{tuple(scale.shape)}/{scale.dtype} != {expected_scale_shape}/{torch.float32}"
             )
         return qvalue, ops.align_input_scale(scale)
-    # Blackwell: the quant kernel already produced column-major, TMA-aligned
-    # UE8M0 (int32-packed) scales; DEEPGEMM_NEED_TMA_ALIGNED_SCALES is False so
-    # no separate align step is applied (matches the VLLM rollout runner).
+    # Blackwell: the native quantization helper already produced column-major,
+    # TMA-aligned UE8M0 scales, so no separate alignment step is needed.
     return qvalue, scale
 
 
@@ -1509,9 +1488,9 @@ def _build_m_indices(
 
 
 def _experts_per_forward_group(num_local_experts: int) -> int:
-    configured = os.environ.get("SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP")
+    configured = os.environ.get("VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP")
     if configured is None:
-        batch_invariant = os.environ.get("VLLM_DEEPGEMM_BATCH_INVARIANT", "").lower() in {
+        batch_invariant = os.environ.get("VLLM_BATCH_INVARIANT", "").lower() in {
             "1",
             "true",
             "yes",
@@ -1522,11 +1501,11 @@ def _experts_per_forward_group(num_local_experts: int) -> int:
         experts_per_group = int(configured)
     except ValueError as exc:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP must be a positive integer, " f"got {configured!r}"
+            "VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP must be a positive integer, " f"got {configured!r}"
         ) from exc
     if experts_per_group <= 0:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP must be a positive integer, " f"got {experts_per_group}"
+            "VIME_DEEPGEMM_MOE_EXPERTS_PER_GROUP must be a positive integer, " f"got {experts_per_group}"
         )
     return min(experts_per_group, num_local_experts)
 
@@ -1616,7 +1595,7 @@ def _sort_chunks_into(
 
 def _wrap_preallocated_combine_preprocess(dispatcher: torch.nn.Module) -> bool:
     """Consume the expert's early-allocated combine buffer without a peak allocation."""
-    if getattr(dispatcher, "_slime_preallocated_combine_wrapped", False):
+    if getattr(dispatcher, "_vime_preallocated_combine_wrapped", False):
         return False
     if int(getattr(dispatcher, "tp_size", 1)) != 1:
         raise RuntimeError("Preallocated MoE combine currently requires tensor parallel size 1")
@@ -1644,7 +1623,7 @@ def _wrap_preallocated_combine_preprocess(dispatcher: torch.nn.Module) -> bool:
         return combined
 
     dispatcher.combine_preprocess = types.MethodType(combine_preprocess, dispatcher)
-    dispatcher._slime_preallocated_combine_wrapped = True
+    dispatcher._vime_preallocated_combine_wrapped = True
     return True
 
 
@@ -1655,7 +1634,7 @@ def _wrap_preallocated_dispatch_postprocess(dispatcher: torch.nn.Module) -> bool
     shared-expert overlap does not consume this tensor's values after
     ``linear_fc1_forward_and_act``; it only tags the tensor for backward order.
     """
-    if getattr(dispatcher, "_slime_preallocated_dispatch_wrapped", False):
+    if getattr(dispatcher, "_vime_preallocated_dispatch_wrapped", False):
         return False
     if int(getattr(dispatcher, "tp_size", 1)) != 1:
         raise RuntimeError("Preallocated MoE dispatch currently requires tensor parallel size 1")
@@ -1729,13 +1708,13 @@ def _wrap_preallocated_dispatch_postprocess(dispatcher: torch.nn.Module) -> bool
         return workspace_output, tokens_per_expert, sorted_probs
 
     dispatcher.dispatch_postprocess = types.MethodType(dispatch_postprocess, dispatcher)
-    dispatcher._slime_preallocated_dispatch_wrapped = True
+    dispatcher._vime_preallocated_dispatch_wrapped = True
     return True
 
 
 def _wrap_preallocated_token_combine(dispatcher: torch.nn.Module) -> bool:
     """Write no-grad expert all-to-all results back into the shared workspace."""
-    if getattr(dispatcher, "_slime_preallocated_token_combine_wrapped", False):
+    if getattr(dispatcher, "_vime_preallocated_token_combine_wrapped", False):
         return False
     original_token_combine = dispatcher.token_combine
 
@@ -1767,23 +1746,23 @@ def _wrap_preallocated_token_combine(dispatcher: torch.nn.Module) -> bool:
         return output
 
     dispatcher.token_combine = types.MethodType(token_combine, dispatcher)
-    dispatcher._slime_preallocated_token_combine_wrapped = True
+    dispatcher._vime_preallocated_token_combine_wrapped = True
     return True
 
 
 def _combine_workspace_bytes() -> int | None:
-    configured = os.environ.get("SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES")
+    configured = os.environ.get("VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES")
     if configured is None:
         return None
     try:
         workspace_bytes = int(configured)
     except ValueError as exc:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES must be a positive integer, " f"got {configured!r}"
+            "VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES must be a positive integer, " f"got {configured!r}"
         ) from exc
     if workspace_bytes <= 0:
         raise RuntimeError(
-            "SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES must be a positive integer, " f"got {workspace_bytes}"
+            "VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES must be a positive integer, " f"got {workspace_bytes}"
         )
     return workspace_bytes
 
@@ -1805,7 +1784,7 @@ def _combine_workspace_view(
             "Shared MoE combine workspace is too small: "
             f"need {required_bytes} bytes for {output_shape}, "
             f"have {workspace.numel()} bytes; increase "
-            "SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES"
+            "VIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES"
         )
     if workspace.device != hidden_states.device:
         raise RuntimeError(
@@ -1947,7 +1926,7 @@ def _deepgemm_grouped_moe_forward(
         output = output_storage.narrow(0, 0, num_tokens)
     else:
         output = hidden_states if reuse_input_buffer else hidden_states.new_empty((num_tokens, layout.hidden_size))
-    defer_router_probabilities = bool(getattr(module, "_slime_defer_router_probabilities", False))
+    defer_router_probabilities = bool(getattr(module, "_vime_defer_router_probabilities", False))
 
     token_offset = 0
     for expert_start in range(0, layout.num_local_experts, experts_per_group):
@@ -2120,7 +2099,7 @@ def _wrap_te_grouped_mlp(
     module: torch.nn.Module,
     module_name: str,
 ) -> bool:
-    if getattr(module, "_slime_deepgemm_moe_forward_wrapped", False):
+    if getattr(module, "_vime_deepgemm_moe_forward_wrapped", False):
         return False
 
     _validate_parallelism()
@@ -2181,9 +2160,9 @@ def _wrap_te_grouped_mlp(
         return deepgemm_output, getattr(self, "output_bias", None)
 
     module.forward = types.MethodType(deepgemm_moe_forward, module)
-    module._slime_deepgemm_moe_forward_wrapped = True
-    module._slime_deepgemm_moe_module_name = module_name
-    module._slime_deepgemm_moe_layout = layout
+    module._vime_deepgemm_moe_forward_wrapped = True
+    module._vime_deepgemm_moe_module_name = module_name
+    module._vime_deepgemm_moe_layout = layout
     return True
 
 
@@ -2223,7 +2202,7 @@ class _DeepEPScatterWithDeterministicBackward(torch.autograd.Function):
     ) -> torch.Tensor:
         output = hidden_states.new_zeros((int(total_rows), hidden_states.shape[1]))
         if hidden_states.is_cuda:
-            from slime.backends.megatron_utils.alignment.deterministic_route_kernels import scatter_routes_forward
+            from vime.backends.megatron_utils.alignment.deterministic_route_kernels import scatter_routes_forward
 
             scatter_routes_forward(
                 hidden_states.contiguous(),
@@ -2261,7 +2240,7 @@ class _DeepEPScatterWithDeterministicBackward(torch.autograd.Function):
             device=ctx.input_device,
         )
         if grad_output.is_cuda:
-            from slime.backends.megatron_utils.alignment.deterministic_route_kernels import scatter_routes_backward
+            from vime.backends.megatron_utils.alignment.deterministic_route_kernels import scatter_routes_backward
 
             scatter_routes_backward(
                 grad_output.contiguous(),
@@ -2372,7 +2351,7 @@ def _scatter_deepep_routes_with_padding(
     expert_offsets = torch.cumsum(counts, dim=0) - counts
 
     if expected_route_count is not None and valid.is_cuda:
-        from slime.backends.megatron_utils.alignment.deterministic_route_kernels import compact_route_positions
+        from vime.backends.megatron_utils.alignment.deterministic_route_kernels import compact_route_positions
 
         occurrences = compact_route_positions(valid.contiguous(), expected_route_count)
     else:
@@ -2448,7 +2427,7 @@ class _VLLMEPGatherWithBF16Backward(torch.autograd.Function):
             )
         if topk_indices.shape != topk_weights.shape or topk_indices.shape != output_index.shape:
             raise ValueError("DeepEP gather IDs, weights, and output indices must align")
-        from vllm.srt.layers.moe.ep_moe.kernels import ep_gather
+        from vllm.model_executor.layers.fused_moe.deep_gemm_utils import ep_gather
 
         output_shape = (topk_indices.shape[0], hidden_states.shape[1])
         output = torch.empty(
@@ -2461,6 +2440,7 @@ class _VLLMEPGatherWithBF16Backward(torch.autograd.Function):
             topk_indices,
             topk_weights,
             output_index,
+            None,
             output,
         )
         ctx.reuse_input_for_grad = bool(reuse_input_for_grad)
@@ -2730,7 +2710,7 @@ def _validate_and_order_route_preserving_outputs(
 
 def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
     """Match VLLM low-latency reduction over Megatron normal DeepEP."""
-    if getattr(mlp, "_slime_vllm_deepep_alignment", False):
+    if getattr(mlp, "_vime_vllm_deepep_alignment", False):
         return False
 
     router = getattr(mlp, "router", None)
@@ -2763,7 +2743,7 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
     router.routing = types.MethodType(routing_without_final_scaling, router)
     original_setup_metadata = manager.setup_metadata
     original_dispatch = manager.dispatch
-    from slime.utils.routing_replay import consume_ordered_topk, register_ordered_topk_capture
+    from vime.utils.routing_replay import consume_ordered_topk, register_ordered_topk_capture
 
     register_ordered_topk_capture(router)
 
@@ -2773,7 +2753,7 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         probs: torch.Tensor,
         router_token_masks: torch.Tensor | None = None,
     ) -> None:
-        patched_manager._slime_source_fixed_topk_valid = False
+        patched_manager._vime_source_fixed_topk_valid = False
         ordered = consume_ordered_topk(router)
         if ordered is None:
             # Megatron 1dcf0dafa's DeepEP dispatcher setup_metadata takes only
@@ -2798,7 +2778,7 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         dense_probs = probs.reshape(num_tokens, patched_manager.num_experts)
         patched_manager.token_indices = ordered
         patched_manager.token_probs = dense_probs.gather(-1, ordered)
-        patched_manager._slime_source_fixed_topk_valid = (
+        patched_manager._vime_source_fixed_topk_valid = (
             patched_manager.capacity_factor is None and router_token_masks is None
         )
         if patched_manager.capacity_factor is not None:
@@ -2834,7 +2814,7 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         # preamble.  Capture the normalized tensors that were actually sent.
         source_topk_indices = patched_manager.token_indices
         source_topk_weights = patched_manager.token_probs
-        source_fixed_topk_valid = bool(getattr(patched_manager, "_slime_source_fixed_topk_valid", False))
+        source_fixed_topk_valid = bool(getattr(patched_manager, "_vime_source_fixed_topk_valid", False))
         (
             route_handle,
             recv_route_fingerprints,
@@ -2850,15 +2830,15 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
             assume_all_routes_valid=source_fixed_topk_valid,
         )
         route_metadata_prevalidated = False
-        patched_manager._slime_route_handle = route_handle
-        patched_manager._slime_route_recv_fingerprints = recv_route_fingerprints
-        patched_manager._slime_route_recv_indices = recv_route_indices
-        patched_manager._slime_route_recv_weights = recv_route_weights
-        patched_manager._slime_route_metadata_prevalidated = route_metadata_prevalidated
-        patched_manager._slime_route_source_topk_indices = source_topk_indices
-        patched_manager._slime_route_source_topk_weights = source_topk_weights
-        patched_manager._slime_route_source_output_index = source_output_index
-        patched_manager._slime_route_source_all_valid = source_all_routes_valid
+        patched_manager._vime_route_handle = route_handle
+        patched_manager._vime_route_recv_fingerprints = recv_route_fingerprints
+        patched_manager._vime_route_recv_indices = recv_route_indices
+        patched_manager._vime_route_recv_weights = recv_route_weights
+        patched_manager._vime_route_metadata_prevalidated = route_metadata_prevalidated
+        patched_manager._vime_route_source_topk_indices = source_topk_indices
+        patched_manager._vime_route_source_topk_weights = source_topk_weights
+        patched_manager._vime_route_source_output_index = source_output_index
+        patched_manager._vime_route_source_all_valid = source_all_routes_valid
         return dispatched_hidden
 
     manager.dispatch = types.MethodType(
@@ -2888,26 +2868,26 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
             topk_weights,
             patched_manager.tokens_per_expert,
             return_route_positions=True,
-            expected_route_count=_deepep_route_handle_received_rows(patched_manager._slime_route_handle),
+            expected_route_count=_deepep_route_handle_received_rows(patched_manager._vime_route_handle),
         )
         patched_manager.hidden_shape_before_permute = hidden_states.shape
         patched_manager.dispatched_routing_map = routing_map
-        patched_manager._slime_vllm_topk_indices = sanitized_indices
-        patched_manager._slime_vllm_topk_weights = topk_weights
-        patched_manager._slime_vllm_output_index = output_index
-        patched_manager._slime_vllm_route_positions = route_positions
-        patched_manager._slime_vllm_all_routes_valid = all_routes_valid
-        patched_manager._slime_vllm_expert_inputs = permuted_hidden
-        patched_manager._slime_vllm_expert_probs = permuted_probs
-        patched_manager._slime_vllm_tokens_per_expert = patched_manager.tokens_per_expert
+        patched_manager._vime_vllm_topk_indices = sanitized_indices
+        patched_manager._vime_vllm_topk_weights = topk_weights
+        patched_manager._vime_vllm_output_index = output_index
+        patched_manager._vime_vllm_route_positions = route_positions
+        patched_manager._vime_vllm_all_routes_valid = all_routes_valid
+        patched_manager._vime_vllm_expert_inputs = permuted_hidden
+        patched_manager._vime_vllm_expert_probs = permuted_probs
+        patched_manager._vime_vllm_tokens_per_expert = patched_manager.tokens_per_expert
         route_fingerprints = getattr(
             patched_manager,
-            "_slime_route_recv_fingerprints",
+            "_vime_route_recv_fingerprints",
             None,
         )
-        route_indices = getattr(patched_manager, "_slime_route_recv_indices", None)
-        route_weights = getattr(patched_manager, "_slime_route_recv_weights", None)
-        route_metadata_prevalidated = bool(getattr(patched_manager, "_slime_route_metadata_prevalidated", False))
+        route_indices = getattr(patched_manager, "_vime_route_recv_indices", None)
+        route_weights = getattr(patched_manager, "_vime_route_recv_weights", None)
+        route_metadata_prevalidated = bool(getattr(patched_manager, "_vime_route_metadata_prevalidated", False))
         if route_metadata_prevalidated:
             if any(value is not None for value in (route_fingerprints, route_indices, route_weights)):
                 raise RuntimeError("Cached DeepEP route metadata retained unexpected payloads")
@@ -2926,34 +2906,34 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
                 order_outputs=False,
                 route_positions=route_positions,
             )
-        del patched_manager._slime_route_recv_fingerprints
-        del patched_manager._slime_route_recv_indices
-        del patched_manager._slime_route_recv_weights
-        del patched_manager._slime_route_metadata_prevalidated
+        del patched_manager._vime_route_recv_fingerprints
+        del patched_manager._vime_route_recv_indices
+        del patched_manager._vime_route_recv_weights
+        del patched_manager._vime_route_metadata_prevalidated
         return permuted_hidden, permuted_probs
 
     def get_restored_hidden_states_by_experts(
         patched_manager,
         hidden_states: torch.Tensor,
     ):
-        topk_indices = getattr(patched_manager, "_slime_vllm_topk_indices", None)
-        topk_weights = getattr(patched_manager, "_slime_vllm_topk_weights", None)
-        output_index = getattr(patched_manager, "_slime_vllm_output_index", None)
-        route_positions = getattr(patched_manager, "_slime_vllm_route_positions", None)
+        topk_indices = getattr(patched_manager, "_vime_vllm_topk_indices", None)
+        topk_weights = getattr(patched_manager, "_vime_vllm_topk_weights", None)
+        output_index = getattr(patched_manager, "_vime_vllm_output_index", None)
+        route_positions = getattr(patched_manager, "_vime_vllm_route_positions", None)
         if topk_indices is None or topk_weights is None or output_index is None or route_positions is None:
             raise RuntimeError("Saved route-preserving DeepEP mapping is unavailable")
         token_rows = route_positions[:, 0]
         topk_slots = route_positions[:, 1]
         route_rows = output_index[token_rows, topk_slots].to(dtype=torch.long)
         output = hidden_states.index_select(0, route_rows)
-        del patched_manager._slime_vllm_topk_indices
-        del patched_manager._slime_vllm_topk_weights
-        del patched_manager._slime_vllm_output_index
-        del patched_manager._slime_vllm_route_positions
-        del patched_manager._slime_vllm_all_routes_valid
-        del patched_manager._slime_vllm_expert_inputs
-        del patched_manager._slime_vllm_expert_probs
-        del patched_manager._slime_vllm_tokens_per_expert
+        del patched_manager._vime_vllm_topk_indices
+        del patched_manager._vime_vllm_topk_weights
+        del patched_manager._vime_vllm_output_index
+        del patched_manager._vime_vllm_route_positions
+        del patched_manager._vime_vllm_all_routes_valid
+        del patched_manager._vime_vllm_expert_inputs
+        del patched_manager._vime_vllm_expert_probs
+        del patched_manager._vime_vllm_tokens_per_expert
         return output
 
     manager.get_permuted_hidden_states_by_experts = types.MethodType(
@@ -3003,11 +2983,11 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         output: torch.Tensor,
         shared_expert_output: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        route_handle = getattr(manager, "_slime_route_handle", None)
-        source_topk_indices = getattr(manager, "_slime_route_source_topk_indices", None)
-        source_topk_weights = getattr(manager, "_slime_route_source_topk_weights", None)
-        source_output_index = getattr(manager, "_slime_route_source_output_index", None)
-        source_all_routes_valid = getattr(manager, "_slime_route_source_all_valid", None)
+        route_handle = getattr(manager, "_vime_route_handle", None)
+        source_topk_indices = getattr(manager, "_vime_route_source_topk_indices", None)
+        source_topk_weights = getattr(manager, "_vime_route_source_topk_weights", None)
+        source_output_index = getattr(manager, "_vime_route_source_output_index", None)
+        source_all_routes_valid = getattr(manager, "_vime_route_source_all_valid", None)
         if (
             route_handle is None
             or source_topk_indices is None
@@ -3034,11 +3014,11 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
             source_all_routes_valid,
         )
         manager.handle = None
-        del manager._slime_route_handle
-        del manager._slime_route_source_topk_indices
-        del manager._slime_route_source_topk_weights
-        del manager._slime_route_source_output_index
-        del manager._slime_route_source_all_valid
+        del manager._vime_route_handle
+        del manager._vime_route_source_topk_indices
+        del manager._vime_route_source_topk_weights
+        del manager._vime_route_source_output_index
+        del manager._vime_route_source_all_valid
         if combine_fuses_postprocess:
             output = patched_mlp.token_dispatcher.combine_postprocess(output)
             if shared_expert_output is not None:
@@ -3054,10 +3034,10 @@ def _patch_vllm_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         return output
 
     mlp.combine = types.MethodType(combine, mlp)
-    experts._slime_defer_router_probabilities = True
-    experts._slime_reuse_expert_input_for_grad = True
-    mlp._slime_vllm_deepep_alignment = True
-    mlp._slime_vllm_deepep_global_layer = global_layer
+    experts._vime_defer_router_probabilities = True
+    experts._vime_reuse_expert_input_for_grad = True
+    mlp._vime_vllm_deepep_alignment = True
+    mlp._vime_vllm_deepep_global_layer = global_layer
     return True
 
 

@@ -1,4 +1,4 @@
-"""CPU unit tests for ``slime.utils.data.filter_long_prompt``.
+"""CPU unit tests for ``vime.utils.data.filter_long_prompt``.
 
 With a processor configured, the function scores text-only samples with a
 batched tokenizer call and multimodal samples one at a time through the
@@ -18,24 +18,24 @@ import types
 
 import pytest
 
-from slime.utils.data import filter_long_prompt
-from slime.utils.types import Sample
+from vime.utils.data import filter_long_prompt
+from vime.utils.types import Sample
 
 
 NUM_GPUS = 0
 
 
 @pytest.fixture
-def stub_process_vision_info(monkeypatch):
-    """`slime.utils.processing_utils` pulls in transformers + PIL.
+def stub_processor_kwargs(monkeypatch):
+    """`vime.utils.processing_utils` pulls in transformers + PIL.
 
-    The multimodal branch imports it lazily, and only `process_vision_info` is
+    The multimodal branch imports it lazily, and only `build_processor_kwargs` is
     needed here, so stub the module rather than requiring transformers on the
     CPU image.
     """
-    module = types.ModuleType("slime.utils.processing_utils")
-    module.process_vision_info = lambda prompt, processor: {"images": None}
-    monkeypatch.setitem(sys.modules, "slime.utils.processing_utils", module)
+    module = types.ModuleType("vime.utils.processing_utils")
+    module.build_processor_kwargs = lambda multimodal_inputs: {"images": None}
+    monkeypatch.setitem(sys.modules, "vime.utils.processing_utils", module)
 
 
 class _Tokenizer:
@@ -67,7 +67,7 @@ def _make_samples(specs):
 
 
 @pytest.mark.unit
-def test_preserves_order_when_nothing_is_filtered(stub_process_vision_info):
+def test_preserves_order_when_nothing_is_filtered(stub_processor_kwargs):
     # Alternating modality, every prompt well under the limit.
     samples = _make_samples([(i % 2 == 0, 5) for i in range(6)])
 
@@ -77,7 +77,7 @@ def test_preserves_order_when_nothing_is_filtered(stub_process_vision_info):
 
 
 @pytest.mark.unit
-def test_preserves_order_when_some_are_filtered(stub_process_vision_info):
+def test_preserves_order_when_some_are_filtered(stub_processor_kwargs):
     specs = [
         (True, 5),  # p0 multimodal, keep
         (False, 500),  # p1 text-only, drop
@@ -95,7 +95,7 @@ def test_preserves_order_when_some_are_filtered(stub_process_vision_info):
 
 @pytest.mark.unit
 @pytest.mark.parametrize("all_multimodal", [True, False])
-def test_single_modality_batches_are_unchanged(stub_process_vision_info, all_multimodal):
+def test_single_modality_batches_are_unchanged(stub_processor_kwargs, all_multimodal):
     samples = _make_samples([(all_multimodal, 5)] * 4)
 
     kept = filter_long_prompt(samples, _Tokenizer(), _Processor(), max_length=100)

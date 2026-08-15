@@ -17,15 +17,8 @@ from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
-<<<<<<< ours (vime current)
 from vime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
 from vime.utils.misc import load_function
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from slime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
-from slime.utils.misc import load_function
-=======
-from slime.utils.misc import load_function
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 _INDEXER_DIRECT_SUBMODULE_NAMES = frozenset(
     {
@@ -98,23 +91,7 @@ class LinearForLastLayer(torch.nn.Linear):
 
 
 def _apply_bridge_runtime_config(provider, args: argparse.Namespace) -> None:
-    """Copy the runtime config from args onto a bridge-built provider.
-
-    Bridge mode builds the model from the HF checkpoint and skips
-    core_transformer_config_from_args, so command-line args never reach the
-    provider. We copy only some fields, not all of args: the provider already
-    holds the right values from the HF checkpoint, while args only has default
-    values for model shape, dtype, and fields the provider set on purpose.
-    Copying those would quietly break the model -- the bridge only logs a
-    warning and keeps going, it does not fail. So we copy just the training,
-    parallelism, memory, and numerics settings that really come from args. Put
-    new training flags here, not spread across the code.
-
-    Ported from miles' backends/megatron_utils/model_provider.py to keep the
-    two bridge integrations in sync (see vllm-project/vime#337, which fixed
-    only the recompute_* fields below).
-    """
-    # parallelism / sharding
+    """Copy training/runtime arguments onto a bridge-built provider."""
     provider.tensor_model_parallel_size = args.tensor_model_parallel_size
     provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
     provider.expert_model_parallel_size = args.expert_model_parallel_size
@@ -123,48 +100,32 @@ def _apply_bridge_runtime_config(provider, args: argparse.Namespace) -> None:
     provider.context_parallel_size = args.context_parallel_size
     provider.gradient_accumulation_fusion = args.gradient_accumulation_fusion
 
-    # loss / sequence handling
-    provider.calculate_per_token_loss = args.calculate_per_token_loss  # CP>1 VL models assert this
+    provider.calculate_per_token_loss = args.calculate_per_token_loss
     provider.variable_seq_lengths = args.variable_seq_lengths
-
-    # numerics (training infra, not model-defining)
     provider.attention_softmax_in_fp32 = args.attention_softmax_in_fp32
     provider.fp32_residual_connection = args.fp32_residual_connection
     provider.deterministic_mode = args.deterministic_mode
 
-    # activation recompute (silently dropped before -> no checkpointing -> OOM at long context)
     provider.recompute_granularity = args.recompute_granularity
     provider.recompute_method = args.recompute_method
     provider.recompute_num_layers = args.recompute_num_layers
     provider.recompute_modules = args.recompute_modules
 
-    # activation / memory offload
     provider.cpu_offloading_num_layers = args.cpu_offloading_num_layers
     provider.distribute_saved_activations = args.distribute_saved_activations
-    # cpu_offloading is derived, set only when cpu_offloading_num_layers>0; guard its presence.
     if hasattr(args, "cpu_offloading"):
         provider.cpu_offloading = args.cpu_offloading
 
-    # communication overlap
     provider.tp_comm_overlap = args.tp_comm_overlap
-
-    # fp8
     provider.fp8 = args.fp8
     provider.fp8_recipe = args.fp8_recipe
-
-    # attention kernel selection
     provider.attention_backend = args.attention_backend
-
-    # MoE token dispatcher (same-name, always present)
     provider.moe_token_dispatcher_type = args.moe_token_dispatcher_type
 
-    # arg name != provider field; arg default None, so propagate only when the user set it
     if getattr(args, "decoder_first_pipeline_num_layers", None) is not None:
         provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
     if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
         provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
-
-    # MoE training knobs: override only when explicitly set, else keep the provider's value
     if getattr(args, "moe_router_bias_update_rate", None) is not None:
         provider.moe_router_bias_update_rate = args.moe_router_bias_update_rate
     if getattr(args, "moe_aux_loss_coeff", None) is not None:
@@ -197,11 +158,10 @@ def _get_model_provider_func(
 
         return wrapped_model_provider
 
-<<<<<<< ours (vime current)
     if args.megatron_to_hf_mode == "bridge":
         from megatron.bridge import AutoBridge
 
-        import vime_plugins.megatron_bridge  # noqa: F401  # register custom bridges
+        import vime_plugins.megatron_bridge  # noqa: F401
 
         bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True))
         provider = bridge.to_megatron_provider(load_weights=False)
@@ -215,66 +175,20 @@ def _get_model_provider_func(
             config: TransformerConfig | None = None,
             pg_collection=None,
         ) -> GPTModel:
-            assert (
-                config is None
-            ), "vime builds the bridge provider's config from args, so it expects config to be None"
-            # vime-patch (ported from miles): PP>1 paths in some megatron.bridge
-            # providers (e.g. mamba_provider, needed for hybrid Mamba/attention
-            # models like NemotronH) read self._pg_collection.pp during provide();
-            # without forwarding the caller's pg_collection here, those code
-            # paths hit AttributeError.
+            assert config is None, "Vime builds the bridge provider config from args"
             if pg_collection is not None:
                 provider._pg_collection = pg_collection
             model = provider.provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
             if post_process and role == "critic":
                 model.output_layer = LinearForLastLayer(
-                    input_size=model.config.hidden_size, output_size=1, config=model.config
+                    input_size=model.config.hidden_size,
+                    output_size=1,
+                    config=model.config,
                 )
             return model
 
         return wrapped_bridge_provider
 
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    if args.megatron_to_hf_mode == "bridge":
-        from megatron.bridge import AutoBridge
-
-        import slime_plugins.megatron_bridge  # noqa: F401  # register custom bridges
-
-        bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True))
-        provider = bridge.to_megatron_provider(load_weights=False)
-        # TODO: we should not manually set this...
-        provider.tensor_model_parallel_size = args.tensor_model_parallel_size
-        provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
-        provider.expert_model_parallel_size = args.expert_model_parallel_size
-        provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
-        provider.sequence_parallel = args.sequence_parallel
-        provider.context_parallel_size = args.context_parallel_size
-        provider.variable_seq_lengths = args.variable_seq_lengths
-        if hasattr(args, "moe_token_dispatcher_type"):
-            provider.moe_token_dispatcher_type = args.moe_token_dispatcher_type
-        if getattr(args, "decoder_first_pipeline_num_layers", None) is not None:
-            provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
-        if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
-            provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
-        provider.finalize()
-
-        if role == "critic":
-            _original_provide = provider.provide
-
-            def _critic_provide(pre_process=True, post_process=True, vp_stage=None):
-                model = _original_provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
-                if post_process:
-                    model.output_layer = LinearForLastLayer(
-                        input_size=model.config.hidden_size, output_size=1, config=model.config
-                    )
-                return model
-
-            return _critic_provide
-
-        return provider.provide
-
-=======
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.
 
@@ -459,4 +373,4 @@ def freeze_model_params(model: GPTModel, args: argparse.Namespace):
 
         # Some pipeline stages may legitimately own no indexer weights, so an
         # empty local tuple is not itself an error.
-        model._slime_frozen_indexer_param_names = tuple(frozen_indexer_params)
+        model._vime_frozen_indexer_param_names = tuple(frozen_indexer_params)

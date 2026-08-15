@@ -15,14 +15,8 @@ from __future__ import annotations
 
 import os
 from argparse import Namespace
-<<<<<<< ours (vime current)
-from collections.abc import Callable, Iterable, Mapping, Sequence
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from collections.abc import Callable, Mapping, Sequence
-=======
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 import ray
@@ -33,23 +27,11 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
-<<<<<<< ours (vime current)
 from vime.utils.distributed_utils import get_gloo_group
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from slime.utils.distributed_utils import get_gloo_group
-=======
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.types import ParamInfo
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+from vime.utils.types import ParamInfo
 
-<<<<<<< ours (vime current)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from ..vllm import FlattenedTensorBucket, MultiprocessingSerializer
-=======
 from ..megatron_to_hf import convert_to_hf
-from ..vllm import FlattenedTensorBucket, MultiprocessingSerializer
 from .expert_routing import configure_expert_routing
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
@@ -61,11 +43,63 @@ from .update_weight_from_distributed import (
 _MAX_COLOCATED_UPDATES_INFLIGHT = 4
 
 
+def _rollout_engine_identity(engine: ActorHandle) -> str:
+    actor_id = getattr(engine, "_actor_id", None)
+    return actor_id.hex() if actor_id is not None else str(id(engine))
+
+
+def _native_ipc_buffer_size(args: Namespace, param_info_buckets: Sequence[Sequence[ParamInfo]] | None) -> int:
+    buffer_size = args.update_weight_buffer_size
+    if not param_info_buckets:
+        return buffer_size
+
+    tensor_parallel_size = mpu.get_tensor_model_parallel_world_size()
+    expert_tensor_parallel_size = mpu.get_expert_tensor_parallel_world_size()
+    for bucket in param_info_buckets:
+        for info in bucket:
+            parallel_size = expert_tensor_parallel_size if ".experts." in info.name else tensor_parallel_size
+            buffer_size = max(buffer_size, info.size * parallel_size)
+    return buffer_size
+
+
+class _HfWeightSource:
+    def __init__(self, iterator, weights_getter) -> None:
+        self._iterator = iterator
+        self._weights_getter = weights_getter
+
+    def metadata(self):
+        from vllm.distributed.weight_transfer.base import ParamMeta
+
+        return [ParamMeta(name, tensor.dtype, tuple(tensor.shape)) for name, tensor in self]
+
+    def __iter__(self):
+        local_weights = self._weights_getter()
+        for chunk in self._iterator.get_hf_weight_chunks(local_weights):
+            yield from chunk
+
+
+class _RayVLLMWeightSyncClient:
+    def __init__(self, engine, version_getter) -> None:
+        self._engine = engine
+        self._version_getter = version_getter
+
+    def init_weight_transfer_engine(self, init_info: dict[str, Any]) -> None:
+        ray.get(self._engine.init_weight_transfer_engine.remote({"init_info": init_info}))
+
+    def start_weight_update(self) -> None:
+        ray.get(self._engine.start_weight_update.remote())
+
+    def update_weights(self, update_info: dict[str, Any]) -> None:
+        ray.get(self._engine.update_weights.remote(update_info))
+
+    def finish_weight_update(self, weight_version: str | None = None) -> None:
+        version = str(self._version_getter()) if weight_version is None else str(weight_version)
+        ray.get(self._engine.finish_weight_update.remote(weight_version=version))
+
+
 def _build_packed_ipc_update_info(
     named_tensors: Iterable[tuple[str, torch.Tensor]],
-) -> tuple[dict[str, Any], torch.Tensor]:
-    from torch.multiprocessing.reductions import reduce_tensor
-
+) -> tuple[dict[str, Any], torch.Tensor | None]:
     names, dtype_names, shapes, tensor_sizes, byte_tensors = [], [], [], [], []
     for name, tensor in named_tensors:
         names.append(name)
@@ -74,12 +108,24 @@ def _build_packed_ipc_update_info(
         byte_tensor = tensor.detach().contiguous().view(torch.uint8).flatten()
         tensor_sizes.append(byte_tensor.numel())
         byte_tensors.append(byte_tensor)
+    gpu_uuid = str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid)
     if not byte_tensors:
-        raise ValueError("cannot build an empty packed IPC update")
+        return (
+            {
+                "names": [],
+                "dtype_names": [],
+                "shapes": [],
+                "tensor_sizes": [],
+                "ipc_handles": {},
+                "empty_gpu_uuids": [gpu_uuid],
+            },
+            None,
+        )
+
+    from torch.multiprocessing.reductions import reduce_tensor
 
     packed_tensor = torch.cat(byte_tensors)
     _, ipc_args = reduce_tensor(packed_tensor)
-    gpu_uuid = str(torch.cuda.get_device_properties(torch.cuda.current_device()).uuid)
     return (
         {
             "names": names,
@@ -115,36 +161,53 @@ def _merge_ipc_update_infos(infos: Sequence[dict[str, Any]]) -> dict[str, Any]:
         raise ValueError("no IPC update_info payloads to merge")
 
     metadata_keys = ("names", "dtype_names", "shapes", "tensor_sizes")
-    base = infos[0]
+    nonempty_infos = [info for info in infos if info["names"]]
+    if not nonempty_infos:
+        return {}
+    base = nonempty_infos[0]
     if "tensor_sizes" not in base or any(
-        "tensor_sizes" not in info or any(info[key] != base[key] for key in metadata_keys) for info in infos[1:]
+        "tensor_sizes" not in info or any(info[key] != base[key] for key in metadata_keys)
+        for info in nonempty_infos[1:]
     ):
         raise ValueError("packed IPC metadata must match across all ranks in a slot")
     handles = {}
+    empty_gpu_uuids = []
     for info in infos:
         handles.update(info["ipc_handles"])
-    return {**base, "ipc_handles": handles}
+        empty_gpu_uuids.extend(info.get("empty_gpu_uuids", []))
+    merged = {**base, "ipc_handles": handles}
+    if empty_gpu_uuids:
+        merged["empty_gpu_uuids"] = empty_gpu_uuids
+    return merged
 
 
-def _build_flattened_tensor_data(
-    named_tensors: list[tuple[str, torch.Tensor]],
-) -> dict[str, Any]:
-    if not named_tensors:
-        return {
-            "flattened_tensor": torch.empty(0, dtype=torch.uint8, device=torch.cuda.current_device()),
-            "metadata": [],
-        }
+def _group_ipc_update_infos(infos: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group per-rank IPC payloads by metadata for rank-local expert updates."""
+    if not infos:
+        raise ValueError("no IPC update_info payloads to group")
 
-    # Do not reuse the IPC-facing flattened tensor. VLLM returns from the
-    # HTTP/Ray request after enqueueing GPU copies into model weights, but it
-    # does not guarantee a CUDA-device sync before the response. Reusing and
-    # overwriting the same producer buffer immediately after ray.get can race
-    # with the consumer-side copy and corrupt weights.
-    flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-    return {
-        "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-        "metadata": flattened_tensor_bucket.get_metadata(),
-    }
+    metadata_keys = ("names", "dtype_names", "shapes", "tensor_sizes")
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    all_gpu_uuids = set()
+    for info in infos:
+        all_gpu_uuids.update(info["ipc_handles"])
+        all_gpu_uuids.update(info.get("empty_gpu_uuids", []))
+        if not info["names"]:
+            continue
+        key = tuple(
+            tuple(tuple(value) if isinstance(value, list) else value for value in info[field])
+            for field in metadata_keys
+        )
+        groups[key].append(info)
+
+    merged_groups = []
+    for group in groups.values():
+        merged = _merge_ipc_update_infos(group)
+        empty_gpu_uuids = sorted(all_gpu_uuids - set(merged["ipc_handles"]))
+        if empty_gpu_uuids:
+            merged["empty_gpu_uuids"] = empty_gpu_uuids
+        merged_groups.append(merged)
+    return merged_groups
 
 
 class UpdateWeightFromTensor:
@@ -190,19 +253,17 @@ class UpdateWeightFromTensor:
         self._ipc_gather_src = None
         self._ipc_engine = None
         self._model_update_groups = None
-<<<<<<< ours (vime current)
-        # vLLM #39212 IPC transfer-engine init runs once per set of colocated engines.
-        self._ipc_initialized = False
+        self._all_rollout_engines = []
+        self.distributed_rollout_engines = []
+        self._expert_transfer_plan = []
+        self._native_ipc_trainer = None
+        self._ipc_initialized_engine_ids: set[str] = set()
         # vLLM IPC handle payloads may use cloudpickle on the Ray/HTTP bridge.
         os.environ.setdefault("VLLM_ALLOW_INSECURE_SERIALIZATION", "1")
 
     # ------------------------------------------------------------------
     # connect / disconnect
     # ------------------------------------------------------------------
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-=======
-        self._expert_transfer_plan = []
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     def connect_rollout_engines(
         self,
@@ -216,7 +277,9 @@ class UpdateWeightFromTensor:
         Split colocated/distributed engines. Global source rank (DP=TP=PP=0) creates NCCL
         for distributed. Map ranks to colocated IPC engines.
         """
+        self._all_rollout_engines = list(rollout_engines)
         self.rollout_engines = rollout_engines
+        self.distributed_rollout_engines = []
 
         if engine_gpu_counts is None:
             engine_gpu_counts = [self.args.rollout_num_gpus_per_engine] * len(rollout_engines)
@@ -266,31 +329,6 @@ class UpdateWeightFromTensor:
             engine_parallel_configs[:colocate_engine_nums] if engine_parallel_configs is not None else None
         )
 
-        # Create IPC Gloo gather groups (only on first call; partitioning is
-        # fixed across reconnects).
-        if self._ipc_gather_group is None:
-            for i in range(colocate_engine_nums):
-                group_ranks = list(range(colocate_gpu_offsets[i], colocate_gpu_offsets[i] + colocate_gpu_counts[i]))
-                new_group = dist.new_group(ranks=group_ranks, backend="gloo")
-                if self.rank in group_ranks:
-                    self._ipc_gather_group = new_group
-                    self._ipc_gather_src = colocate_gpu_offsets[i]
-
-        # Map training ranks to colocated engine actors.
-        for i, engine in enumerate(self.rollout_engines):
-            start = colocate_gpu_offsets[i]
-            end = start + colocate_gpu_counts[i]
-            if start <= self.rank < end:
-                self._ipc_engine = engine
-
-<<<<<<< ours (vime current)
-        # vLLM #39212: one-time IPC transfer-engine init on each colocated engine.
-        if dist.get_rank() == 0 and self.rollout_engines and not self._ipc_initialized:
-            ray.get([engine.init_weight_transfer_engine.remote({"init_info": {}}) for engine in self.rollout_engines])
-            self._ipc_initialized = True
-
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-=======
         self._non_expert_param_info_buckets, self._expert_transfer_plan = configure_expert_routing(
             args=self.args,
             full_param_info_buckets=self._full_param_info_buckets,
@@ -301,7 +339,64 @@ class UpdateWeightFromTensor:
             use_distribute=self.use_distribute,
         )
 
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+        self._native_ipc_trainer = None
+        native_ipc_eligible = (
+            not self.use_distribute
+            and self.args.actor_num_nodes == 1
+            and len(self.rollout_engines) == 1
+            and colocate_gpu_offsets == [0]
+            and colocate_gpu_counts == [dist.get_world_size()]
+            and not getattr(self.args, "enable_mtp_training", False)
+            and not self._expert_transfer_plan
+        )
+        if native_ipc_eligible:
+            from vllm.distributed.weight_transfer.factory import WeightTransferTrainerFactory
+            from vllm.distributed.weight_transfer.ipc_engine import IPCTrainerInitInfo
+
+            self._native_ipc_trainer = WeightTransferTrainerFactory.trainer_init(
+                IPCTrainerInitInfo(
+                    rank=dist.get_rank(),
+                    packed=True,
+                    packed_buffer_size_bytes=_native_ipc_buffer_size(self.args, self._full_param_info_buckets),
+                ),
+                client=_RayVLLMWeightSyncClient(
+                    self.rollout_engines[0],
+                    lambda: self.weight_version,
+                ),
+                source=_HfWeightSource(self._hf_weight_iterator, self.weights_getter),
+            )
+
+        # Create IPC Gloo gather groups (only on first call; partitioning is
+        # fixed across reconnects).
+        if self._ipc_gather_group is None:
+            for i in range(colocate_engine_nums):
+                group_ranks = list(range(colocate_gpu_offsets[i], colocate_gpu_offsets[i] + colocate_gpu_counts[i]))
+                new_group = dist.new_group(ranks=group_ranks, backend="gloo")
+                if dist.get_rank() in group_ranks:
+                    self._ipc_gather_group = new_group
+                    self._ipc_gather_src = colocate_gpu_offsets[i]
+
+        # Map training ranks to colocated engine actors.
+        for i, engine in enumerate(self.rollout_engines):
+            start = colocate_gpu_offsets[i]
+            end = start + colocate_gpu_counts[i]
+            if start <= dist.get_rank() < end:
+                self._ipc_engine = engine
+
+        if self._native_ipc_trainer is None and dist.get_rank() == 0 and self.rollout_engines:
+            engines_to_initialize = [
+                engine
+                for engine in self.rollout_engines
+                if _rollout_engine_identity(engine) not in self._ipc_initialized_engine_ids
+            ]
+            ray.get(
+                [
+                    engine.init_weight_transfer_engine.remote({"init_info": {"packed": True}})
+                    for engine in engines_to_initialize
+                ]
+            )
+            self._ipc_initialized_engine_ids.update(map(_rollout_engine_identity, engines_to_initialize))
+
     def pop_metrics(self) -> dict[str, float]:
         """
         Return and clear ``update_weight_metrics``. Empty under colocate today;
@@ -310,13 +405,6 @@ class UpdateWeightFromTensor:
         out, self.update_weight_metrics = self.update_weight_metrics, {}
         return out
 
-<<<<<<< ours (vime current)
-    # ------------------------------------------------------------------
-    # weight update
-    # ------------------------------------------------------------------
-
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-=======
     def _prepare_expert_weight_batch(
         self,
         transfers: Sequence[Any],
@@ -375,9 +463,7 @@ class UpdateWeightFromTensor:
         megatron_local_weights: Mapping[str, torch.Tensor],
     ) -> None:
         dist.barrier(group=get_gloo_group())
-        # Initialize WORLD on all ranks before subset batched P2P.
         dist.barrier()
-        # Reuse staging across layers instead of fragmenting the CUDA allocator.
         staging_buffers: dict[tuple[torch.dtype, tuple[int, ...]], list[torch.Tensor]] = {}
         for transfer_group in tqdm(
             self._expert_transfer_plan,
@@ -400,43 +486,111 @@ class UpdateWeightFromTensor:
         del staging_buffers
         torch.cuda.empty_cache()
 
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+    # ------------------------------------------------------------------
+    # weight update
+    # ------------------------------------------------------------------
+
     @torch.no_grad()
     def update_weights(self) -> None:
         """
         version++, flush caches, process buckets. Progress on rank 0.
         """
+        previous_version = self.weight_version
         self.weight_version += 1
+        try:
+            rank = dist.get_rank()
+            if rank == 0:
+                ray.get([engine.pause_generation.remote() for engine in self._all_rollout_engines])
+                ray.get([engine.flush_cache.remote() for engine in self._all_rollout_engines])
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=True,
+                        post_process_quantization=False,
+                        rollout_engines=self._all_rollout_engines,
+                    )
+            dist.barrier(group=get_gloo_group())
 
-        if self.rank == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=True,
-                    post_process_quantization=False,
-                    rollout_engines=self.rollout_engines,
-                )
-        dist.barrier(group=get_gloo_group())
+            if self._native_ipc_trainer is not None:
+                self._native_ipc_trainer.send_weights()
+                torch.cuda.ipc_collect()
+                torch.cuda.empty_cache()
+                if rank == 0:
+                    if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                        post_process_weights(
+                            restore_weights_before_load=False,
+                            post_process_quantization=True,
+                            rollout_engines=self._all_rollout_engines,
+                        )
+                    ray.get([engine.continue_generation.remote() for engine in self._all_rollout_engines])
+                dist.barrier(group=get_gloo_group())
+                return
 
-        # vLLM #39212: enter weight-update mode on each slot leader.
-        if self._ipc_engine is not None and rank == self._ipc_gather_src:
-            ray.get(self._ipc_engine.start_weight_update.remote(is_checkpoint_format=True))
-        dist.barrier(group=get_gloo_group())
+            self._start_weight_update(draft=False)
 
-<<<<<<< ours (vime current)
-        megatron_local_weights = self.weights_getter()
-        self._send_weight_chunks(megatron_local_weights)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
-            refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-            ray.get(refs)
-            # Free GPU tensors so the caching allocator can reuse the blocks,
-            # then release CUDA IPC cache entries whose consumers (vllm engines)
-            # have already closed their IPC handles.
-            del long_lived_tensors, hf_named_tensors
+            megatron_local_weights = self.weights_getter()
+            self._send_weight_chunks(megatron_local_weights)
+
+            dist.barrier(group=get_gloo_group())
+            # After the barrier all engines have returned, so every rank's last-chunk
+            # IPC handles are now released by the consumers.  Clean them up.
             torch.cuda.ipc_collect()
-=======
+            torch.cuda.empty_cache()
+
+            self._finish_weight_update()
+
+            if self.args.enable_mtp_training and (self.args.vllm_speculative_config or {}).get("method") == "mtp":
+                self._start_weight_update(draft=True)
+
+                self._send_weight_chunks(megatron_local_weights)
+
+                dist.barrier(group=get_gloo_group())
+                torch.cuda.ipc_collect()
+                torch.cuda.empty_cache()
+                self._finish_weight_update()
+
+            # int4/fp4 post_process
+            if rank == 0:
+                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                    post_process_weights(
+                        restore_weights_before_load=False,
+                        post_process_quantization=True,
+                        rollout_engines=self._all_rollout_engines,
+                    )
+                ray.get([engine.continue_generation.remote() for engine in self._all_rollout_engines])
+            dist.barrier(group=get_gloo_group())
+        except Exception:
+            self.weight_version = previous_version
+            raise
+
+    def _start_weight_update(self, *, draft: bool) -> None:
+        rank = dist.get_rank()
+        if self._ipc_engine is not None and rank == self._ipc_gather_src:
+            method = self._ipc_engine.start_draft_weight_update if draft else self._ipc_engine.start_weight_update
+            ray.get(method.remote())
+        if rank == 0 and self.distributed_rollout_engines:
+            if draft:
+                refs = [engine.start_draft_weight_update.remote() for engine in self.distributed_rollout_engines]
+            else:
+                refs = [engine.start_weight_update.remote() for engine in self.distributed_rollout_engines]
+            ray.get(refs)
+        dist.barrier(group=get_gloo_group())
+
+    def _finish_weight_update(self) -> None:
+        rank = dist.get_rank()
+        if self._ipc_engine is not None and rank == self._ipc_gather_src:
+            ray.get(self._ipc_engine.finish_weight_update.remote(weight_version=str(self.weight_version)))
+        if rank == 0 and self.distributed_rollout_engines:
+            ray.get(
+                [
+                    engine.finish_weight_update.remote(weight_version=str(self.weight_version))
+                    for engine in self.distributed_rollout_engines
+                ]
+            )
+        dist.barrier(group=get_gloo_group())
+
+    def _send_weight_chunks(self, megatron_local_weights) -> None:
+        max_inflight = 1 if self.use_distribute else _MAX_COLOCATED_UPDATES_INFLIGHT
+        pending = []
         param_info_buckets = (
             self._non_expert_param_info_buckets if self._expert_transfer_plan else self._full_param_info_buckets
         )
@@ -444,68 +598,13 @@ class UpdateWeightFromTensor:
             megatron_local_weights,
             param_info_buckets=param_info_buckets,
         ):
-            refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
-            ray.get(refs)
-            # Free GPU tensors so the caching allocator can reuse the blocks,
-            # then release CUDA IPC cache entries whose consumers (vllm engines)
-            # have already closed their IPC handles.
-            del refs, long_lived_tensors, hf_named_tensors
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
-
-        if self._expert_transfer_plan:
-            self._update_expert_weights(megatron_local_weights)
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
-
-        del megatron_local_weights
-        dist.barrier(group=get_gloo_group())
-        # After the barrier all engines have returned, so every rank's last-chunk
-        # IPC handles are now released by the consumers.  Clean them up.
-        torch.cuda.ipc_collect()
-        torch.cuda.empty_cache()
-
-        # vLLM #39212: exit weight-update mode.
-        if self._ipc_engine is not None and rank == self._ipc_gather_src:
-            ray.get(self._ipc_engine.finish_weight_update.remote())
-        dist.barrier(group=get_gloo_group())
-
-        if (
-            not self.use_distribute
-            and self.args.enable_mtp_training
-            and (self.args.vllm_speculative_config or {}).get("method") == "mtp"
-        ):
-            if self._ipc_engine is not None and rank == self._ipc_gather_src:
-                ray.get(self._ipc_engine.start_draft_weight_update.remote())
-            dist.barrier(group=get_gloo_group())
-
-            self._send_weight_chunks(megatron_local_weights)
-
-            dist.barrier(group=get_gloo_group())
-            torch.cuda.ipc_collect()
-            if self._ipc_engine is not None and rank == self._ipc_gather_src:
-                ray.get(self._ipc_engine.finish_weight_update.remote())
-            dist.barrier(group=get_gloo_group())
-
-        # int4/fp4 post_process
-        if self.rank == 0:
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
-                )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
-    def _send_weight_chunks(self, megatron_local_weights) -> None:
-        max_inflight = 1 if self.use_distribute else _MAX_COLOCATED_UPDATES_INFLIGHT
-        pending = []
-        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
             refs, weight_refs = self._send_hf_params(hf_named_tensors)
             pending.append((refs, weight_refs))
             if len(pending) >= max_inflight:
                 self._drain_ipc_updates(pending)
         self._drain_ipc_updates(pending)
+        if self._expert_transfer_plan:
+            self._update_expert_weights(megatron_local_weights)
 
     def _drain_ipc_updates(self, pending) -> None:
         if not pending:
@@ -515,6 +614,7 @@ class UpdateWeightFromTensor:
             dist.barrier(group=self._ipc_gather_group)
         pending.clear()
         torch.cuda.ipc_collect()
+        torch.cuda.empty_cache()
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
         all_refs = []
@@ -554,11 +654,12 @@ def _send_to_colocated_engine(
     if ipc_gather_group is None:
         return [], None
 
-<<<<<<< ours (vime current)
     local_info, weight_ref = _build_packed_ipc_update_info(hf_named_tensors)
 
     slot_size = dist.get_world_size(ipc_gather_group)
     if slot_size <= 1:
+        if not local_info["names"]:
+            return [], weight_ref
         ref = ipc_engine.update_weights_from_tensor.remote(**local_info, weight_version=str(weight_version))
         return [ref], weight_ref
 
@@ -566,75 +667,13 @@ def _send_to_colocated_engine(
 
     gathered_payloads = [None] * slot_size if dist.get_rank() == ipc_gather_src else None
     dist.gather_object(payload, object_gather_list=gathered_payloads, dst=ipc_gather_src, group=ipc_gather_group)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    long_live_tensors = []
-
-    if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors} if hf_named_tensors else {}
-    else:
-        converted_named_tensors_by_dtypes = {}
-        for name, tensor in hf_named_tensors:
-            dtype = tensor.dtype
-            if dtype not in converted_named_tensors_by_dtypes:
-                converted_named_tensors_by_dtypes[dtype] = []
-            converted_named_tensors_by_dtypes[dtype].append((name, tensor))
-
-    serialized_tensors = []
-    for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
-        flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-        metadata = flattened_tensor_bucket.get_metadata()
-        flattened_tensor_data = {
-            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-            "metadata": metadata,
-        }
-        long_live_tensors.append(flattened_tensor_data)
-        serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
-
-    serialized_named_tensors = (
-        [None] * dist.get_world_size(ipc_gather_group) if ipc_gather_src == dist.get_rank() else None
-    )
-    dist.gather_object(
-        serialized_tensors,
-        object_gather_list=serialized_named_tensors,
-        dst=ipc_gather_src,
-        group=ipc_gather_group,
-    )
-=======
-    long_live_tensors = []
-
-    if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-        converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors} if hf_named_tensors else {}
-    else:
-        converted_named_tensors_by_dtypes = {}
-        for name, tensor in hf_named_tensors:
-            dtype = tensor.dtype
-            if dtype not in converted_named_tensors_by_dtypes:
-                converted_named_tensors_by_dtypes[dtype] = []
-            converted_named_tensors_by_dtypes[dtype].append((name, tensor))
-
-    serialized_tensors = []
-    for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
-        flattened_tensor_data = _build_flattened_tensor_data(named_tensors)
-        long_live_tensors.append(flattened_tensor_data)
-        serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
-
-    serialized_named_tensors = (
-        [None] * dist.get_world_size(ipc_gather_group) if ipc_gather_src == dist.get_rank() else None
-    )
-    dist.gather_object(
-        serialized_tensors,
-        object_gather_list=serialized_named_tensors,
-        dst=ipc_gather_src,
-        group=ipc_gather_group,
-    )
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     refs = []
     if dist.get_rank() == ipc_gather_src:
         if any(p is None for p in gathered_payloads):
             raise RuntimeError(f"Missing IPC payloads in slot {ipc_gather_src}; got {gathered_payloads!r}")
         slot_infos = [_deserialize_ipc_update_info(p) for p in gathered_payloads]
-        merged = _merge_ipc_update_infos(slot_infos)
-        refs.append(ipc_engine.update_weights_from_tensor.remote(**merged, weight_version=str(weight_version)))
+        for merged in _group_ipc_update_infos(slot_infos):
+            refs.append(ipc_engine.update_weights_from_tensor.remote(**merged, weight_version=str(weight_version)))
 
     return refs, weight_ref

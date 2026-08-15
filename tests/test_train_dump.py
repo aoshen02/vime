@@ -5,7 +5,7 @@ import pytest
 import torch
 from _cp_dist_helpers import cp_chunk_response_tensor, free_port, init_worker_process_group, stub_megatron_in_worker
 
-from slime.backends.megatron_utils.train_dump_utils import (
+from vime.backends.megatron_utils.train_dump_utils import (
     _build_dump_payload,
     restore_context_parallel_fields_to_cpu,
     save_debug_train_data,
@@ -48,7 +48,7 @@ def _restore_context_parallel_worker(rank, world_size, master_port, result_path)
     cp_group = init_worker_process_group(rank, world_size, master_port)
     try:
         from megatron.core import mpu
-        from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+        from vime.backends.megatron_utils.cp_utils import all_gather_with_cp
 
         mpu.get_context_parallel_group = lambda: cp_group
 
@@ -166,7 +166,7 @@ def test_save_debug_train_data_writes_one_file_with_all_dp_shards(tmp_path):
 
 def test_save_debug_train_data_restores_cp_fields_by_default(tmp_path, monkeypatch):
     from megatron.core import mpu
-    from slime.backends.megatron_utils import cp_utils
+    from vime.backends.megatron_utils import cp_utils
 
     monkeypatch.setattr(torch.distributed, "get_rank", lambda: 3)
     _patch_single_dp_writer(monkeypatch, mpu, cp_size=2, writer_rank=3)
@@ -341,7 +341,7 @@ def test_build_dump_payload_uses_partition_when_sample_index_missing():
 
 
 def test_log_prob_capture_reorders_by_rollout_position():
-    from slime.backends.megatron_utils import loss
+    from vime.backends.megatron_utils import loss
 
     loss.enable_log_prob_capture()
     # Two micro-batches with interleaved global positions, mirroring how the DP
@@ -363,7 +363,7 @@ def test_log_prob_capture_reorders_by_rollout_position():
 
 
 def test_log_prob_capture_first_occurrence_wins():
-    from slime.backends.megatron_utils import loss
+    from vime.backends.megatron_utils import loss
 
     loss.enable_log_prob_capture()
     loss._maybe_capture_log_probs({"partition": [0]}, [torch.tensor([1.0])])

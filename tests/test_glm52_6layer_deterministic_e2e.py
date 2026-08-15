@@ -19,7 +19,7 @@ Environment overrides (all optional):
 * ``VLLM_KV_CACHE_DTYPE``  -- ``fp8_e4m3`` (default) or ``bfloat16``.
 * ``MLP_SOCKET_IFNAME``      -- NIC for Ray/NCCL/GLOO/NVSHMEM (single-node run).
 * ``VLLM_ROOT``           -- deterministic VLLM checkout (default
-  ``/sgl-workspace/vllm``); its ``python`` dir is prepended to PYTHONPATH.
+  ``/vllm-workspace``); it is prepended to PYTHONPATH.
 * ``MEGATRON_ROOT``          -- Megatron checkout (default ``/root/Megatron-LM``).
 * ``HF_MODEL`` / ``PROMPT_DATA`` -- checkpoint / dataset paths. Missing
   container-default assets are downloaded into the standard ``/root`` mounts.
@@ -50,7 +50,7 @@ DEFAULT_HF_REPO = "zhuzilin/GLM-5.2-6layer-FP8"
 DEFAULT_HF_MODEL = "/root/models/GLM-5.2-6layer-FP8"
 DEFAULT_PROMPT_REPO = "zhuzilin/dapo-math-17k"
 DEFAULT_PROMPT_DATA = "/root/datasets/dapo-math-17k/dapo-math-17k.jsonl"
-DEFAULT_VLLM_ROOT = "/sgl-workspace/vllm"
+DEFAULT_VLLM_ROOT = "/vllm-workspace"
 DEFAULT_MEGATRON_ROOT = "/root/Megatron-LM"
 
 # Probe (run under the gate PYTHONPATH) for the deterministic-inference stack.
@@ -77,7 +77,7 @@ def _iface_ipv4(ifname: str) -> str | None:
 
 
 def _pythonpath(vllm_root: str, megatron_root: str) -> str:
-    parts = [str(REPO_ROOT), megatron_root, f"{vllm_root}/python"]
+    parts = [str(REPO_ROOT), megatron_root, vllm_root]
     if os.environ.get("PYTHONPATH"):
         parts.append(os.environ["PYTHONPATH"])
     return os.pathsep.join(p for p in parts if p)
@@ -89,7 +89,7 @@ def _deterministic_env(
     kv_cache_dtype: str,
 ) -> dict:
     """Shared alignment env + this launch's connectivity settings."""
-    from slime.backends.megatron_utils.alignment.env import alignment_env
+    from vime.backends.megatron_utils.alignment.env import alignment_env
 
     ifname = os.environ.get("MLP_SOCKET_IFNAME")
     env = alignment_env(
@@ -188,7 +188,7 @@ def _train_args(
         "--update-weight-mode full --update-weight-transport nccl "
         "--update-weight-buffer-size 2147483648 --no-check-for-nan-in-loss-and-grad",
         # model (6-layer GLM-5.2 structure: 3 dense + 3 MoE, MLA + DSA)
-        "--spec slime_plugins.models.glm5.glm5 get_glm5_spec "
+        "--spec vime_plugins.models.glm5.glm5 get_glm5_spec "
         "--moe-layer-freq [0]*3+[1]*3 --num-experts 256 --moe-shared-expert-intermediate-size 2048 "
         "--moe-router-topk 8 --moe-grouped-gemm --moe-ffn-hidden-size 2048 "
         "--moe-router-score-function sigmoid --moe-router-pre-softmax --moe-router-enable-expert-bias "
@@ -215,7 +215,7 @@ def _train_args(
         # GRPO + TIS (icepop)
         "--advantage-estimator grpo --kl-loss-coef 0 --kl-loss-type low_var_kl --kl-coef 0 --entropy-coef 0 "
         "--eps-clip 0.2 --eps-clip-high 0.28 --use-tis "
-        "--custom-tis-function-path slime.backends.megatron_utils.loss.icepop_function "
+        "--custom-tis-function-path vime.backends.megatron_utils.loss.icepop_function "
         "--tis-clip-low 0.5 --tis-clip 2.0 --disable-grpo-std-normalization --reset-optimizer-states",
         # parallelism / perf (pure-EP, recompute, dynamic batch)
         f"--tensor-model-parallel-size 1 --sequence-parallel --pipeline-model-parallel-size 1 "
@@ -249,9 +249,9 @@ def _train_args(
         "--moe-token-dispatcher-type flex --moe-enable-deepep "
         '--train-env-vars {"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True","CUDA_LAUNCH_BLOCKING":"1"} '
         "--custom-megatron-before-log-prob-hook-path "
-        "slime.backends.megatron_utils.alignment.deepgemm_forward.enable_deepgemm_all_forward "
+        "vime.backends.megatron_utils.alignment.deepgemm_forward.enable_deepgemm_all_forward "
         "--custom-megatron-before-train-step-hook-path "
-        "slime.backends.megatron_utils.alignment.deepgemm_forward.enable_deepgemm_all_forward_before_train_step "
+        "vime.backends.megatron_utils.alignment.deepgemm_forward.enable_deepgemm_all_forward_before_train_step "
         "--megatron-deepgemm-forward-layers 0 1 2 3 4 5 --megatron-deepgemm-moe-forward-layers 3 4 5 "
         "--deterministic-mode --skip-eval-before-train "
         f"--ci-test --ci-disable-kl-checker --ci-train-rollout-logprob-abs-diff-threshold {threshold}",
@@ -265,6 +265,8 @@ def _train_args(
 
 
 def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 4096) -> None:
+    # vLLM 0.27.1 sparse MLA does not support batch-invariant inference.
+    raise RuntimeError("GLM-5.2 deterministic alignment is temporarily unsupported with vLLM 0.27.1")
     vllm_root = os.environ.get("VLLM_ROOT", DEFAULT_VLLM_ROOT)
     megatron_root = os.environ.get("MEGATRON_ROOT", DEFAULT_MEGATRON_ROOT)
     hf_model = os.environ.get("HF_MODEL", DEFAULT_HF_MODEL)
@@ -318,7 +320,7 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
         if layerwise_zero:
             env.update(
                 {
-                    "SLIME_LAYERWISE_ALIGNMENT_DUMP_DIR": megatron_layerwise_dump,
+                    "VIME_LAYERWISE_ALIGNMENT_DUMP_DIR": megatron_layerwise_dump,
                     "VLLM_TENSOR_DUMP_LAYER_OUTPUTS_ONLY": "1",
                     "VLLM_TENSOR_DUMP_CHUNK_SIZE": "64",
                 }
@@ -366,7 +368,7 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
                     [
                         sys.executable,
                         "-m",
-                        "slime.utils.compare_glm52_layerwise",
+                        "vime.utils.compare_glm52_layerwise",
                         "--megatron-dir",
                         megatron_layerwise_dump,
                         "--vllm-dir",

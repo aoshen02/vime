@@ -20,7 +20,7 @@ import tempfile
 
 import torch
 
-import slime.utils.external_utils.command_utils as U
+import vime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
@@ -88,7 +88,9 @@ def _train_args(dump_dir: str) -> str:
         "--ci-test "
     )
 
-    vllm_args = "--rollout-num-gpus-per-engine 2 --vllm-mem-fraction-static 0.7 --vllm-cuda-graph-max-bs 16 "
+    vllm_args = (
+        "--rollout-num-gpus-per-engine 2 " "--vllm-gpu-memory-utilization 0.7 " "--vllm-max-cudagraph-capture-size 16 "
+    )
 
     return (
         f"{ckpt_args} {rollout_args} {optimizer_args} {grpo_args} "
@@ -144,7 +146,7 @@ def _verify(dump_dir: str):
 
 
 def execute():
-    dump_dir = tempfile.mkdtemp(prefix="slime_dump_details_")
+    dump_dir = tempfile.mkdtemp(prefix="vime_dump_details_")
     print(f"Using dump-details dir: {dump_dir}")
 
     U.execute_train(

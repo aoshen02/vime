@@ -3,8 +3,8 @@ import types
 
 import pytest
 
-from slime.rollout.sample_hooks import apply_rollout_sample_hooks, set_current_rollout_id
-from slime.utils.types import Sample
+from vime.rollout.sample_hooks import apply_rollout_sample_hooks, set_current_rollout_id
+from vime.utils.types import Sample
 
 NUM_GPUS = 0
 

@@ -30,39 +30,54 @@ def _vllm_fp8_indexer_logits(
 
     if index_q.shape[-1] != 128:
         raise ValueError("VLLM FP8 indexer alignment requires head_dim=128, " f"got {index_q.shape[-1]}")
-    import deep_gemm
-    from vllm.jit_kernel.fused_store_index_cache import fused_store_index_k_cache
-    from vllm.srt.layers.attention.dsa.dsa_indexer import rotate_activation
-    from vllm.srt.layers.attention.dsa.triton_kernel import act_quant
+    from vllm import _custom_ops as ops
+    from vllm.model_executor.layers.quantization.utils.fp8_utils import per_token_group_quant_fp8
+    from vllm.utils.deep_gemm import fp8_fp4_mqa_logits
 
-    q_rotated = rotate_activation(index_q.contiguous())
+    q_rotated = torch.cat((index_q[..., -64:], index_q[..., :-64]), dim=-1).contiguous()
     if index_k.ndim == 3:
         if index_k.shape[1] != 1:
             raise ValueError(f"Expected one indexer KV head, got {index_k.shape}")
         index_k = index_k.squeeze(1)
-    k_rotated = rotate_activation(index_k.contiguous())
+    k_rotated = torch.cat((index_k[..., -64:], index_k[..., :-64]), dim=-1).contiguous()
 
-    q_fp8, q_scale = act_quant(q_rotated, 128, "ue8m0")
+    q_fp8, q_scale = per_token_group_quant_fp8(
+        q_rotated.view(-1, q_rotated.shape[-1]),
+        128,
+        use_ue8m0=True,
+    )
+    q_fp8 = q_fp8.view_as(q_rotated)
+    q_scale = q_scale.view(*q_rotated.shape[:-1], 1)
     page_size = 64
     num_k = k_rotated.shape[0]
     num_pages = (num_k + page_size - 1) // page_size
     packed_k = torch.empty(
-        (num_pages, page_size * (128 + 4)),
+        (num_pages, page_size, 128 + 4),
         dtype=torch.uint8,
         device=k_rotated.device,
     )
-    fused_store_index_k_cache(
+    ops.indexer_k_quant_and_cache(
         k_rotated,
         packed_k,
         torch.arange(num_k, dtype=torch.int64, device=k_rotated.device),
-        page_size=page_size,
+        128,
+        "ue8m0",
     )
-    k_fp8 = packed_k[:, : page_size * 128].contiguous().view(torch.float8_e4m3fn).reshape(-1, 128)[:num_k]
-    k_scale = packed_k[:, page_size * 128 :].contiguous().view(torch.float32).reshape(-1)[:num_k]
+    k_bytes = torch.empty((num_k, 128), dtype=torch.uint8, device=k_rotated.device)
+    k_scale_bytes = torch.empty((num_k, 4), dtype=torch.uint8, device=k_rotated.device)
+    ops.cp_gather_indexer_k_quant_cache(
+        packed_k,
+        k_bytes,
+        k_scale_bytes,
+        torch.arange(num_pages, dtype=torch.int32, device=k_rotated.device).unsqueeze(0),
+        torch.tensor([0, num_k], dtype=torch.int32, device=k_rotated.device),
+    )
+    k_fp8 = k_bytes.view(torch.float8_e4m3fn)
+    k_scale = k_scale_bytes.view(torch.float32).reshape(-1)
     scaled_weights = weights.float() * q_scale.squeeze(-1).float()
     scaled_weights = (scaled_weights * (index_q.shape[-1] ** -0.5)).contiguous()
-    logits = deep_gemm.fp8_mqa_logits(
-        q_fp8,
+    logits = fp8_fp4_mqa_logits(
+        (q_fp8, None),
         (k_fp8, k_scale),
         scaled_weights,
         starts.to(torch.int32).contiguous(),

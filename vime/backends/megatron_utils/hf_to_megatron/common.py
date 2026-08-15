@@ -150,7 +150,7 @@ def load_model_hf_weights(
     config,
     get_hf_tensor: Callable[[str, SafetensorReader, object], torch.Tensor],
 ) -> None:
-    from slime.backends.megatron_utils.update_weight.common import named_params_and_buffers
+    from vime.backends.megatron_utils.update_weight.common import named_params_and_buffers
 
     reader = SafetensorReader(path)
     with torch.no_grad():

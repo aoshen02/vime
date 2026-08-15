@@ -12,47 +12,19 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-<<<<<<< ours (vime current)
 import vllm_router  # noqa: F401 — ensures vllm-router is importable on startup
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-import vllm_router
-from packaging.version import parse
-=======
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 from tqdm import tqdm
 
-<<<<<<< ours (vime current)
 from vime.backends.vllm_utils.server_control import abort_inflight_requests
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
-from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
+from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
+from vime.rollout.sample_hooks import apply_rollout_sample_hooks
 from vime.utils.async_utils import run
 from vime.utils.data import Dataset
 from vime.utils.eval_config import EvalDatasetConfig
 from vime.utils.http_utils import get, get_rollout_num_engines, post
 from vime.utils.misc import SingletonMeta, load_function
 from vime.utils.processing_utils import (
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from slime.backends.vllm_utils.server_control import abort_servers_until_idle
-from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
-from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
-from slime.utils.async_utils import run
-from slime.utils.data import Dataset
-from slime.utils.eval_config import EvalDatasetConfig
-from slime.utils.http_utils import get, get_rollout_num_engines, post
-from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.processing_utils import (
-=======
-from slime.backends.vllm_utils.server_control import abort_servers_until_idle
-from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
-from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
-from slime.rollout.sample_hooks import apply_rollout_sample_hooks
-from slime.utils.async_utils import run
-from slime.utils.data import Dataset
-from slime.utils.eval_config import EvalDatasetConfig
-from slime.utils.http_utils import get, get_rollout_num_engines, post
-from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.processing_utils import (
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     build_processor_kwargs,
     encode_image_for_rollout_engine,
     load_processor,
@@ -333,8 +305,7 @@ def _align_mm_feature_placeholders_to_tokens(generate_body: dict[str, Any], toke
             length = int(entry.get("length", -1))
             if offset < 0 or length <= 0 or offset + length > len(render_token_ids):
                 raise ValueError(
-                    f"Cannot align vLLM {modality} placeholder: invalid render range "
-                    f"offset={offset}, length={length}, render_len={len(render_token_ids)}"
+                    f"Cannot align vLLM {modality} placeholder: invalid render range offset={offset}, length={length}, render_len={len(render_token_ids)}"
                 )
             ordered_entries.append((offset, str(modality), entry))
 
@@ -345,8 +316,7 @@ def _align_mm_feature_placeholders_to_tokens(generate_body: dict[str, Any], toke
         offset = _find_token_subsequence(token_ids, placeholder_tokens, search_start)
         if offset < 0:
             raise ValueError(
-                f"Cannot align vLLM {modality} placeholder from render offset={render_offset}, length={length}: "
-                "placeholder token slice not found in canonical token_ids"
+                f"Cannot align vLLM {modality} placeholder from render offset={render_offset}, length={length}: placeholder token slice not found in canonical token_ids"
             )
         entry["offset"] = offset
         entry["length"] = len(placeholder_tokens)
@@ -416,7 +386,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         url = f"{base}/inference/v1/generate"
         payload = {
             "model": args.hf_checkpoint,
-            "token_ids": prompt_ids,
+            "token_ids": list(prompt_ids),
             "sampling_params": inference_sampling_params,
         }
 
@@ -455,6 +425,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     else:
         finish = {"type": "stop"}
     meta: dict[str, Any] = {"finish_reason": finish}
+    if output.get("weight_version") is not None:
+        meta["weight_version"] = str(output["weight_version"])
     usage = output.get("usage")
     if usage:
         meta["prompt_tokens"] = usage.get("prompt_tokens", 0)
@@ -602,23 +574,11 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     assert not state.aborted
     state.aborted = True
 
-<<<<<<< ours (vime current)
     loop = asyncio.get_running_loop()
     if state.pendings:
         base = f"http://{args.vllm_router_ip}:{args.vllm_router_port}"
         response = await get(f"{base}/workers")
         urls = [worker["url"] for worker in response["workers"]]
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    if parse(vllm_router.__version__) <= parse("0.2.1"):
-        response = await get(f"http://{args.vllm_router_ip}:{args.vllm_router_port}/list_workers")
-        urls = response["urls"]
-    else:
-        response = await get(f"http://{args.vllm_router_ip}:{args.vllm_router_port}/workers")
-        urls = [worker["url"] for worker in response["workers"]]
-=======
-    response = await get(f"http://{args.vllm_router_ip}:{args.vllm_router_port}/workers")
-    urls = [worker["url"] for worker in response["workers"]]
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
         # Delete-type abort: drop in-flight requests without pausing the scheduler.
         await abort_inflight_requests(urls)
@@ -887,9 +847,7 @@ async def eval_rollout_single_dataset(
         if do_print:
             logged_sample = sample[0] if isinstance(sample, list) else sample
             logger.info(
-                "eval_rollout_single_dataset example data: "
-                f"{[str(logged_sample.prompt) + logged_sample.response]} "
-                f"reward={logged_sample.reward}"
+                f"eval_rollout_single_dataset example data: {[str(logged_sample.prompt) + logged_sample.response]} reward={logged_sample.reward}"
             )
             do_print = False
         if isinstance(sample, list):

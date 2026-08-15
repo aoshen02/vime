@@ -14,14 +14,14 @@ try:
 except ModuleNotFoundError:
     _has_megatron = False
 if not _has_megatron:
-    _megatron_utils = types.ModuleType("slime.backends.megatron_utils")
-    _megatron_utils.__path__ = [str(Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils")]
-    sys.modules["slime.backends.megatron_utils"] = _megatron_utils
+    _megatron_utils = types.ModuleType("vime.backends.megatron_utils")
+    _megatron_utils.__path__ = [str(Path(__file__).resolve().parents[1] / "vime/backends/megatron_utils")]
+    sys.modules["vime.backends.megatron_utils"] = _megatron_utils
 
-from slime.backends.megatron_utils.hf_to_megatron.common import SafetensorReader, _tensor_parallel_shard
-from slime.backends.megatron_utils.hf_to_megatron.qwen3_5 import qwen3_5_hf_tensor
-from slime.backends.megatron_utils.megatron_to_hf.qwen3_5 import convert_qwen3_5_to_hf
-from slime_plugins.models.qwen3_5_vl_utils import build_packed_mrope_position_ids, get_packed_cp_local_indices
+from vime.backends.megatron_utils.hf_to_megatron.common import SafetensorReader, _tensor_parallel_shard
+from vime.backends.megatron_utils.hf_to_megatron.qwen3_5 import qwen3_5_hf_tensor
+from vime.backends.megatron_utils.megatron_to_hf.qwen3_5 import convert_qwen3_5_to_hf
+from vime_plugins.models.qwen3_5_vl_utils import build_packed_mrope_position_ids, get_packed_cp_local_indices
 
 NUM_GPUS = 0
 

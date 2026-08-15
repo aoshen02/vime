@@ -125,7 +125,7 @@ WANDB_ARGS=(
 VLLM_CONFIG_FILE=$(mktemp /tmp/vllm_glm52_744B_A40B_XXXXXX.yaml)
 # PD disaggregation: 1 prefill engine (64 GPU) + 3 decode engines (192 GPU) = 256.
 # Each engine spans 64 GPUs (EP=64, within DeepEP's supported rank set). Prefill
-# uses the auto DeepEP path; decode uses low_latency + deep_gemm for throughput.
+# uses the high-throughput DeepEP backend; decode uses the low-latency backend.
 cat > "${VLLM_CONFIG_FILE}" <<CFG
 vllm:
   - name: default
@@ -223,8 +223,6 @@ RUNTIME_ENV_JSON=$(cat <<EOF_JSON
     "INDEXER_ROPE_NEOX_STYLE": "0",
     "MC_IB_PCI_RELAXED_ORDERING": "1",
     "MLP_SKIP_SORT_RDMA": "true",
-    "VLLM_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": "64",
-    "VLLM_JIT_DEEPGEMM_PRECOMPILE": "true",
     "NVSHMEM_DISABLE_NCCL": "1"
   }
 }

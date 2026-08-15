@@ -114,19 +114,9 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
         if multimodal:
             from vime.utils.processing_utils import build_processor_kwargs
 
-<<<<<<< ours (vime current)
-            for sample in multimodal:
+            for position, sample in multimodal:
                 processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
                 processor_output = processor(text=sample.prompt, **processor_kwargs)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            for sample in multimodal:
-                multimodal_inputs = process_vision_info(sample.prompt, processor)
-                processor_output = processor(text=sample.prompt, **multimodal_inputs)
-=======
-            for position, sample in multimodal:
-                multimodal_inputs = process_vision_info(sample.prompt, processor)
-                processor_output = processor(text=sample.prompt, **multimodal_inputs)
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
                 input_ids = processor_output["input_ids"][0]
                 if len(input_ids) <= max_length:
                     kept.append((position, sample))

@@ -30,22 +30,10 @@ class bdist_wheel(_bdist_wheel):
 
 # Setup configuration
 setup(
-<<<<<<< ours (vime current)
     author="vime Team",
     name="vime",
-    version="0.3.0",
-    packages=find_packages(include=["vime*", "vime_plugins*"]),
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    author="slime Team",
-    name="slime",
-    version="0.3.0",
-    packages=find_packages(include=["slime*", "slime_plugins*"]),
-=======
-    author="slime Team",
-    name="slime",
     version="0.3.1",
-    packages=find_packages(include=["slime*", "slime_plugins*"]),
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+    packages=find_packages(include=["vime*", "vime_plugins*"]),
     include_package_data=True,
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={},

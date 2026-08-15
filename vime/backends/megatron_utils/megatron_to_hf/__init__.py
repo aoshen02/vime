@@ -1,6 +1,8 @@
 from .deepseekv3 import convert_deepseekv3_to_hf
+from .gemma4 import convert_gemma4_to_hf
 from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
+from .gpt_oss import convert_gpt_oss_to_hf
 from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
 from .minimax_m2 import convert_minimax_m2_to_hf
@@ -20,7 +22,7 @@ def postprocess_hf_param(args, megatron_param_name, hf_param_name, param):
 
 
 # TODO optimize code details
-def convert_to_hf(args, model_name, name, param, quantization_config=None, transform_ue8m0=True):
+def convert_to_hf(args, model_name, name, param, quantization_config=None, transform_ue8m0=False):
     hf_name = name
     while hf_name.startswith("module."):
         hf_name = hf_name.removeprefix("module.")
@@ -44,6 +46,8 @@ def _convert_to_hf_core(args, model_name, name, param):
         converted_named_tensors = convert_glm4moe_to_hf(args, name, param)
     elif "glm4" in model_name:
         converted_named_tensors = convert_glm4_to_hf(args, name, param)
+    elif "gptoss" in model_name:
+        converted_named_tensors = convert_gpt_oss_to_hf(args, name, param)
     elif "qwen3next" in model_name:
         converted_named_tensors = convert_qwen3_next_to_hf(args, name, param)
     elif "qwen35" in model_name:
@@ -54,6 +58,8 @@ def _convert_to_hf_core(args, model_name, name, param):
         converted_named_tensors = convert_qwen3moe_to_hf(args, name, param)
     elif "qwen2" in model_name or "qwen3" in model_name:
         converted_named_tensors = convert_qwen2_to_hf(args, name, param)
+    elif "gemma4" in model_name:
+        converted_named_tensors = convert_gemma4_to_hf(args, name, param)
     elif "llama" in model_name:
         converted_named_tensors = convert_llama_to_hf(args, name, param)
     elif "mimo" in model_name:

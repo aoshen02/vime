@@ -8,6 +8,7 @@ from vime.ray.ray_actor import RayActor
 # Refer to
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/nvidia_gpu.py#L95-L96
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/amd_gpu.py#L102-L103
+# https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/npu.py#L94-L95
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/hpu.py#L116-L117
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/neuron.py#L108-L109
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/tpu.py#L171-L172
@@ -15,6 +16,7 @@ from vime.ray.ray_actor import RayActor
 NOSET_VISIBLE_DEVICES_ENV_VARS_LIST = [
     "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES",
     "RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES",
+    "RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES",
     "RAY_EXPERIMENTAL_NOSET_HABANA_VISIBLE_MODULES",
     "RAY_EXPERIMENTAL_NOSET_NEURON_RT_VISIBLE_CORES",
     "RAY_EXPERIMENTAL_NOSET_TPU_VISIBLE_CHIPS",
@@ -24,15 +26,6 @@ NOSET_VISIBLE_DEVICES_ENV_VARS_LIST = [
 RAY_DEFAULT_ENV_VARS = {
     # Ray's uvloop integration has caused intermittent async actor issues.
     "RAY_USE_UVLOOP": "0",
-    # Let vllm's JIT loader (load_jit) find slime-hosted custom kernel .cuh
-    # sources (e.g. glm5_router_gemm) and try-cache compile them, so they need
-    # not be patched into the vllm source tree.
-    "VLLM_JIT_KERNEL_EXTRA_PATH": os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "backends",
-        "vllm_utils",
-        "jit_kernels",
-    ),
 }
 
 

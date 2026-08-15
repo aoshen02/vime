@@ -64,8 +64,8 @@ class UpdateWeightFromDisk:
 
     @torch.no_grad()
     def update_weights(self) -> None:
-        self.weight_version += 1
-        version_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{self.weight_version:06d}"
+        next_version = self.weight_version + 1
+        version_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{next_version:06d}"
 
         if dist.get_rank() == 0:
             shutil.rmtree(version_dir, ignore_errors=True)
@@ -93,3 +93,4 @@ class UpdateWeightFromDisk:
         # vLLM reload is orchestrated by RayTrainGroup after the checkpoint
         # is fully written, so training-side lifecycle can decide whether
         # Megatron actors are still alive.
+        self.weight_version = next_version

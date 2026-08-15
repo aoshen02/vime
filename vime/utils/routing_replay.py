@@ -19,17 +19,17 @@ def _capture_ordered_topk(top_indices):
     """Keep the current router's exact top-k order until its MoE combine."""
     router = ORDERED_TOPK_CAPTURE_ROUTER
     if router is not None:
-        router._slime_ordered_topk_indices = top_indices
+        router._vime_ordered_topk_indices = top_indices
 
 
 def consume_ordered_topk(module):
     """Return and release the current forward's ordered top-k indices."""
-    return module.__dict__.pop("_slime_ordered_topk_indices", None)
+    return module.__dict__.pop("_vime_ordered_topk_indices", None)
 
 
 def register_ordered_topk_capture(module):
     """Capture one forward's VLLM-compatible top-k order without R3."""
-    if getattr(module, "_slime_ordered_topk_capture_registered", False):
+    if getattr(module, "_vime_ordered_topk_capture_registered", False):
         return
 
     def pre_forward_hook(patched_module, *args, **kwargs):
@@ -43,7 +43,7 @@ def register_ordered_topk_capture(module):
 
     module.register_forward_pre_hook(pre_forward_hook)
     module.register_forward_hook(forward_hook)
-    module._slime_ordered_topk_capture_registered = True
+    module._vime_ordered_topk_capture_registered = True
 
 
 def _compute_topk_for_current_router(

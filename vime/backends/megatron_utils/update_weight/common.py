@@ -14,8 +14,7 @@ from vime.utils.types import ParamInfo
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
-    All-gather TP-sharded param to full tensor. expert_bias→param,
-    non-TP/duplicated/TP-size-1→param.data.
+    All-gather TP-sharded param to full tensor. expert_bias→param, non-TP/duplicated→param.data.
     Uses expert-TP for ".experts.", else regular-TP. linear_fc1 rechunked (GLU), linear_fc2 dim fix.
     """
     if "expert_bias" in name:
@@ -27,15 +26,9 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
 
     if ".experts." in name:
         tp_size = mpu.get_expert_tensor_parallel_world_size()
-    else:
-        tp_size = mpu.get_tensor_model_parallel_world_size()
-
-    if tp_size == 1:
-        return param.data
-
-    if ".experts." in name:
         tp_group = mpu.get_expert_tensor_parallel_group()
     else:
+        tp_size = mpu.get_tensor_model_parallel_world_size()
         tp_group = mpu.get_tensor_model_parallel_group()
 
     if tp_size == 1:
@@ -64,44 +57,18 @@ def all_gather_params_async(
     param_infos_and_params: list[tuple[ParamInfo, torch.Tensor]],
 ) -> list[torch.Tensor]:
     """
-<<<<<<< ours (vime current)
     Coalesce TP-sharded params by process group and dtype, then reconstruct
     their original layouts after one all-gather per bucket.
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    Parallel TP all-gather for multiple params. Loop 1: for each TP param, allocate buffers +
-    dist.all_gather(async_op=True) on expert-TP/regular-TP group (skip expert_bias/non-TP/duplicated).
-    Loop 2: wait all NCCL handles (enables overlap). Loop 3: concat partitions + apply GLU rechunk/MoE dim fix.
-=======
-    Parallel TP all-gather for multiple params. Loop 1: for each TP param, allocate buffers +
-    dist.all_gather(async_op=True) on expert-TP/regular-TP group
-    (skip expert_bias/non-TP/duplicated/TP-size-1).
-    Loop 2: wait all NCCL handles (enables overlap). Loop 3: concat partitions + apply GLU rechunk/MoE dim fix.
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     """
     gathered_params: list[torch.Tensor | None] = [None] * len(param_infos_and_params)
     grouped_params: dict[tuple[bool, torch.dtype], list[tuple[int, ParamInfo, torch.Tensor]]] = {}
 
     for index, (info, param) in enumerate(param_infos_and_params):
         if "expert_bias" in info.name:
-<<<<<<< ours (vime current)
             gathered_params[index] = param
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            gather_tasks.append((info, param, None, None, None))
-            handles.append(None)
-=======
-            gather_tasks.append((info, param, None, None, None))
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         elif not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
-<<<<<<< ours (vime current)
             gathered_params[index] = param.data
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            gather_tasks.append((info, param.data, None, None, None))
-            handles.append(None)
-=======
-            gather_tasks.append((info, param.data, None, None, None))
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         else:
-<<<<<<< ours (vime current)
             is_expert = ".experts." in info.name
             tp_size = (
                 mpu.get_expert_tensor_parallel_world_size()
@@ -110,18 +77,7 @@ def all_gather_params_async(
             )
             if tp_size == 1:
                 gathered_params[index] = param.data
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            # Start async all_gather
-            if ".experts." in info.name:
-                tp_size = mpu.get_expert_tensor_parallel_world_size()
-                tp_group = mpu.get_expert_tensor_parallel_group()
-=======
-            # Start async all_gather
-            if ".experts." in info.name:
-                tp_size = mpu.get_expert_tensor_parallel_world_size()
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             else:
-<<<<<<< ours (vime current)
                 grouped_params.setdefault((is_expert, param.dtype), []).append((index, info, param))
 
     gather_tasks = []
@@ -147,66 +103,6 @@ def all_gather_params_async(
             assert param.partition_stride == 1 or (
                 param.partition_stride == 2 and "linear_fc1" in info.name
             ), "partition_stride != 1 is not supported"
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-                tp_size = mpu.get_tensor_model_parallel_world_size()
-                tp_group = mpu.get_tensor_model_parallel_group()
-
-            param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
-            handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
-            gather_tasks.append((info, None, handle, param_partitions, param.partition_dim))
-            handles.append(handle)
-
-    # Phase 2: Wait for ALL async operations to complete at once
-    # This ensures maximum parallelism by not blocking on individual operations
-    for handle in handles:
-        if handle is not None:
-            handle.wait()
-
-    # Phase 3: Process all results after all communications are done
-    gathered_params = []
-    for info, direct_param, handle, param_partitions, partition_dim in gather_tasks:
-        if handle is None:
-            # No all_gather needed
-            param = direct_param
-        else:
-            # Process the gathered partitions (same logic as original all_gather_param)
-            assert partition_dim is not None, "partition_stride != 1 is not supported"
-            # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
-            # TODO: check only GLU is used.
-=======
-                tp_size = mpu.get_tensor_model_parallel_world_size()
-
-            if tp_size == 1:
-                gather_tasks.append((info, param.data, None, None, None))
-                continue
-
-            if ".experts." in info.name:
-                tp_group = mpu.get_expert_tensor_parallel_group()
-            else:
-                tp_group = mpu.get_tensor_model_parallel_group()
-
-            param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
-            handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
-            gather_tasks.append((info, None, handle, param_partitions, param.partition_dim))
-            handles.append(handle)
-
-    # Phase 2: Wait for ALL async operations to complete at once
-    # This ensures maximum parallelism by not blocking on individual operations
-    for handle in handles:
-        handle.wait()
-
-    # Phase 3: Process all results after all communications are done
-    gathered_params = []
-    for info, direct_param, handle, param_partitions, partition_dim in gather_tasks:
-        if handle is None:
-            # No all_gather needed
-            param = direct_param
-        else:
-            # Process the gathered partitions (same logic as original all_gather_param)
-            assert partition_dim is not None, "partition_stride != 1 is not supported"
-            # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
-            # TODO: check only GLU is used.
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             if "linear_fc1.weight" in info.name or "linear_fc1.bias" in info.name:
                 param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
                 param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
@@ -255,7 +151,7 @@ def _named_params_and_buffers_vanilla(model: Sequence[torch.nn.Module]) -> Itera
             yield _compute_fqn(name), param
 
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers
+            # TODO shall we handle (almost) all buffers like Megatron Bridge
             if "expert_bias" not in name:
                 continue
             yield _compute_fqn(name), buffer
@@ -325,7 +221,7 @@ def _named_params_and_buffers_global(
 
         # treat expert bias as normal parameters
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers
+            # TODO shall we handle (almost) all buffers like Megatron Bridge
             if "expert_bias" not in name:
                 continue
             # for model without ddp wrap

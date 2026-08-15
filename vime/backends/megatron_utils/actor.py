@@ -12,9 +12,7 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
-<<<<<<< ours (vime current)
 from vime.ray.train_actor import TrainRayActor
-from vime.utils import train_dump_utils
 from vime.utils.data import process_rollout_data
 from vime.utils.distributed_utils import get_gloo_group
 from vime.utils.logging_utils import init_tracking
@@ -29,35 +27,6 @@ from vime.utils.reloadable_process_group import (
 from vime.utils.routing_replay import RoutingReplay
 from vime.utils.timer import Timer, inverse_timer, timer, with_defer
 from vime.utils.types import RolloutBatch
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from slime.ray.train_actor import TrainRayActor
-from slime.utils import train_dump_utils
-from slime.utils.data import process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.logging_utils import init_tracking
-from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.misc import Box
-from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
-from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer, with_defer
-from slime.utils.types import RolloutBatch
-=======
-from slime.ray.train_actor import TrainRayActor
-from slime.utils.data import process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.logging_utils import init_tracking
-from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.misc import Box
-from slime.utils.reloadable_process_group import (
-    destroy_process_groups,
-    monkey_patch_torch_dist,
-    register_default_process_group,
-    reload_process_groups,
-)
-from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer, with_defer
-from slime.utils.types import RolloutBatch
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
@@ -98,24 +67,19 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
-        monkey_patch_torch_dist()
+        if args.offload_train:
+            monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
-<<<<<<< ours (vime current)
-        # Disable this when external code keeps raw dist.group.WORLD references
-        # across a train sleep/wake cycle.
-        if os.getenv("VIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
-            register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
-        else:
-            logger.info("Default WORLD process-group destruction is disabled")
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-=======
         # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
-        # Set SLIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
-        if os.getenv("SLIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
+        # Set VIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
+        if args.offload_train and os.getenv("VIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+        }:
             register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
-        else:
+        elif args.offload_train:
             logger.info("Default WORLD process-group destruction is disabled")
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
         init(args)
 
@@ -162,7 +126,7 @@ class MegatronTrainRayActor(TrainRayActor):
             source_getter=lambda: named_params_and_buffers(
                 self.args,
                 self.model,
-                convert_to_global_name=True,
+                convert_to_global_name=args.megatron_to_hf_mode == "raw",
             ),
             single_tag=None,
         )
@@ -193,9 +157,6 @@ class MegatronTrainRayActor(TrainRayActor):
         update_weight_transport = self.args.update_weight_transport
 
         if update_weight_mode == "delta":
-            # Delta sync is disk-transport only: each engine's /pull_weights applies the published
-            # deltas into a host-local checkpoint on every host it spans, and the engines reload
-            # via vanilla update_weights_from_disk.
             assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
             assert (
                 update_weight_transport == "disk"
@@ -660,7 +621,7 @@ class MegatronTrainRayActor(TrainRayActor):
         elif self.args.offload_train:
             reload_process_groups()
 
-        if num_new_engines > 0 or reconnect_rollout_engines:
+        if self.rollout_engines is None or num_new_engines > 0 or reconnect_rollout_engines:
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
@@ -668,6 +629,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 engine_gpu_offsets=engine_gpu_offsets,
                 engine_parallel_configs=engine_parallel_configs,
             )
+            self.rollout_engines = rollout_engines
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
                 ray.get(self.rollout_manager.clear_updatable_num_new_engines.remote())
@@ -676,6 +638,31 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
+
+            if self.args.ci_test and not (
+                self.args.update_weight_mode == "full" and self.args.update_weight_transport == "disk"
+            ):
+                version_error = None
+                if dist.get_rank() == 0:
+                    try:
+                        expected_version = str(self.weight_updater.weight_version)
+                        engine_versions = ray.get([engine.get_weight_version.remote() for engine in rollout_engines])
+                        mismatches = [
+                            f"engine {index}: {engine_version}"
+                            for index, engine_version in enumerate(engine_versions)
+                            if str(engine_version) != expected_version
+                        ]
+                        if mismatches:
+                            raise RuntimeError(
+                                f"weight version mismatch after update; expected {expected_version}; "
+                                + ", ".join(mismatches)
+                            )
+                    except Exception as error:
+                        version_error = str(error)
+                version_errors = [version_error]
+                dist.broadcast_object_list(version_errors, src=0, group=get_gloo_group())
+                if version_errors[0] is not None:
+                    raise RuntimeError(version_errors[0])
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:

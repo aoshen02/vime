@@ -10,23 +10,7 @@ Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prev
 pip install nvidia-cudnn-cu12==9.16.0.29
 ```
 
-<<<<<<< ours (vime current)
-**Important:** We use [Megatron Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge) to support multimodal models. However, not all Megatron arguments are passed through to Megatron Bridge — you may need to set some manually [here](https://github.com/vllm-project/vime/blob/main/vime/backends/megatron_utils/model_provider.py) (currently only parallelization-related arguments are passed). For example, for Qwen3-VL-30B-A3B you may need to add:
-```python
-provider.moe_aux_loss_coeff = args.moe_aux_loss_coeff
-provider.freeze_language_model = False
-provider.freeze_vision_model = False
-```
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-**Important:** We use [Megatron Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge) to support multimodal models. However, not all Megatron arguments are passed through to Megatron Bridge — you may need to set some manually [here](https://github.com/THUDM/vime/blob/de84e10d468dcb726e1199fd6bd16aa9538aed09/vime/backends/megatron_utils/model_provider.py#L89) (currently only parallelization-related arguments are passed). For example, for Qwen3-VL-30B-A3B you may need to add:
-```python
-provider.moe_aux_loss_coeff = args.moe_aux_loss_coeff
-provider.freeze_language_model = False
-provider.freeze_vision_model = False
-```
-=======
-Qwen3.5 uses slime's native Megatron language model plus the Transformers vision model. Vision parameters retain their HuggingFace names and are loaded and synchronized directly.
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+Qwen3.5 uses vime's native Megatron language model plus the Transformers vision model. Vision parameters retain their HuggingFace names and are loaded and synchronized directly.
 
 <p align="center">
   <img src="vlm-rewardscore.png" alt="GEO3K VLM rollout raw reward" width="800">
@@ -69,51 +53,16 @@ ds.to_parquet("/root/datasets/geo3k_imgurl/train_formatted.parquet")
 ```bash
 export WANDB_API_KEY=your_wandb_api_key
 
-<<<<<<< ours (vime current)
-# Megatron backend (default -> Qwen3-VL-8B-Instruct + Megatron)
-./examples/geo3k_vlm/run_geo3k_vlm.sh
-
-# With different model
-VIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.sh
-
-# Qwen3.5
 ./examples/geo3k_vlm/run_geo3k_qwen35.sh
-
-# SFT
-./examples/geo3k_vlm/run_geo3k_vlm_sft.sh
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-# Megatron backend (default -> Qwen3-VL-8B-Instruct + Megatron)
-./examples/geo3k_vlm/run_geo3k_vlm.sh
-
-# With different model
-SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.sh
-
-# SFT
-./examples/geo_3k_vlm/run_geo3k_vlm_sft.sh
-=======
-./examples/geo3k_vlm/run_geo3k_qwen35.sh
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 ```
 
 ### Configuration
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-<<<<<<< ours (vime current)
-| `VIME_SCRIPT_MODEL_NAME` | `Qwen3-VL-8B-Instruct` | Model name |
 | `VIME_SCRIPT_DATASET_NAME` | `chenhegu/geo3k_imgurl` | HuggingFace dataset name |
-| `VIME_SCRIPT_NUM_GPUS` | `8` | Number of GPUs used for colocated training and rollout |
+| `VIME_SCRIPT_NUM_GPUS` | `8` | Number of GPUs |
 | `VIME_SCRIPT_EXTERNAL_RAY` | `0` | Use external Ray cluster (`1` to enable) |
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-| `SLIME_SCRIPT_MODEL_NAME` | `Qwen3-VL-8B-Instruct` | Model name |
-| `SLIME_SCRIPT_DATASET_NAME` | `chenhegu/geo3k_imgurl` | HuggingFace dataset name |
-| `SLIME_SCRIPT_NUM_GPUS` | `8` | Number of GPUs |
-| `SLIME_SCRIPT_EXTERNAL_RAY` | `0` | Use external Ray cluster (`1` to enable) |
-=======
-| `SLIME_SCRIPT_DATASET_NAME` | `chenhegu/geo3k_imgurl` | HuggingFace dataset name |
-| `SLIME_SCRIPT_NUM_GPUS` | `8` | Number of GPUs |
-| `SLIME_SCRIPT_EXTERNAL_RAY` | `0` | Use external Ray cluster (`1` to enable) |
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 #### Qwen3.5 Series
 We provide a native [example](./run_geo3k_qwen35.sh) for Qwen3.5-35B-A3B. It loads the Transformers ViT directly and converts only the Megatron language-model parameters. To support another Qwen3.5 model, add its model config under `scripts/models/` and update the example.
@@ -140,7 +89,7 @@ Our initial geo3k-specific verifier produced "format scores" (**0 and 0.9**) ins
 We fixed this by switching to the default math RM with clean **binary 0/1 rewards**. If you encounter similar precision issues with non-binary rewards, you can change the reward tensor dtype from `torch.float` to `torch.float16` in `vime/ray/rollout.py` (`_post_process_rewards` method) to truncate precision artifacts.
 
 ## B200
-On Blackwell (SM100), vllm automatically dispatches the ViT encoder to
+On Blackwell (SM100), vLLM automatically dispatches the ViT encoder to
 FlashAttention 4 (or FA2 fallback) — no manual override is needed
 ([vllm/v1/attention/backends/fa_utils.py:81](https://github.com/vllm-project/vllm/blob/main/vllm/v1/attention/backends/fa_utils.py#L81)).
 If you hit a kernel issue on a specific model, you can force SDPA with

@@ -13,17 +13,17 @@ import numpy as np
 import ray
 import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-<<<<<<< ours (vime current)
 
 from vime.backends.vllm_utils.external import start_external_rollout_servers
 from vime.backends.vllm_utils.vllm_config import ModelConfig, ServerGroupConfig, VllmConfig
-from vime.backends.vllm_utils.vllm_engine import VLLMEngine
+from vime.backends.vllm_utils.vllm_engine import VLLMEngine, _resolve_parallel_sizes
 
 # Memory-type tag strings shared with the vLLM engine's sleep/wake_up API.
 GPU_MEMORY_TYPE_KV_CACHE = "kv_cache"
 GPU_MEMORY_TYPE_WEIGHTS = "weights"
 GPU_MEMORY_TYPE_CUDA_GRAPH = "cuda_graph"
 from vime.rollout.base_types import call_rollout_fn
+from vime.rollout.sample_hooks import set_current_rollout_id
 from vime.utils import logging_utils
 from vime.utils.data import get_source
 from vime.utils.dp_schedule import build_dp_schedule
@@ -33,40 +33,6 @@ from vime.utils.logging_utils import configure_logger, init_tracking
 from vime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from vime.utils.misc import Box, group_by, load_function
 from vime.utils.types import Sample
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from vllm.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
-
-from slime.backends.vllm_utils.external import start_external_rollout_servers
-from slime.backends.vllm_utils.vllm_config import ModelConfig, ServerGroupConfig, VllmConfig
-from slime.backends.vllm_utils.vllm_engine import VLLMEngine
-from slime.rollout.base_types import call_rollout_fn
-from slime.utils import logging_utils
-from slime.utils.data import get_source
-from slime.utils.dp_schedule import build_dp_schedule
-from slime.utils.health_monitor import RolloutHealthMonitor
-from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
-from slime.utils.logging_utils import configure_logger, init_tracking
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
-from slime.utils.misc import Box, group_by, load_function
-from slime.utils.types import Sample
-=======
-from vllm.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
-
-from slime.backends.vllm_utils.external import start_external_rollout_servers
-from slime.backends.vllm_utils.vllm_config import ModelConfig, ServerGroupConfig, VllmConfig
-from slime.backends.vllm_utils.vllm_engine import VLLMEngine
-from slime.rollout.base_types import call_rollout_fn
-from slime.rollout.sample_hooks import set_current_rollout_id
-from slime.utils import logging_utils
-from slime.utils.data import get_source
-from slime.utils.dp_schedule import build_dp_schedule
-from slime.utils.health_monitor import RolloutHealthMonitor
-from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
-from slime.utils.logging_utils import configure_logger, init_tracking
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
-from slime.utils.misc import Box, group_by, load_function
-from slime.utils.types import Sample
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
 from ..utils.metric_utils import has_repetition
 from .rollout_validation import validate_server_group_gpu_indices
@@ -215,13 +181,24 @@ class ServerGroup:
     def parallel_config(self) -> dict[str, Any]:
         """Return the VLLM parallel args that affect rank-local expert routing."""
         overrides = {key.replace("-", "_"): value for key, value in self.vllm_overrides.items()}
-        pp_size = int(overrides.get("pp_size", getattr(self.args, "vllm_pp_size", 1)))
-        tp_size = int(overrides.get("tp_size", self.num_gpus_per_engine // pp_size))
+        tp_size, pp_size, pcp_size, dp_size = _resolve_parallel_sizes(
+            self.args,
+            gpus_per_engine=self.num_gpus_per_engine,
+            overrides=overrides,
+        )
+        enable_expert_parallel = bool(
+            overrides.get(
+                "enable_expert_parallel",
+                getattr(self.args, "vllm_enable_expert_parallel", False),
+            )
+        )
         return {
             "tp_size": tp_size,
             "pp_size": pp_size,
-            "ep_size": int(overrides.get("ep_size", getattr(self.args, "vllm_ep_size", 1))),
-            "moe_dp_size": int(overrides.get("moe_dp_size", getattr(self.args, "vllm_moe_dp_size", 1))),
+            "pcp_size": pcp_size,
+            "dp_size": dp_size,
+            "enable_expert_parallel": enable_expert_parallel,
+            "ep_size": tp_size * pcp_size * dp_size if enable_expert_parallel else 1,
         }
 
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
@@ -276,7 +253,6 @@ class ServerGroup:
                 placement_group_bundle_index=reordered_bundle_indices[gpu_index],
             )
 
-<<<<<<< ours (vime current)
             env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
             # vime-patch: expandable_segments breaks vLLM custom all-reduce CUDA
             # IPC. Strip only that key, keeping any other allocator settings.
@@ -284,35 +260,6 @@ class ServerGroup:
             env_vars["PYTORCH_CUDA_ALLOC_CONF"] = ",".join(
                 kv for kv in _alloc.split(",") if kv and not kv.strip().startswith("expandable_segments")
             )
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
-                key: os.environ.get(key, default_val)
-                for key, default_val in {
-                    "VLLM_JIT_DEEPGEMM_PRECOMPILE": "true",
-                    "VLLM_JIT_DEEPGEMM_FAST_WARMUP": "true",
-                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "VLLM_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "VLLM_MEMORY_SAVER_CUDA_GRAPH": "true",
-                    "VLLM_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
-                    "VLLM_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
-                    "VLLM_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
-                }.items()
-            }
-=======
-            env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
-                key: os.environ.get(key, default_val)
-                for key, default_val in {
-                    "VLLM_JIT_DEEPGEMM_PRECOMPILE": "false",
-                    "VLLM_JIT_DEEPGEMM_FAST_WARMUP": "true",
-                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "VLLM_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "VLLM_MEMORY_SAVER_CUDA_GRAPH": "true",
-                    "VLLM_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
-                    "VLLM_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
-                    "VLLM_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
-                }.items()
-            }
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
@@ -1153,7 +1100,7 @@ def _start_router(
     bind: tuple[str, int] | None = None,
     prefill_urls: list | None = None,
     decode_urls: list | None = None,
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int | None]:
     """Start the rollout HTTP gateway (vllm-router)."""
     if bind is not None:
         router_ip, router_port = bind
@@ -1174,35 +1121,15 @@ def _start_router(
     router_args.host = router_ip
     router_args.port = router_port
     router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
-<<<<<<< ours (vime current)
     router_args.log_level = "warning"
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    router_args.log_level = "warn"
-=======
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
     router_args.request_timeout_secs = args.vllm_router_request_timeout_secs
 
     if has_pd_disaggregation:
-<<<<<<< ours (vime current)
         router_args.vllm_pd_disaggregation = True
 
     if prefill_urls is not None:
         router_args.prefill_urls = prefill_urls
         router_args.decode_urls = decode_urls
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-        router_args.pd_disaggregation = True
-        # Disable circuit breaker to prevent RDMA transfer timeouts from
-        # marking decode workers as dead. Timeouts are transient (PCIe
-        # contention under high load) and do not indicate a dead server.
-        router_args.disable_circuit_breaker = True
-=======
-        router_args.pd_disaggregation = True
-
-    # Disable circuit breaker to prevent RDMA transfer timeouts from
-    # marking decode workers as dead. Timeouts are transient (PCIe
-    # contention under high load) and do not indicate a dead server.
-    router_args.disable_circuit_breaker = True
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     # Disable circuit breaker to prevent RDMA transfer timeouts from
     # marking workers as dead. Timeouts are transient (PCIe contention under

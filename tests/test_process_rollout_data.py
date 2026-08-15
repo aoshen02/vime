@@ -1,4 +1,4 @@
-"""CPU unit tests for ``slime.utils.data.process_rollout_data``.
+"""CPU unit tests for ``vime.utils.data.process_rollout_data``.
 
 ``RolloutManager._split_train_data_by_dp`` ships two kinds of fields to the
 trainer:
@@ -31,14 +31,14 @@ from __future__ import annotations
 import pytest
 import ray
 
-from slime.utils.data import process_rollout_data
+from vime.utils.data import process_rollout_data
 
 
 NUM_GPUS = 0
 
 
 class _FakeBox:
-    """Stand-in for ``slime.ray.utils.Box``: payload lives behind ``.inner``."""
+    """Stand-in for ``vime.ray.utils.Box``: payload lives behind ``.inner``."""
 
     def __init__(self, inner):
         self.inner = inner

@@ -27,9 +27,6 @@ def add_vllm_router_arguments(parser):
         help="Timeout for requests to the vllm router in seconds",
     )
     RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
-    # Keep driver logs quiet by default while allowing --router-log-level to
-    # expose router dispatch and retry details when needed.
-    parser.set_defaults(router_log_level="warn")
     return parser
 
 
@@ -130,54 +127,8 @@ def add_vllm_arguments(parser):
 
 
 def validate_args(args):
-<<<<<<< ours (vime current)
     args.vllm_dp_size = args.vllm_data_parallel_size
     args.vllm_pp_size = args.vllm_pipeline_parallel_size
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    args.vllm_dp_size = args.vllm_data_parallel_size
-    args.vllm_pp_size = args.vllm_pipeline_parallel_size
-    args.vllm_ep_size = args.vllm_expert_parallel_size
-
-    # Compute effective TP size considering PP size
-    if args.vllm_pp_size > 1:
-        assert args.rollout_num_gpus_per_engine % args.vllm_pp_size == 0, (
-            f"rollout_num_gpus_per_engine ({args.rollout_num_gpus_per_engine}) must be divisible by "
-            f"vllm_pipeline_parallel_size ({args.vllm_pp_size})"
-        )
-        args.vllm_tp_size = args.rollout_num_gpus_per_engine // args.vllm_pp_size
-    else:
-        args.vllm_tp_size = args.rollout_num_gpus_per_engine
-
-    if args.vllm_dp_size > 1:
-        assert args.vllm_enable_dp_attention
-=======
-    # Older VLLM versions stored these CLI aliases under their long names,
-    # while newer versions use the short ServerArgs field names as argparse dests.
-    # Keep both attributes available for user code, preferring the newer names
-    # when a namespace happens to contain both.
-    for current_name, legacy_name in (
-        ("vllm_dp_size", "vllm_data_parallel_size"),
-        ("vllm_pp_size", "vllm_pipeline_parallel_size"),
-        ("vllm_ep_size", "vllm_expert_parallel_size"),
-        ("vllm_moe_dp_size", "vllm_moe_data_parallel_size"),
-    ):
-        value = getattr(args, current_name) if hasattr(args, current_name) else getattr(args, legacy_name)
-        setattr(args, current_name, value)
-        setattr(args, legacy_name, value)
-
-    # Compute effective TP size considering PP size
-    if args.vllm_pp_size > 1:
-        assert args.rollout_num_gpus_per_engine % args.vllm_pp_size == 0, (
-            f"rollout_num_gpus_per_engine ({args.rollout_num_gpus_per_engine}) must be divisible by "
-            f"vllm_pipeline_parallel_size ({args.vllm_pp_size})"
-        )
-        args.vllm_tp_size = args.rollout_num_gpus_per_engine // args.vllm_pp_size
-    else:
-        args.vllm_tp_size = args.rollout_num_gpus_per_engine
-
-    if args.vllm_dp_size > 1:
-        assert args.vllm_enable_dp_attention
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     if getattr(args, "vllm_router_ip", None):
         args.vllm_router_ip = _wrap_ipv6(args.vllm_router_ip)
@@ -207,11 +158,13 @@ def vllm_parse_args():
     temp_parser = argparse.ArgumentParser(add_help=False)
     temp_parser.add_argument("--rollout-num-gpus-per-engine", type=int, default=1)
     temp_parser.add_argument("--vllm-pipeline-parallel-size", type=int, default=1)
+    temp_parser.add_argument("--vllm-prefill-context-parallel-size", type=int, default=1)
     temp_parser.add_argument("--vllm-data-parallel-size", type=int, default=1)
     temp_args, _ = temp_parser.parse_known_args()
     pp_size = temp_args.vllm_pipeline_parallel_size
+    pcp_size = temp_args.vllm_prefill_context_parallel_size
     dp_size = temp_args.vllm_data_parallel_size
-    vllm_tp_size = temp_args.rollout_num_gpus_per_engine // (pp_size * dp_size)
+    vllm_tp_size = temp_args.rollout_num_gpus_per_engine // (pp_size * pcp_size * dp_size)
     parser.set_defaults(vllm_tensor_parallel_size=vllm_tp_size)
 
     args, _ = parser.parse_known_args()

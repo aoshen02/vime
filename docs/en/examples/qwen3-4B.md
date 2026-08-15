@@ -293,7 +293,7 @@ VLLM_ARGS=(
 
 Add `--vllm-enforce-eager` when debugging or to work around CUDA graph limits.
 
-⚠️  When using co-located training and inference, Megatron will always occupy some GPU memory. Reduce vLLM's memory footprint with `--vllm-gpu-memory-utilization`, and reserve headroom for training with `--train-memory-margin-bytes`.
+⚠️  When using co-located training and inference, Megatron will always occupy some GPU memory. Reduce vLLM's memory footprint with `--vllm-gpu-memory-utilization` to reserve headroom for training.
 
 ### Asynchronous Training
 

@@ -10,18 +10,18 @@ NUM_GPUS = 0
 
 
 def _load_indexer_module():
-    module_name = "slime_plugins.models.glm5.ops.indexer_short_context_test"
+    module_name = "vime_plugins.models.glm5.ops.indexer_short_context_test"
     for package_name in (
-        "slime_plugins",
-        "slime_plugins.models",
-        "slime_plugins.models.glm5",
-        "slime_plugins.models.glm5.ops",
+        "vime_plugins",
+        "vime_plugins.models",
+        "vime_plugins.models.glm5",
+        "vime_plugins.models.glm5.ops",
     ):
         package = sys.modules.setdefault(package_name, types.ModuleType(package_name))
         package.__path__ = []
 
     for dependency in ("tilelang_indexer_bwd", "tilelang_indexer_fwd"):
-        dependency_name = f"slime_plugins.models.glm5.ops.{dependency}"
+        dependency_name = f"vime_plugins.models.glm5.ops.{dependency}"
         dependency_module = types.ModuleType(dependency_name)
         setattr(
             dependency_module,
@@ -30,7 +30,7 @@ def _load_indexer_module():
         )
         sys.modules[dependency_name] = dependency_module
 
-    source = Path(__file__).parents[1] / "slime_plugins/models/glm5/ops/indexer.py"
+    source = Path(__file__).parents[1] / "vime_plugins/models/glm5/ops/indexer.py"
     spec = importlib.util.spec_from_file_location(module_name, source)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module

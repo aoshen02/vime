@@ -4,39 +4,11 @@
 
 pip install -U transformers
 
-<<<<<<< ours (vime current)
-# IMPORTANT: This branch is specially modified for vime's current Megatron
-# version and Qwen3.5 from the main Megatron Bridge. Other models are not verified!
-# To restore the original Megatron Bridge, run:
-#   pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
-# TODO: Remove this once Megatron & Megatron Bridge are upgraded upstream.
-pip install git+https://github.com/andakai/Megatron-Bridge.git@qwen35 --no-build-isolation
-
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-# IMPORTANT: This branch is specially modified for slime's current Megatron
-# version and Qwen3.5 from the main Megatron Bridge. Other models are not verified!
-# To restore the original Megatron Bridge, run:
-#   pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
-# TODO: Remove this once Megatron & Megatron Bridge are upgraded upstream.
-pip install git+https://github.com/coding-famer/Megatron-Bridge-slime.git@qwen35 --no-build-isolation
-
-=======
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 # Configuration
 TRAIN_BACKEND="megatron"
-<<<<<<< ours (vime current)
-MODEL_NAME="Qwen3_5-35B-A3B"
+MODEL_NAME="Qwen3.5-35B-A3B"
 DATASET_NAME=${VIME_SCRIPT_DATASET_NAME:-"chenhegu/geo3k_imgurl"}
 NUM_GPUS=${VIME_SCRIPT_NUM_GPUS:-8}
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-MODEL_NAME="Qwen3_5-35B-A3B"
-DATASET_NAME=${SLIME_SCRIPT_DATASET_NAME:-"chenhegu/geo3k_imgurl"}
-NUM_GPUS=${SLIME_SCRIPT_NUM_GPUS:-8}
-=======
-MODEL_NAME="Qwen3.5-35B-A3B"
-DATASET_NAME=${SLIME_SCRIPT_DATASET_NAME:-"chenhegu/geo3k_imgurl"}
-NUM_GPUS=${SLIME_SCRIPT_NUM_GPUS:-8}
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 DATASET_LOCAL_NAME=$(basename "$DATASET_NAME")
 
 MODEL_NAME_LOWER=$(echo "$MODEL_NAME" | tr '[:upper:]' '[:lower:]')
@@ -187,16 +159,8 @@ BACKEND_ARGS=(
    --micro-batch-size 1
 )
 
-<<<<<<< ours (vime current)
 VIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
-source "${VIME_DIR}/scripts/models/qwen3.5-35B-A3B.sh"
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
-source "${SLIME_DIR}/scripts/models/qwen3.5-35B-A3B.sh"
-=======
-SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
-source "${SLIME_DIR}/scripts/models/qwen3.5-35B-A3B-vl.sh"
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+source "${VIME_DIR}/scripts/models/qwen3.5-35B-A3B-vl.sh"
 
 # Start Ray if not using external Ray
 if [ "$USE_EXTERNAL_RAY" = "0" ]; then

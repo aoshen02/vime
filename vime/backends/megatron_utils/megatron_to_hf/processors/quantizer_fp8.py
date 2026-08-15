@@ -4,7 +4,7 @@ import torch
 
 from vime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
 
-from ...fp8_helpers import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0
+from ...fp8_helpers import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0, transform_scale_ue8m0
 
 
 def quantize_params_fp8(args, megatron_name, converted_named_params, quantization_config, transform_ue8m0=True):
@@ -104,13 +104,8 @@ def _quantize_param(name, weight, weight_block_size, transform_ue8m0=True):
             weight_block_size=weight_block_size
         ):
             qweight, scale = quant_weight_ue8m0(weight, weight_block_size=weight_block_size)
-<<<<<<< ours (vime current)
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            scale = transform_scale_ue8m0(scale, mn=qweight.shape[-2])
-=======
             if transform_ue8m0:
                 scale = transform_scale_ue8m0(scale, mn=qweight.shape[-2])
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         else:
             qweight, scale = blockwise_cast_to_fp8_triton(weight, weight_block_size)
         scale_name = name.replace(".weight", ".weight_scale_inv")

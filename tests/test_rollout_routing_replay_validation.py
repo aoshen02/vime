@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from slime.ray.rollout import _validate_rollout_routed_experts_for_replay
+from vime.ray.rollout import _validate_rollout_routed_experts_for_replay
 
 NUM_GPUS = 0
 

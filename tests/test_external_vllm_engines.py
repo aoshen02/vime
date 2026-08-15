@@ -9,25 +9,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-<<<<<<< ours (vime current)
 from vime.backends.vllm_utils.external import (
-    apply_external_engine_info_to_args,
-    discover_external_engines,
-    get_server_info,
-)
-from vime.utils.http_utils import get_rollout_num_engines
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-from slime.backends.vllm_utils.external import apply_external_engine_info_to_args, discover_external_engines
-from slime.utils.http_utils import get_rollout_num_engines
-=======
-from slime.backends.vllm_utils.external import (
     ExternalEngineInfo,
     apply_external_engine_info_to_args,
     discover_external_engines,
+    get_server_info,
     start_external_rollout_servers,
 )
-from slime.utils.http_utils import get_rollout_num_engines
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
+from vime.utils.http_utils import get_rollout_num_engines
 
 NUM_GPUS = 0
 
@@ -53,8 +42,9 @@ def test_discover_external_engines_reads_server_info(monkeypatch):
             {
                 "tp_size": 4,
                 "pp_size": 2,
+                "pcp_size": 1,
                 "dp_size": 1,
-                "ep_size": 4,
+                "enable_expert_parallel": True,
                 "disaggregation_mode": "null",
             }
         )
@@ -73,8 +63,15 @@ def test_discover_external_engines_reads_server_info(monkeypatch):
     assert info.server_info["tp_size"] == 4
     assert info.server_info["pp_size"] == 2
     assert info.server_info["dp_size"] == 1
-    assert info.server_info["ep_size"] == 4
-    assert info.parallel_config == {"tp_size": 4, "pp_size": 2, "ep_size": 4, "moe_dp_size": 1}
+    assert info.server_info["enable_expert_parallel"] is True
+    assert info.parallel_config == {
+        "tp_size": 4,
+        "pp_size": 2,
+        "pcp_size": 1,
+        "dp_size": 1,
+        "enable_expert_parallel": True,
+        "ep_size": 4,
+    }
 
 
 def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch):
@@ -90,13 +87,13 @@ def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch):
 
     ray = types.ModuleType("ray")
     ray.remote = lambda actor_class: FakeActorClass()
-    vllm_engine = types.ModuleType("slime.backends.vllm_utils.vllm_engine")
+    vllm_engine = types.ModuleType("vime.backends.vllm_utils.vllm_engine")
     vllm_engine.VLLMEngine = object
-    ray_utils = types.ModuleType("slime.ray.utils")
+    ray_utils = types.ModuleType("vime.ray.utils")
     ray_utils.add_default_ray_env_vars = lambda: {}
     monkeypatch.setitem(sys.modules, "ray", ray)
-    monkeypatch.setitem(sys.modules, "slime.backends.vllm_utils.vllm_engine", vllm_engine)
-    monkeypatch.setitem(sys.modules, "slime.ray.utils", ray_utils)
+    monkeypatch.setitem(sys.modules, "vime.backends.vllm_utils.vllm_engine", vllm_engine)
+    monkeypatch.setitem(sys.modules, "vime.ray.utils", ray_utils)
 
     info = ExternalEngineInfo(
         url="http://host1:10090",
@@ -104,13 +101,31 @@ def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch):
         port=10090,
         worker_type="regular",
         num_gpus=8,
-        server_info={"tp_size": 4, "pp_size": 2, "ep_size": 4, "moe_dp_size": 2},
+        server_info={
+            "tp_size": 2,
+            "pp_size": 2,
+            "pcp_size": 1,
+            "dp_size": 2,
+            "enable_expert_parallel": True,
+        },
     )
     args = Namespace(rollout_external_engine_infos=[info.to_dict()])
 
-    servers, init_handles = start_external_rollout_servers(args, start_router=lambda *args, **kwargs: ("host1", 30000))
+    servers, init_handles = start_external_rollout_servers(
+        args,
+        start_router=lambda *args, **kwargs: ("host1", 30000, None),
+    )
 
-    assert servers["default"].engine_parallel_configs == [{"tp_size": 4, "pp_size": 2, "ep_size": 4, "moe_dp_size": 2}]
+    assert servers["default"].engine_parallel_configs == [
+        {
+            "tp_size": 2,
+            "pp_size": 2,
+            "pcp_size": 1,
+            "dp_size": 2,
+            "enable_expert_parallel": True,
+            "ep_size": 4,
+        }
+    ]
     assert len(init_handles) == 1
 
 
@@ -149,16 +164,18 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
         "http://prefill:10090/server_info?config_format=json": {
             "tp_size": 2,
             "pp_size": 1,
+            "pcp_size": 1,
             "dp_size": 1,
-            "ep_size": 1,
+            "enable_expert_parallel": False,
             "disaggregation_mode": "prefill",
             "disaggregation_bootstrap_port": 12090,
         },
         "http://decode:10091/server_info?config_format=json": {
             "tp_size": 4,
             "pp_size": 1,
+            "pcp_size": 1,
             "dp_size": 2,
-            "ep_size": 2,
+            "enable_expert_parallel": True,
             "disaggregation_mode": "decode",
         },
     }
@@ -172,10 +189,6 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
         rollout_external_engine_addrs=["prefill:10090", "decode:10091"],
         rollout_num_gpus=None,
         rollout_num_gpus_per_engine=1,
-        vllm_pipeline_parallel_size=1,
-        vllm_data_parallel_size=1,
-        vllm_expert_parallel_size=1,
-        vllm_enable_dp_attention=False,
         router_pd_disaggregation=False,
     )
 
@@ -183,11 +196,11 @@ def test_apply_external_engine_info_handles_pd(monkeypatch):
 
     assert args.rollout_external is True
     assert args.router_pd_disaggregation is False
-    assert args.rollout_num_gpus == 6
+    assert args.rollout_num_gpus == 10
     assert args.rollout_num_engines == 2
     assert get_rollout_num_engines(args) == 2
     assert [info["worker_type"] for info in args.rollout_external_engine_infos] == ["prefill", "decode"]
-    assert [info["num_gpus"] for info in args.rollout_external_engine_infos] == [2, 4]
+    assert [info["num_gpus"] for info in args.rollout_external_engine_infos] == [2, 8]
     assert [info["server_info"]["dp_size"] for info in args.rollout_external_engine_infos] == [1, 2]
     assert args.rollout_external_engine_infos[0]["disaggregation_bootstrap_port"] == 12090
 

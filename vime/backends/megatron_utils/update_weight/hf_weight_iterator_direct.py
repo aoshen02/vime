@@ -36,29 +36,17 @@ class HfWeightIteratorDirect(HfWeightIteratorBase):
         for chunk_idx, megatron_local_param_infos in enumerate(
             tqdm(param_info_buckets, disable=rank != 0, desc=progress_desc)
         ):
-<<<<<<< ours (vime current)
             megatron_full_params = _get_megatron_full_params(
                 megatron_local_param_infos,
                 megatron_local_weights,
                 self.args.update_weight_buffer_size,
                 self.ep_broadcast_src_rank_map,
             )
-            hf_named_tensors = self._convert_to_hf_named_tensors(megatron_full_params, megatron_local_param_infos)
-            yield hf_named_tensors
-            del megatron_full_params
-
-    def _convert_to_hf_named_tensors(self, megatron_full_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]):
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-            megatron_full_params = _get_megatron_full_params(megatron_local_param_infos, megatron_local_weights)
-            hf_named_tensors = self._convert_to_hf_named_tensors(megatron_full_params, megatron_local_param_infos)
-            yield hf_named_tensors
-            del megatron_full_params
-
-    def _convert_to_hf_named_tensors(self, megatron_full_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]):
-=======
-            megatron_full_params = _get_megatron_full_params(megatron_local_param_infos, megatron_local_weights)
             if should_convert_chunk is None or should_convert_chunk(chunk_idx):
-                hf_named_tensors = self._convert_to_hf_named_tensors(megatron_full_params, megatron_local_param_infos)
+                hf_named_tensors = self._convert_to_hf_named_tensors(
+                    megatron_full_params,
+                    megatron_local_param_infos,
+                )
             else:
                 hf_named_tensors = []
             try:
@@ -71,7 +59,6 @@ class HfWeightIteratorDirect(HfWeightIteratorBase):
         megatron_full_params: Sequence[torch.Tensor],
         param_infos: Sequence[ParamInfo],
     ):
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
         hf_named_tensors = []
         for info, param in zip(param_infos, megatron_full_params, strict=False):
             hf_named_tensors.extend(

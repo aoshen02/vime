@@ -112,13 +112,7 @@ SPEC_ARGS=(
 - `--enable-mtp-training`: Enables gradient computation for MTP layers. Without this flag, the MTP layer is loaded but frozen.
 - `--mtp-loss-scaling-factor 0.2`: Weight of the MTP loss relative to the main policy loss. Default is 0.2.
 
-<<<<<<< ours (vime current)
-> **Note**: MTP training requires the MTP checkpoint bridge to properly convert weights between HuggingFace and Megatron formats. The `GLM4MoELiteBridge` (in `vime_plugins/mbridge/glm4moe_lite.py`) extends the DeepSeek V3 bridge with dynamic MTP layer indexing to support GLM-4.7-Flash's 47-layer architecture.
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-> **Note**: MTP training requires the MTP checkpoint bridge to properly convert weights between HuggingFace and Megatron formats. The `GLM4MoELiteBridge` (in `slime_plugins/mbridge/glm4moe_lite.py`) extends the DeepSeek V3 bridge with dynamic MTP layer indexing to support GLM-4.7-Flash's 47-layer architecture.
-=======
 > **Note**: The native DeepSeek-layout loader uses the model's configured layer count when mapping MTP weights, including GLM-4.7-Flash's 47-layer architecture.
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 >
 > For other models with MTP training support (e.g., MiMo), see `scripts/run-mimo-7B-rl-eagle.sh` as a reference.
 

@@ -1,4 +1,3 @@
-<<<<<<< ours (vime current)
 # Release images publish to `vllm/vime` on DockerHub as multi-arch
 # manifests, exactly like upstream `vllm/vllm-openai:nightly`: ONE tag carries
 # both the linux/amd64 and linux/arm64 digests and `docker pull` auto-selects
@@ -17,51 +16,24 @@
 #   vllm/vime:cu13-<version>        compatibility alias
 #   vllm/vime:cu13-latest           compatibility alias
 # <version> comes from docker/version.txt.
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-release-primary:
-    ARG_TAG_POSTFIX="" ARG_BUILD_EXTRA_ARGS="" just _release-raw
-=======
-# Primary release stays on CUDA 12 (the cu129 VLLM base). Publishes the
-# unqualified `latest`, plus the rolling `latest-cu129` and the versioned
-# `<version>-cu129` tags. The tag suffix matches the VLLM base image.
-release-primary:
-    ARG_TAG_POSTFIX="-cu129" ARG_TAG_LATEST=1 ARG_BUILD_EXTRA_ARGS='--build-arg VLLM_IMAGE_TAG=v0.5.15.post1-cu129' just _release-raw
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
-<<<<<<< ours (vime current)
 IMAGE := "vllm/vime"
 BUILDER := env("VIME_BUILDER", "vime-builder")
 VIME_COMMIT := env("VIME_COMMIT", "main")
 FA2_MAX_JOBS := env("VIME_FA2_MAX_JOBS", "64")
+DEEPEP_CUDA_ARCH_LIST := env("VIME_DEEPEP_CUDA_ARCH_LIST", "9.0;10.0;10.3")
+TRANSFORMER_ENGINE_CUDA_ARCHS := env("VIME_TRANSFORMER_ENGINE_CUDA_ARCHS", "90;100a;103a")
 
 # ---- per-arch build, pushed BY DIGEST (run once on an amd64 host, once on an arm64 host) ----
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-# Should be executed on ARM machines
-release-cu129-arm64:
-    ARG_TAG_POSTFIX="-cu129-arm64" ARG_BUILD_EXTRA_ARGS='--build-arg VLLM_IMAGE_TAG=v0.5.5.post3-cu129-arm64 --build-arg ENABLE_VLLM_PATCH=0' just _release-raw
 
-# Should be executed on ARM machines
-release-cu13-arm64:
-    ARG_TAG_POSTFIX="-cu13-arm64" ARG_BUILD_EXTRA_ARGS='--build-arg VLLM_IMAGE_TAG=dev-arm64-cu13-20251122 --build-arg ENABLE_CUDA_13=1 --build-arg ENABLE_VLLM_PATCH=0' just _release-raw
-=======
-# B200/B300 (Blackwell, x86) CUDA 13 build on the cu130 VLLM base. Publishes
-# `latest-cu130` and `<version>-cu130` (tag suffix matches the VLLM base
-# image). DeepEP must be compiled for the Blackwell arch list; the Dockerfile
-# default (9.0) targets Hopper only. The semicolon separator is normalized to
-# spaces by PyTorch's TORCH_CUDA_ARCH_LIST parser and survives the unquoted
-# ARG_BUILD_EXTRA_ARGS expansion as one token.
-release-cu13:
-    ARG_TAG_POSTFIX="-cu130" ARG_BUILD_EXTRA_ARGS="--build-arg DEEPEP_CUDA_ARCH_LIST=10.0;10.3 --build-arg VLLM_IMAGE_TAG=v0.5.15.post1-cu130" just _release-raw
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
-
-# Default — pinned vLLM 0.25.1 / CUDA 13 base.
+# Default — pinned vLLM 0.27.1 / CUDA 13 base.
 build:
-    ARG_TAG_SUFFIX="" ARG_BUILD_EXTRA_ARGS="--build-arg INSTALL_FLASHQLA=1 --build-arg VIME_COMMIT={{ VIME_COMMIT }} --build-arg FA2_MAX_JOBS={{ FA2_MAX_JOBS }}" just _build-digest
+    ARG_TAG_SUFFIX="" ARG_BUILD_EXTRA_ARGS="--build-arg INSTALL_FLASHQLA=1 --build-arg VIME_COMMIT={{ VIME_COMMIT }} --build-arg FA2_MAX_JOBS={{ FA2_MAX_JOBS }} --build-arg DEEPEP_CUDA_ARCH_LIST={{ DEEPEP_CUDA_ARCH_LIST }} --build-arg TRANSFORMER_ENGINE_CUDA_ARCHS={{ TRANSFORMER_ENGINE_CUDA_ARCHS }}" just _build-digest
 
 # Compatibility target for the explicit cu13 aliases. Keep the base pinned so
 # this target cannot silently drift away from the default image.
 build-cu13:
-    ARG_TAG_SUFFIX="-cu13" ARG_BUILD_EXTRA_ARGS='--build-arg BASE_IMAGE=vllm/vllm-openai:v0.25.1-ubuntu2404 --build-arg ENABLE_CUDA_13=1 --build-arg INSTALL_FLASHQLA=1 --build-arg VIME_COMMIT={{ VIME_COMMIT }} --build-arg FA2_MAX_JOBS={{ FA2_MAX_JOBS }}' just _build-digest
+    ARG_TAG_SUFFIX="-cu13" ARG_BUILD_EXTRA_ARGS='--build-arg BASE_IMAGE=vllm/vllm-openai:v0.27.1-ubuntu2404 --build-arg ENABLE_CUDA_13=1 --build-arg INSTALL_FLASHQLA=1 --build-arg VIME_COMMIT={{ VIME_COMMIT }} --build-arg FA2_MAX_JOBS={{ FA2_MAX_JOBS }} --build-arg DEEPEP_CUDA_ARCH_LIST={{ DEEPEP_CUDA_ARCH_LIST }} --build-arg TRANSFORMER_ENGINE_CUDA_ARCHS={{ TRANSFORMER_ENGINE_CUDA_ARCHS }}' just _build-digest
 
 _build-digest:
     #!/bin/bash
@@ -74,26 +46,7 @@ _build-digest:
     # push-by-digest requires the docker-container buildx driver.
     docker buildx inspect {{ BUILDER }} >/dev/null 2>&1 || docker buildx create --name {{ BUILDER }} --driver docker-container
 
-<<<<<<< ours (vime current)
     docker buildx build --builder {{ BUILDER }} --platform "$PLATFORM" -f docker/Dockerfile $ARG_BUILD_EXTRA_ARGS --build-arg HTTP_PROXY="${http_proxy:-}" --build-arg HTTPS_PROXY="${https_proxy:-}" --build-arg NO_PROXY="localhost,127.0.0.1" -o "type=image,name={{ IMAGE }},push-by-digest=true,push=true" --metadata-file "$META" .
-||||||| base (slime@680824dd5e01a2e83750bf87fc366ec6fa98766c translated)
-    if [ -z "${ARG_TAG_POSTFIX}" ]; then
-        docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest
-        docker push slimerl/slime:latest
-    fi
-=======
-    # Rolling per-variant latest tag (e.g. latest-cu129, latest-cu130).
-    if [ -n "${ARG_TAG_POSTFIX}" ]; then
-        docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest${ARG_TAG_POSTFIX}
-        docker push slimerl/slime:latest${ARG_TAG_POSTFIX}
-    fi
-
-    # The primary build also owns the unqualified `latest`.
-    if [ "${ARG_TAG_LATEST:-}" = "1" ]; then
-        docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest
-        docker push slimerl/slime:latest
-    fi
->>>>>>> theirs (slime@2fa9a442f2f4d4e6ec4041fe110e0319af56ba4d translated)
 
     echo "Pushed vime${ARG_TAG_SUFFIX} ${PLATFORM} by digest — pass this to \`just manifest\`:"
     jq -r '."containerimage.digest"' "$META"
@@ -113,16 +66,15 @@ manifest VARIANT AMD_DIGEST ARM_DIGEST:
     [ -n "{{ VARIANT }}" ] && PREFIX="{{ VARIANT }}-"
     docker buildx imagetools create -t "{{ IMAGE }}:${PREFIX}${VERSION}" -t "{{ IMAGE }}:${PREFIX}latest" "{{ IMAGE }}@{{ AMD_DIGEST }}" "{{ IMAGE }}@{{ ARM_DIGEST }}"
 
-# ---- single-arch test/debug image for the run-ci-image validation job ----
-# The e2e-test-image runner is x86, so this is amd64-only and
-# needs no manifest.
+# ---- single-arch test/debug image for Buildkite GPU validation ----
+# This target is amd64-only and needs no manifest.
 build-test:
     #!/bin/bash
     set -euxo pipefail
     cd ..
 
     VERSION="$(cat docker/version.txt | tr -d '\n')"
-    docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="${http_proxy:-}" --build-arg HTTPS_PROXY="${https_proxy:-}" --build-arg NO_PROXY="localhost,127.0.0.1" --build-arg INSTALL_FLASHQLA=1 -t "{{ IMAGE }}:test-${VERSION}"
+    docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="${http_proxy:-}" --build-arg HTTPS_PROXY="${https_proxy:-}" --build-arg NO_PROXY="localhost,127.0.0.1" --build-arg INSTALL_FLASHQLA=1 --build-arg DEEPEP_CUDA_ARCH_LIST={{ DEEPEP_CUDA_ARCH_LIST }} --build-arg TRANSFORMER_ENGINE_CUDA_ARCHS={{ TRANSFORMER_ENGINE_CUDA_ARCHS }} -t "{{ IMAGE }}:test-${VERSION}"
     docker push "{{ IMAGE }}:test-${VERSION}"
 
     docker tag "{{ IMAGE }}:test-${VERSION}" "{{ IMAGE }}:test-latest"
