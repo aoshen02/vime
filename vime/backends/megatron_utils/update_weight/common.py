@@ -151,7 +151,7 @@ def _named_params_and_buffers_vanilla(model: Sequence[torch.nn.Module]) -> Itera
             yield _compute_fqn(name), param
 
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers like Megatron Bridge
+            # TODO shall we handle (almost) all buffers
             if "expert_bias" not in name:
                 continue
             yield _compute_fqn(name), buffer
@@ -221,7 +221,7 @@ def _named_params_and_buffers_global(
 
         # treat expert bias as normal parameters
         for name, buffer in model_module.named_buffers():
-            # TODO shall we handle (almost) all buffers like Megatron Bridge
+            # TODO shall we handle (almost) all buffers
             if "expert_bias" not in name:
                 continue
             # for model without ddp wrap

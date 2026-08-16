@@ -8,7 +8,6 @@ import sys
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import MagicMock
 
 _tests_root = Path(__file__).resolve().parents[1]
 if str(_tests_root) not in sys.path:
@@ -450,32 +449,6 @@ def test_expert_chunks_keep_each_layer_together(upw, monkeypatch):
 
 
 @pytest.mark.unit
-def test_bridge_path_listifies_chunks(upw, monkeypatch):
-    obj = _make_instance(upw)
-    obj._is_pp_src_rank = True
-    obj.weights_getter = lambda: {"actor": torch.zeros(1)}
-    obj._hf_weight_iterator = MagicMock()
-    obj._hf_weight_iterator.get_hf_weight_chunks.return_value = iter(
-        ((("bridge.0", torch.zeros(1)),), (("bridge.1", torch.zeros(1)),))
-    )
-
-    seen: list[tuple[list[str], str]] = []
-    monkeypatch.setattr(
-        upw.UpdateWeightFromDistributed,
-        "_update_bucket_weights_from_distributed",
-        lambda self, converted_named_tensors, pbar=None: seen.append(
-            ([name for name, _ in converted_named_tensors], pbar)
-        ),
-    )
-    monkeypatch.setattr(upw.dist, "barrier", lambda *args, **kwargs: None)
-    monkeypatch.setattr(upw, "get_gloo_group", lambda: "gloo")
-
-    upw.UpdateWeightFromDistributed._sync_bridge_weights_to_rollout_engines(obj, pbar="pbar")
-
-    assert seen == [(["bridge.0"], "pbar"), (["bridge.1"], "pbar")]
-
-
-@pytest.mark.unit
 def test_source_no_standalone_use_vllm_param(upw):
     src = inspect.getsource(upw)
     lines = [line.strip() for line in src.splitlines() if "use_vllm=" in line]
@@ -550,35 +523,6 @@ def test_connect_rollout_engines_defers_vllm_group_init_for_multi_pp(upw, monkey
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(("pp_rank", "is_src", "expected_connect_calls"), [(0, True, ["vime-pp_0"]), (1, False, [])])
-def test_bridge_multi_pp_connects_only_pp0(upw, monkeypatch, pp_rank, is_src, expected_connect_calls):
-    obj = _make_instance(upw)
-    obj._model_update_groups = None
-    obj._hf_weight_iterator = MagicMock()
-    actual_connect_calls: list[str] = []
-
-    monkeypatch.setattr(upw.mpu, "get_data_parallel_rank", lambda **kwargs: 0)
-    monkeypatch.setattr(upw.mpu, "get_tensor_model_parallel_rank", lambda: 0)
-    monkeypatch.setattr(upw.mpu, "get_pipeline_model_parallel_rank", lambda: pp_rank)
-    monkeypatch.setattr(upw.mpu, "get_pipeline_model_parallel_world_size", lambda: 2)
-    monkeypatch.setattr(
-        upw,
-        "connect_rollout_engines_from_distributed",
-        lambda *args, **kwargs: actual_connect_calls.append(args[1]) or DummyGroup(args[1]),
-    )
-
-    upw.UpdateWeightFromDistributed.connect_rollout_engines(
-        obj,
-        [RecordingEngine()],
-        RecordingLock(),
-        engine_gpu_counts=[1],
-    )
-
-    assert obj._is_pp_src_rank is is_src
-    assert actual_connect_calls == expected_connect_calls
-
-
-@pytest.mark.unit
 def test_multi_pp_weight_sync_connects_only_active_pp_stage(upw, monkeypatch):
     obj = _make_instance(upw)
     obj._model_update_groups = None
@@ -645,42 +589,6 @@ def test_inactive_pp_stage_joins_raw_send_barriers_without_iterating(upw, monkey
 
 
 @pytest.mark.unit
-def test_bridge_export_is_not_staged_by_pp(upw, monkeypatch):
-    obj = _make_instance(upw)
-    obj._pp_world_size = 2
-    obj._is_pp_src_rank = False
-    obj._hf_weight_iterator = MagicMock()
-    send_calls: list[tuple[object, object]] = []
-
-    monkeypatch.setattr(
-        upw.UpdateWeightFromDistributed,
-        "_send_weights",
-        lambda self, pbar: send_calls.append((getattr(self, "_active_weight_sync_pp_rank", None), pbar)),
-    )
-
-    upw.UpdateWeightFromDistributed._send_weights_to_rollout_engines(obj)
-
-    assert send_calls == [(None, None)]
-
-
-@pytest.mark.unit
-def test_bridge_export_runs_on_non_source_pp_stage(upw, monkeypatch):
-    obj = _make_instance(upw)
-    obj._is_pp_src_rank = False
-    obj._hf_weight_iterator = MagicMock()
-    obj._hf_weight_iterator.get_hf_weight_chunks.return_value = []
-    barriers: list[object] = []
-
-    monkeypatch.setattr(upw, "get_gloo_group", lambda: "gloo")
-    monkeypatch.setattr(upw.dist, "barrier", lambda *args, **kwargs: barriers.append(kwargs.get("group")))
-
-    upw.UpdateWeightFromDistributed._send_weights(obj, pbar=None)
-
-    obj._hf_weight_iterator.get_hf_weight_chunks.assert_called_once_with({})
-    assert barriers == ["gloo"]
-
-
-@pytest.mark.unit
 def test_weight_update_session_calls_start_and_finish(upw, monkeypatch):
     import torch.distributed as dist
 
@@ -719,7 +627,7 @@ def test_source_wraps_sync_with_weight_update_session(upw):
 
 
 @pytest.mark.unit
-def test_failed_transfer_does_not_finish_or_commit_weight_version(upw, monkeypatch):
+def test_failed_transfer_does_not_finish_weight_update(upw, monkeypatch):
     obj = _make_instance(upw)
     obj.args.enable_mtp_training = False
     obj.args.vllm_speculative_config = None
@@ -742,7 +650,7 @@ def test_failed_transfer_does_not_finish_or_commit_weight_version(upw, monkeypat
         obj.update_weights()
 
     assert session_events == ["begin"]
-    assert obj.weight_version == 0
+    assert obj.weight_version == 1
 
 
 @pytest.mark.unit

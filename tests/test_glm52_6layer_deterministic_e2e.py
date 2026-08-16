@@ -135,12 +135,6 @@ def _skip_reason(vllm_root, megatron_root) -> str | None:
 
     if not Path(f"{megatron_root}/megatron/training/tokenizer/tokenizer.py").exists():
         return f"incompatible Megatron root (no tokenizer.tokenizer): {megatron_root}"
-    # The FP32 residual/RMSNorm boundary (docker/patch/latest/megatron-vllm-aligned.patch)
-    # is required for train/rollout alignment; without it the gate diverges (~1e-2)
-    # instead of failing to launch, so skip rather than misreport.
-    layer_src = Path(f"{megatron_root}/megatron/core/transformer/transformer_layer.py")
-    if not (layer_src.exists() and "_use_vllm_fused_residual_rmsnorm" in layer_src.read_text()):
-        return f"Megatron root missing megatron-vllm-aligned.patch: {megatron_root}"
     return None
 
 

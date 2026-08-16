@@ -120,12 +120,6 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
-            parser.add_argument(
-                "--megatron-to-hf-mode",
-                choices=["raw", "bridge"],
-                default="raw",
-                help="The method to convert Megatron weights to Hugging Face weights for vLLM.",
-            )
             # Delta weight sync.
             parser.add_argument(
                 "--update-weight-mode",
@@ -216,6 +210,16 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--custom-update-weight-pre-read-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom function called on each rollout host before it reads a "
+                    "published disk weight version. Signature: "
+                    "``def hook(source_dir: str, target_version: int) -> None``."
+                ),
+            )
+            parser.add_argument(
                 "--update-weight-local-checkpoint-dir",
                 type=str,
                 default=None,
@@ -227,7 +231,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                     "--update-weight-transport=disk; optional for full disk sync (engines then "
                     "pull to local disk instead of reading the shared dir directly). The "
                     "read-side counterpart of --custom-update-weight-post-write-path is "
-                    "--vllm-custom-pull-weights-pre-read-hook."
+                    "--custom-update-weight-pre-read-path."
                 ),
             )
             parser.add_argument(
@@ -1438,7 +1442,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 "--loss-mask-type",
                 type=str,
                 default="qwen",
-                choices=["qwen", "qwen3", "qwen3_5", "gemma4", "distill_qwen"],
+                choices=["qwen", "qwen3", "qwen3_5", "distill_qwen"],
                 help="Loss mask type",
             )
             parser.add_argument(
@@ -1799,9 +1803,22 @@ def _validate_update_weight_args(args) -> None:
         )
 
     if args.update_weight_mode == "delta":
-        raise NotImplementedError(
-            "--update-weight-mode=delta is unverified on vime+vLLM and is disabled; " "use --update-weight-mode=full."
-        )
+        if args.update_weight_transport != "disk":
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-transport=disk, "
+                f"got {args.update_weight_transport!r}."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + encode) is pure overhead."
+            )
+        if not args.update_weight_local_checkpoint_dir:
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
+                "(a rollout-host-local NVMe directory)."
+            )
 
 
 def vime_validate_args(args):
@@ -1849,9 +1866,6 @@ def vime_validate_args(args):
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
 
-    if args.megatron_to_hf_mode == "bridge" and args.load is None:
-        args.load = args.ref_load or args.hf_checkpoint
-
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -1860,7 +1874,7 @@ def vime_validate_args(args):
     load_is_hf = (
         args.load is not None and os.path.isdir(args.load) and os.path.exists(os.path.join(args.load, "config.json"))
     )
-    if load_is_hf and args.megatron_to_hf_mode != "bridge":
+    if load_is_hf:
         from vime.backends.megatron_utils.hf_to_megatron import supports_hf_weight_loading
 
         load_is_hf = supports_hf_weight_loading(args.load)

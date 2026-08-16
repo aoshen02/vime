@@ -126,21 +126,9 @@ def _is_megatron_checkpoint(path: str | Path) -> bool:
 
 def _load_checkpoint_hf(ddp_model, optimizer, args, load_path: str):
     logger.info(f"Load checkpoint from HuggingFace model into Megatron (path={load_path})")
-    if args.megatron_to_hf_mode == "bridge":
-        from megatron.bridge import AutoBridge
+    from vime.backends.megatron_utils.hf_to_megatron import load_hf_weights
 
-        import vime_plugins.megatron_bridge  # noqa: F401
-        from vime.utils import megatron_bridge_utils
-
-        with megatron_bridge_utils.patch_megatron_model(ddp_model):
-            bridge = megatron_bridge_utils.patch_auto_bridge_hf_config(
-                AutoBridge.from_hf_pretrained(load_path, trust_remote_code=True)
-            )
-            bridge.load_hf_weights(ddp_model)
-    else:
-        from vime.backends.megatron_utils.hf_to_megatron import load_hf_weights
-
-        load_hf_weights(args, ddp_model, load_path)
+    load_hf_weights(args, ddp_model, load_path)
 
     # Copied from Megatron-core :: load_checkpoint (with simplifications)
     if (args.fp16 or args.bf16) and optimizer is not None:

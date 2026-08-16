@@ -52,7 +52,7 @@ For screen shots of the wandb, please refer to [pull#370](https://github.com/THU
 
 ## Train/rollout log-prob alignment (GLM-5)
 
-Beyond single-side bitwise reproduction, vime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the **GLM-5 structure** (MLA + DSA sparse attention), and requires the deterministic VLLM / batch-invariant DeepGEMM / DeepEP build plus the `megatron-vllm-aligned.patch` Megatron.
+Beyond single-side bitwise reproduction, vime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the **GLM-5 structure** (MLA + DSA sparse attention), and requires the deterministic VLLM / batch-invariant DeepGEMM / DeepEP build. Vime installs the required Megatron-side alignment hooks at runtime; no extra Megatron patch is required.
 
 Supported in this path:
 

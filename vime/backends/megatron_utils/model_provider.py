@@ -17,7 +17,6 @@ from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
-from vime.utils.megatron_bridge_utils import patch_auto_bridge_hf_config
 from vime.utils.misc import load_function
 
 _INDEXER_DIRECT_SUBMODULE_NAMES = frozenset(
@@ -90,48 +89,6 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
-def _apply_bridge_runtime_config(provider, args: argparse.Namespace) -> None:
-    """Copy training/runtime arguments onto a bridge-built provider."""
-    provider.tensor_model_parallel_size = args.tensor_model_parallel_size
-    provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
-    provider.expert_model_parallel_size = args.expert_model_parallel_size
-    provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
-    provider.sequence_parallel = args.sequence_parallel
-    provider.context_parallel_size = args.context_parallel_size
-    provider.gradient_accumulation_fusion = args.gradient_accumulation_fusion
-
-    provider.calculate_per_token_loss = args.calculate_per_token_loss
-    provider.variable_seq_lengths = args.variable_seq_lengths
-    provider.attention_softmax_in_fp32 = args.attention_softmax_in_fp32
-    provider.fp32_residual_connection = args.fp32_residual_connection
-    provider.deterministic_mode = args.deterministic_mode
-
-    provider.recompute_granularity = args.recompute_granularity
-    provider.recompute_method = args.recompute_method
-    provider.recompute_num_layers = args.recompute_num_layers
-    provider.recompute_modules = args.recompute_modules
-
-    provider.cpu_offloading_num_layers = args.cpu_offloading_num_layers
-    provider.distribute_saved_activations = args.distribute_saved_activations
-    if hasattr(args, "cpu_offloading"):
-        provider.cpu_offloading = args.cpu_offloading
-
-    provider.tp_comm_overlap = args.tp_comm_overlap
-    provider.fp8 = args.fp8
-    provider.fp8_recipe = args.fp8_recipe
-    provider.attention_backend = args.attention_backend
-    provider.moe_token_dispatcher_type = args.moe_token_dispatcher_type
-
-    if getattr(args, "decoder_first_pipeline_num_layers", None) is not None:
-        provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
-    if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
-        provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
-    if getattr(args, "moe_router_bias_update_rate", None) is not None:
-        provider.moe_router_bias_update_rate = args.moe_router_bias_update_rate
-    if getattr(args, "moe_aux_loss_coeff", None) is not None:
-        provider.moe_aux_loss_coeff = args.moe_aux_loss_coeff
-
-
 def _get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
@@ -157,37 +114,6 @@ def _get_model_provider_func(
             return model
 
         return wrapped_model_provider
-
-    if args.megatron_to_hf_mode == "bridge":
-        from megatron.bridge import AutoBridge
-
-        import vime_plugins.megatron_bridge  # noqa: F401
-
-        bridge = patch_auto_bridge_hf_config(AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True))
-        provider = bridge.to_megatron_provider(load_weights=False)
-        _apply_bridge_runtime_config(provider, args)
-        provider.finalize()
-
-        def wrapped_bridge_provider(
-            pre_process: bool = True,
-            post_process: bool = True,
-            vp_stage: int | None = None,
-            config: TransformerConfig | None = None,
-            pg_collection=None,
-        ) -> GPTModel:
-            assert config is None, "Vime builds the bridge provider config from args"
-            if pg_collection is not None:
-                provider._pg_collection = pg_collection
-            model = provider.provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
-            if post_process and role == "critic":
-                model.output_layer = LinearForLastLayer(
-                    input_size=model.config.hidden_size,
-                    output_size=1,
-                    config=model.config,
-                )
-            return model
-
-        return wrapped_bridge_provider
 
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.

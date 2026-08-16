@@ -219,8 +219,6 @@ RUN cd /root/Megatron-LM && \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --ignore-installed PyJWT && \
     pip install flash-linear-attention==0.4.2 && \
-    pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps && \
-    pip install git+https://github.com/radixark/Megatron-Bridge.git@bridge --no-deps --no-build-isolation && \
     pip install megatron-energon --no-deps && \
     pip install multi-storage-client --no-deps
 

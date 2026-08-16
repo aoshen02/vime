@@ -53,7 +53,7 @@ bash scripts/run-qwen2.5-0.5B-reproducibility.sh
 
 ## Train/rollout log-prob alignment（GLM-5）
 
-Beyond single-side bitwise reproduction, vime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the **GLM-5 structure** (MLA + DSA sparse attention), and requires the deterministic VLLM / batch-invariant DeepGEMM / DeepEP build plus the `megatron-vllm-aligned.patch` Megatron.
+除单侧 bitwise 复现外，vime 还可以对齐训练与 rollout（推理）的 log-prob。目前该能力只支持 **GLM-5 结构**（MLA + DSA sparse attention），并要求 deterministic VLLM、batch-invariant DeepGEMM 与 DeepEP 构建。所需 Megatron 侧对齐 hook 由 Vime 在运行时安装，不需要额外 Megatron patch。
 
 Supported in this path:
 

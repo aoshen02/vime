@@ -131,7 +131,6 @@ class RecordingVLLMEngine:
     start_draft_weight_update: RecordingRemoteMethod = field(default_factory=RecordingRemoteMethod)
     finish_weight_update: RecordingRemoteMethod = field(default_factory=RecordingRemoteMethod)
     update_weights: RecordingRemoteMethod = field(default_factory=RecordingRemoteMethod)
-    update_weights_from_tensor: RecordingRemoteMethod = field(default_factory=RecordingRemoteMethod)
     pause_generation: RecordingRemoteMethod = field(default_factory=RecordingRemoteMethod)
     flush_cache: RecordingRemoteMethod = field(default_factory=RecordingRemoteMethod)
     continue_generation: RecordingRemoteMethod = field(default_factory=RecordingRemoteMethod)
@@ -285,7 +284,7 @@ def test_colocated_mtp_updates_target_then_draft_from_fresh_weight_stream(upw_vl
     assert len(engine.start_weight_update.calls) == 1
     assert len(engine.start_draft_weight_update.calls) == 1
     assert len(engine.finish_weight_update.calls) == 2
-    assert len(engine.update_weights_from_tensor.calls) == 4
+    assert len(engine.update_weights.calls) == 4
     assert obj._hf_weight_iterator.get_hf_weight_chunks.call_count == 2
     assert counters["empty_cache"] == 4
 
@@ -313,7 +312,7 @@ def test_mixed_colocated_and_remote_engines_share_update_lifecycle(upw_vllm):
 
 
 @pytest.mark.unit
-def test_failed_tensor_transfer_does_not_commit_weight_version(upw_vllm):
+def test_failed_tensor_transfer_does_not_finish_weight_update(upw_vllm):
     obj = _make_instance(upw_vllm)
     engine = RecordingVLLMEngine()
     _bind_single_slot(obj, engine, src=0)
@@ -322,17 +321,14 @@ def test_failed_tensor_transfer_does_not_commit_weight_version(upw_vllm):
     with pytest.raises(RuntimeError, match="transfer failed"):
         _run_update(obj)
 
-    assert obj.weight_version == 0
+    assert obj.weight_version == 1
     assert len(engine.finish_weight_update.calls) == 0
     assert len(engine.continue_generation.calls) == 0
 
 
 @pytest.mark.unit
-def test_send_via_ipc_dispatches_update_weights_from_tensor_with_version(upw_vllm):
-    """slot_size=1: every HF chunk fires
-    ``engine.update_weights_from_tensor.remote(**fields, weight_version=...)`` —
-    same name and parameterized fields; the version commits at
-    ``finish_weight_update`` after every chunk succeeds."""
+def test_send_via_ipc_dispatches_single_worker_payload(upw_vllm):
+    """A one-worker slot sends the packed IPC payload directly."""
     obj = _make_instance(upw_vllm)
     engine = RecordingVLLMEngine()
     _bind_single_slot(obj, engine, src=0)
@@ -351,23 +347,16 @@ def test_send_via_ipc_dispatches_update_weights_from_tensor_with_version(upw_vll
         _run_update(obj, chunks=_chunks(2))
 
     # 2 HF chunks → 2 IPC RPCs
-    assert len(engine.update_weights_from_tensor.calls) == 2
-    kwargs = engine.update_weights_from_tensor.calls[0].kwargs
-    # fields are passed as explicit kwargs (** expanded from local_info)
-    assert kwargs["names"] == dummy_info["names"]
-    assert kwargs["dtype_names"] == dummy_info["dtype_names"]
-    assert kwargs["shapes"] == dummy_info["shapes"]
-    assert kwargs["ipc_handles"] is dummy_info["ipc_handles"]
-    # weight_version is the trainer's post-increment version (0 + 1 = 1) as a str
-    assert kwargs["weight_version"] == "1"
+    assert len(engine.update_weights.calls) == 2
+    assert engine.update_weights.calls[0].args == (dummy_info,)
+    assert engine.update_weights.calls[0].kwargs == {}
     assert len(engine.finish_weight_update.calls) == 1
     assert engine.finish_weight_update.calls[0].kwargs == {"weight_version": "1"}
 
 
 @pytest.mark.unit
-def test_send_via_ipc_dispatches_update_weights_from_tensor_coordinator_multi_gpu(upw_vllm):
-    """slot_size > 1: the slot leader (rank == _ipc_gather_src) gathers payloads from
-    all slot ranks, merges them, and fires a single update_weights_from_tensor RPC per chunk."""
+def test_send_via_ipc_dispatches_rank_local_worker_payloads(upw_vllm):
+    """The slot leader sends one rank-indexed payload list per chunk."""
     obj = _make_instance(upw_vllm)
     engine = RecordingVLLMEngine()
     _bind_single_slot(obj, engine, src=0)
@@ -404,13 +393,9 @@ def test_send_via_ipc_dispatches_update_weights_from_tensor_coordinator_multi_gp
     ):
         _run_update(obj, chunks=_chunks(2), rank=0, slot_size=2)
 
-    assert len(engine.update_weights_from_tensor.calls) == 2
-    kwargs = engine.update_weights_from_tensor.calls[0].kwargs
-    assert kwargs["names"] == dummy_info_0["names"]
-    assert kwargs["dtype_names"] == dummy_info_0["dtype_names"]
-    assert kwargs["shapes"] == dummy_info_0["shapes"]
-    assert set(kwargs["ipc_handles"]) == {"uuid-gpu0", "uuid-gpu1"}
-    assert kwargs["weight_version"] == "1"
+    assert len(engine.update_weights.calls) == 2
+    assert engine.update_weights.calls[0].args == ([dummy_info_0, dummy_info_1],)
+    assert engine.update_weights.calls[0].kwargs == {}
 
 
 @pytest.mark.unit
@@ -439,58 +424,6 @@ def test_colocated_update_waits_in_bounded_batches(upw_vllm):
 
     assert [len(batch) for batch in update_batches] == [2, 2, 1]
     assert counters["ipc_collect"] == 4
-
-
-@pytest.mark.unit
-def test_merge_packed_ipc_update_infos_combines_gpu_uuids(upw_vllm):
-    base = {
-        "names": ["w"],
-        "dtype_names": ["bfloat16"],
-        "shapes": [[2, 2]],
-        "tensor_sizes": [8],
-    }
-    info0 = {**base, "ipc_handles": {"uuid-gpu0": ("f0", ())}}
-    info1 = {**base, "ipc_handles": {"uuid-gpu1": ("f1", ())}}
-
-    merged = upw_vllm._merge_ipc_update_infos([info0, info1])
-
-    assert set(merged["ipc_handles"]) == {"uuid-gpu0", "uuid-gpu1"}
-
-
-@pytest.mark.unit
-def test_merge_packed_ipc_update_infos_rejects_mismatched_metadata(upw_vllm):
-    info0 = {
-        "names": ["a"],
-        "dtype_names": ["bfloat16"],
-        "shapes": [[2]],
-        "tensor_sizes": [4],
-        "ipc_handles": {"uuid-gpu0": ("f0", ())},
-    }
-    info1 = {**info0, "names": ["b"], "ipc_handles": {"uuid-gpu1": ("f1", ())}}
-
-    with pytest.raises(ValueError, match="packed IPC metadata must match"):
-        upw_vllm._merge_ipc_update_infos([info0, info1])
-
-
-@pytest.mark.unit
-def test_group_packed_ipc_update_infos_routes_different_metadata_to_matching_gpu(upw_vllm):
-    info0 = {
-        "names": ["experts.0.weight"],
-        "dtype_names": ["bfloat16"],
-        "shapes": [[2]],
-        "tensor_sizes": [4],
-        "ipc_handles": {"uuid-gpu0": ("f0", ())},
-    }
-    info1 = {
-        **info0,
-        "names": ["experts.1.weight"],
-        "ipc_handles": {"uuid-gpu1": ("f1", ())},
-    }
-
-    assert upw_vllm._group_ipc_update_infos([info0, info1]) == [
-        {**info0, "empty_gpu_uuids": ["uuid-gpu1"]},
-        {**info1, "empty_gpu_uuids": ["uuid-gpu0"]},
-    ]
 
 
 @pytest.mark.unit
@@ -574,10 +507,10 @@ def test_non_leader_skips_start_finish_and_merged_rpc(upw_vllm):
         _run_update(obj, chunks=_chunks(1), rank=1, slot_size=2)
 
     gather_obj.assert_called_once()
-    # non-leader: no start/finish, and no merged update_weights_from_tensor RPC
+    # non-leader: no start/finish and no rank-local update RPC
     assert len(engine.start_weight_update.calls) == 0
     assert len(engine.finish_weight_update.calls) == 0
-    assert len(engine.update_weights_from_tensor.calls) == 0
+    assert len(engine.update_weights.calls) == 0
 
 
 @pytest.mark.unit
@@ -690,7 +623,7 @@ def test_single_full_slot_uses_vllm_stateful_ipc_trainer(upw_vllm):
     assert len(engine.pause_generation.calls) == 1
     assert len(engine.continue_generation.calls) == 1
     assert len(engine.start_weight_update.calls) == 0
-    assert len(engine.update_weights_from_tensor.calls) == 0
+    assert len(engine.update_weights.calls) == 0
 
 
 @pytest.mark.unit

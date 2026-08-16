@@ -263,37 +263,22 @@ class VLLMEngine(RayActor):
         response.raise_for_status()
         return True
 
-    def update_weights_from_tensor(
-        self,
-        *,
-        names: list[str],
-        dtype_names: list[str],
-        shapes: list[list[int]],
-        ipc_handles: dict[str, tuple],
-        tensor_sizes: list[int],
-        weight_version: str,
-        empty_gpu_uuids: list[str] | None = None,
-        flush_cache: bool = False,
-    ):
-        payload: dict = {
-            "names": names,
-            "dtype_names": dtype_names,
-            "shapes": shapes,
-            "ipc_handles_pickled": base64.b64encode(cloudpickle.dumps(ipc_handles)).decode("utf-8"),
-            "tensor_sizes": tensor_sizes,
-        }
-        if empty_gpu_uuids:
-            payload["empty_gpu_uuids"] = empty_gpu_uuids
-        if flush_cache:
-            self.flush_cache()
-        del weight_version
-        return self._make_request("update_weights", {"update_info": payload})
-
-    def update_weights(self, update_info: dict):
-        payload = dict(update_info)
-        ipc_handles = payload.pop("ipc_handles", None)
-        if ipc_handles is not None:
-            payload["ipc_handles_pickled"] = base64.b64encode(cloudpickle.dumps(ipc_handles)).decode("utf-8")
+    def update_weights(self, update_info: dict | list[dict | None]):
+        infos = update_info if isinstance(update_info, list) else [update_info]
+        payload = []
+        for info in infos:
+            if info is None:
+                payload.append(None)
+                continue
+            worker_payload = dict(info)
+            ipc_handles = worker_payload.pop("ipc_handles", None)
+            if ipc_handles is not None:
+                worker_payload["ipc_handles_pickled"] = base64.b64encode(cloudpickle.dumps(ipc_handles)).decode(
+                    "utf-8"
+                )
+            payload.append(worker_payload)
+        if not isinstance(update_info, list):
+            payload = payload[0]
         return self._make_request("update_weights", {"update_info": payload})
 
     def flush_cache(self):
@@ -399,11 +384,14 @@ class VLLMEngine(RayActor):
                     "local_checkpoint_dir": self.args.update_weight_local_checkpoint_dir,
                     "source_dir": self.args.update_weight_disk_dir,
                     "target_version": target_version,
+                    "pre_read_hook": self.args.custom_update_weight_pre_read_path,
                 },
             },
         )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        self.set_weight_version(str(target_version))
+        return result
 
     def update_weights_from_disk(
         self,

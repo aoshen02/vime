@@ -256,7 +256,6 @@ def make_vime_validate_args(**overrides):
         update_weight_disk_dir=None,
         update_weight_local_checkpoint_dir=None,
         update_weight_mode="full",
-        megatron_to_hf_mode="raw",
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
@@ -330,16 +329,61 @@ def test_vime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkeyp
 
 
 @pytest.mark.unit
-def test_update_weight_delta_is_disabled(monkeypatch):
+def test_update_weight_delta_disk_is_valid(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
     args = types.SimpleNamespace(
         update_weight_mode="delta",
         update_weight_transport="disk",
         update_weight_disk_dir="/shared/delta",
+        update_weight_local_checkpoint_dir="/local/delta",
         colocate=False,
     )
 
-    with pytest.raises(NotImplementedError, match="disabled"):
+    module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_requires_disk_transport(monkeypatch):
+    module = load_vime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="delta",
+        update_weight_transport="nccl",
+        update_weight_disk_dir=None,
+        update_weight_local_checkpoint_dir="/local/delta",
+        colocate=False,
+    )
+
+    with pytest.raises(ValueError, match="requires --update-weight-transport=disk"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_rejects_colocate(monkeypatch):
+    module = load_vime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="delta",
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/delta",
+        update_weight_local_checkpoint_dir="/local/delta",
+        colocate=True,
+    )
+
+    with pytest.raises(ValueError, match="not supported with --colocate"):
+        module._validate_update_weight_args(args)
+
+
+@pytest.mark.unit
+def test_update_weight_delta_requires_local_checkpoint_dir(monkeypatch):
+    module = load_vime_arguments_module(monkeypatch)
+    args = types.SimpleNamespace(
+        update_weight_mode="delta",
+        update_weight_transport="disk",
+        update_weight_disk_dir="/shared/delta",
+        update_weight_local_checkpoint_dir=None,
+        colocate=False,
+    )
+
+    with pytest.raises(ValueError, match="requires --update-weight-local-checkpoint-dir"):
         module._validate_update_weight_args(args)
 
 

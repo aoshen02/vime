@@ -126,7 +126,7 @@ class MegatronTrainRayActor(TrainRayActor):
             source_getter=lambda: named_params_and_buffers(
                 self.args,
                 self.model,
-                convert_to_global_name=args.megatron_to_hf_mode == "raw",
+                convert_to_global_name=True,
             ),
             single_tag=None,
         )

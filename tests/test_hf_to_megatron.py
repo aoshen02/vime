@@ -42,15 +42,8 @@ from vime.backends.megatron_utils.megatron_to_hf.qwen2 import convert_qwen2_to_h
 from vime.backends.megatron_utils.megatron_to_hf.qwen3_next import convert_qwen3_next_to_hf
 from vime.backends.megatron_utils.megatron_to_hf.qwen3moe import convert_qwen3moe_to_hf
 from vime.backends.megatron_utils.update_weight.hf_weight_iterator_base import HfWeightIteratorBase
-from vime.backends.megatron_utils.update_weight.hf_weight_iterator_bridge import HfWeightIteratorBridge
 
 NUM_GPUS = 0
-
-
-def test_bridge_weight_iterator_accepts_shared_bucket_argument():
-    signature = inspect.signature(HfWeightIteratorBridge.get_hf_weight_chunks)
-
-    assert "param_info_buckets" in signature.parameters
 
 
 class Reader:

@@ -5,7 +5,6 @@ FROM ${BASE_IMAGE}
 
 ARG PATCH_VERSION=latest
 ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
-ARG MEGATRON_BRIDGE_COMMIT=07d61e1547a8356cc34928f7eb20226d2f9db3fa
 ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
 ARG DEEPEP_CUDA_ARCH_LIST=9.0;10.0;10.3
@@ -57,8 +56,6 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
     FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=96 pip -v install . --no-build-isolation && \
     cd /root/ && rm -rf flash-attention/
 
-RUN pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
-
 RUN pip install flash-linear-attention==0.4.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 ARG INSTALL_FLASHQLA=0
@@ -99,18 +96,6 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
 
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT}
-
-RUN git clone https://github.com/radixark/Megatron-Bridge.git && \
-    cd Megatron-Bridge && git checkout ${MEGATRON_BRIDGE_COMMIT}
-COPY docker/patch/${PATCH_VERSION}/megatron_bridge.patch /root/Megatron-Bridge/
-RUN cd Megatron-Bridge && \
-    git apply megatron_bridge.patch --3way && \
-    if grep -R -n '^<<<<<<< ' .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-      exit 1; \
-    fi && \
-    rm megatron_bridge.patch && \
-    pip install . --no-deps --no-build-isolation
 
 # zhuzilin fork builds, grouped together right after Megatron-LM:
 # torch_memory_saver, plus the GLM-5 train/rollout alignment kernels.
@@ -162,25 +147,16 @@ RUN cd Megatron-LM && \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \
       exit 1; \
     fi && \
-    if [ -f megatron-vllm-aligned.patch ]; then \
-      git apply megatron-vllm-aligned.patch --3way && \
-      if grep -R -n '^<<<<<<< ' .; then \
-        echo "megatron-vllm-aligned.patch failed to apply cleanly. Please resolve conflicts." && \
-        exit 1; \
-      fi; \
-    fi && \
     rm -f megatron*.patch && \
     pip install -e .
 
-# Patch vLLM with vime's local fixes (see docker/patch/${PATCH_VERSION}/vllm.patch
-# for the specifics). vLLM is a pip install (not a git checkout) so apply with
-# plain `git apply` (no --3way). --allow-empty keeps the build working once every
-# fix has landed upstream and the patch is emptied.
-COPY docker/patch/${PATCH_VERSION}/vllm.patch /tmp/vllm.patch
+# Patch vLLM with vime's local fixes. vLLM is a pip install (not a git checkout)
+# so apply with plain `git apply` (no --3way).
+COPY docker/patch/${PATCH_VERSION}/vllm*.patch /tmp/vllm-patches/
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
-    git apply -v --allow-empty /tmp/vllm.patch && \
-    rm /tmp/vllm.patch
+    for patch in /tmp/vllm-patches/*.patch; do git apply -v --allow-empty "$patch"; done && \
+    rm -rf /tmp/vllm-patches
 
 # ====================================== Install main package ============================================
 

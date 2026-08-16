@@ -401,7 +401,7 @@ def test_finish_weight_update_commits_version(vllm_engine, monkeypatch):
 
 
 @pytest.mark.unit
-def test_update_weights_from_tensor_posts_ipc_payload_without_committing_version(vllm_engine, monkeypatch):
+def test_update_weights_posts_ipc_payload(vllm_engine, monkeypatch):
     posted: list[tuple[str, dict]] = []
 
     def fake_post(endpoint: str, payload: dict):
@@ -411,14 +411,14 @@ def test_update_weights_from_tensor_posts_ipc_payload_without_committing_version
     monkeypatch.setattr(vllm_engine, "_make_request", fake_post)
     assert vllm_engine._weight_version is None
 
-    vllm_engine.update_weights_from_tensor(
-        names=["a", "b"],
-        dtype_names=["bfloat16", "float32"],
-        shapes=[[2], [1]],
-        ipc_handles={"uuid-gpu0": ("rebuild_fn", (1, 2, 3))},
-        tensor_sizes=[4, 4],
-        weight_version="42",
-        empty_gpu_uuids=["uuid-gpu1"],
+    vllm_engine.update_weights(
+        {
+            "names": ["a", "b"],
+            "dtype_names": ["bfloat16", "float32"],
+            "shapes": [[2], [1]],
+            "ipc_handles": {"uuid-gpu0": ("rebuild_fn", (1, 2, 3))},
+            "tensor_sizes": [4, 4],
+        }
     )
 
     assert posted[0][0] == "update_weights"
@@ -429,14 +429,47 @@ def test_update_weights_from_tensor_posts_ipc_payload_without_committing_version
     assert sent["names"] == ["a", "b"]
     assert sent["shapes"] == [[2], [1]]
     assert sent["tensor_sizes"] == [4, 4]
-    assert sent["empty_gpu_uuids"] == ["uuid-gpu1"]
     assert "packed" not in sent
     assert vllm_engine._weight_version is None
 
 
 @pytest.mark.unit
-def test_update_weights_from_tensor_does_not_advance_version_on_failure(vllm_engine, monkeypatch):
-    """POST failure must not advance _weight_version (else a retry would skip the resync)."""
+def test_update_weights_serializes_rank_local_payloads(vllm_engine, monkeypatch):
+    posted: list[tuple[str, dict]] = []
+
+    def fake_post(endpoint: str, payload: dict):
+        posted.append((endpoint, payload))
+        return {"ok": True}
+
+    monkeypatch.setattr(vllm_engine, "_make_request", fake_post)
+
+    first = {
+        "names": ["experts.0.weight"],
+        "dtype_names": ["bfloat16"],
+        "shapes": [[2]],
+        "ipc_handles": {"uuid-gpu0": ("first", ())},
+        "tensor_sizes": [4],
+    }
+    third = {
+        **first,
+        "names": ["experts.2.weight"],
+        "ipc_handles": {"uuid-gpu2": ("third", ())},
+    }
+    vllm_engine.update_weights([first, None, third])
+
+    sent = posted[0][1]["update_info"]
+    assert sent[1] is None
+    assert sent[0]["names"] == ["experts.0.weight"]
+    assert sent[2]["names"] == ["experts.2.weight"]
+    assert "ipc_handles" not in sent[0]
+    assert "ipc_handles" not in sent[2]
+    assert isinstance(sent[0]["ipc_handles_pickled"], str)
+    assert isinstance(sent[2]["ipc_handles_pickled"], str)
+
+
+@pytest.mark.unit
+def test_update_weights_does_not_advance_version_on_failure(vllm_engine, monkeypatch):
+    """Chunk POST failure must not modify the engine's committed version cache."""
 
     def fake_post_fail(endpoint: str, payload: dict) -> dict:
         raise RuntimeError("simulated POST failure")
@@ -445,8 +478,8 @@ def test_update_weights_from_tensor_does_not_advance_version_on_failure(vllm_eng
 
     vllm_engine._weight_version = "old"
     with pytest.raises(RuntimeError, match="simulated POST failure"):
-        vllm_engine.update_weights_from_tensor(
-            names=[], dtype_names=[], shapes=[], ipc_handles={}, tensor_sizes=[], weight_version="new"
+        vllm_engine.update_weights(
+            {"names": [], "dtype_names": [], "shapes": [], "ipc_handles": {}, "tensor_sizes": []}
         )
     assert vllm_engine._weight_version == "old"
 
@@ -719,6 +752,7 @@ def test_update_weights_from_disk_posts_collective_rpc(vllm_engine, monkeypatch)
 def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
     vllm_engine.args.update_weight_local_checkpoint_dir = "/local/checkpoint"
     vllm_engine.args.update_weight_disk_dir = "/shared/checkpoints"
+    vllm_engine.args.custom_update_weight_pre_read_path = "hooks.refresh"
     seen = []
 
     def fake_post(url, *, json=None):
@@ -737,10 +771,34 @@ def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
                     "local_checkpoint_dir": "/local/checkpoint",
                     "source_dir": "/shared/checkpoints",
                     "target_version": 8,
+                    "pre_read_hook": "hooks.refresh",
                 },
             },
-        )
+        ),
+        (
+            "http://127.0.0.1:8765/update_weight_version",
+            {"new_version": "8"},
+        ),
     ]
+    assert vllm_engine._weight_version == "8"
+
+
+@pytest.mark.unit
+def test_pull_weights_does_not_advance_version_when_pull_fails(vllm_engine, monkeypatch):
+    vllm_engine.args.update_weight_local_checkpoint_dir = "/local/checkpoint"
+    vllm_engine.args.update_weight_disk_dir = "/shared/checkpoints"
+    vllm_engine.args.custom_update_weight_pre_read_path = None
+    vllm_engine._weight_version = "old"
+
+    def fake_post(url, *, json=None):
+        del url, json
+        return _MockResponse(status_code=500)
+
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+
+    with pytest.raises(requests.exceptions.HTTPError):
+        vllm_engine.pull_weights(8)
+    assert vllm_engine._weight_version == "old"
 
 
 @pytest.mark.unit

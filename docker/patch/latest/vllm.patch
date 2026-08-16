@@ -225,15 +225,6 @@ index d512c9898..7c7a29ff5 100644
      packed_ipc_consumer,
      packed_ipc_producer,
  )
-@@ -75,6 +76,8 @@ class IPCWeightTransferUpdateInfo(WeightTransferUpdateInfo):
-     tensor_sizes: list[int] | None = None
-     """Per-parameter sizes in bytes within the packed buffer.
-     Required when packed=True, unused otherwise."""
-+    empty_gpu_uuids: list[str] | None = None
-+    """Trainer GPU UUIDs with no parameters in this packed update."""
- 
-     def __post_init__(self):
-         if self.ipc_handles_pickled is not None:
 @@ -143,6 +146,9 @@ class IPCWeightTransferEngine(
          # Set from the trainer-supplied init info at the handshake; defaults are
          # only for the (unreachable) receive-before-init case.
@@ -260,31 +251,19 @@ index d512c9898..7c7a29ff5 100644
  
      def receive_weights(self, update_info: IPCWeightTransferUpdateInfo) -> None:
          """
-@@ -195,14 +210,19 @@ class IPCWeightTransferEngine(
+@@ -195,14 +210,15 @@ class IPCWeightTransferEngine(
              if update_info.tensor_sizes is None:
                  raise ValueError("`tensor_sizes` is required when packed=True")
              assert isinstance(update_info.ipc_handles, dict)
--            weights = packed_ipc_consumer(
--                ipc_handle=update_info.ipc_handles,
--                names=update_info.names,
--                shapes=update_info.shapes,
--                dtype_names=update_info.dtype_names,
--                tensor_sizes=update_info.tensor_sizes,
--                device_index=device_index,
--            )
-+            physical_gpu_id = str(torch.cuda.get_device_properties(device_index).uuid)
-+            if physical_gpu_id in (update_info.empty_gpu_uuids or []):
-+                weights = []
-+            else:
-+                weights = packed_ipc_consumer(
-+                    ipc_handle=update_info.ipc_handles,
-+                    names=update_info.names,
-+                    shapes=update_info.shapes,
-+                    dtype_names=update_info.dtype_names,
-+                    tensor_sizes=update_info.tensor_sizes,
-+                    device_index=device_index,
-+                    importer=self._packed_importer,
-+                )
+             weights = packed_ipc_consumer(
+                 ipc_handle=update_info.ipc_handles,
+                 names=update_info.names,
+                 shapes=update_info.shapes,
+                 dtype_names=update_info.dtype_names,
+                 tensor_sizes=update_info.tensor_sizes,
+                 device_index=device_index,
++                importer=self._packed_importer,
+             )
          else:
              assert isinstance(update_info.ipc_handles, list)
              weights = []
@@ -485,528 +464,6 @@ index 58c9c8d9f..6b32dc7a2 100644
          if quant_config.quant_dtype is None:
              dispatch_dtype_bytes_per_elem = 2
              dispatch_scale_bytes_per_token = 0
-diff --git a/vllm/model_executor/model_loader/weight_utils.py b/vllm/model_executor/model_loader/weight_utils.py
-index e1897a77f..800ca8b27 100644
---- a/vllm/model_executor/model_loader/weight_utils.py
-+++ b/vllm/model_executor/model_loader/weight_utils.py
-@@ -260,12 +260,8 @@ def get_quant_config(
-         and hf_quant_config.get("quant_method") == "compressed-tensors"
-         and "config_groups" in hf_quant_config
-     ):
--        if hf_text_config is not None:
--            n_heads = getattr(hf_text_config, "num_attention_heads", None)
--            n_kv_heads = getattr(hf_text_config, "num_key_value_heads", None)
--        else:
--            n_heads = getattr(model_config.hf_config, "num_attention_heads", None)
--            n_kv_heads = getattr(model_config.hf_config, "num_key_value_heads", None)
-+        n_heads = model_config.model_arch_config.total_num_attention_heads
-+        n_kv_heads = model_config.model_arch_config.total_num_kv_heads
- 
-         hf_quant_config["total_num_heads"] = n_heads
-         hf_quant_config["total_num_kv_heads"] = (
-diff --git a/vllm/model_executor/models/config.py b/vllm/model_executor/models/config.py
-index 66427dfcd..fd1a1a0e0 100644
---- a/vllm/model_executor/models/config.py
-+++ b/vllm/model_executor/models/config.py
-@@ -200,26 +200,29 @@ class Gemma4Config(VerifyAndUpdateConfig):
-     def verify_and_update_config(vllm_config: "VllmConfig") -> None:
-         """Configure attention for heterogeneous head dimensions.
- 
--        Gemma4 uses different head dimensions for sliding window
--        (head_dim) vs full attention (global_head_dim) layers. The
--        default FA3 on Hopper cannot handle head_dim > 256, which
--        causes mixed backend selection and numerical divergence.
--
--        When FA4 is available we force it for ALL layers, giving a
--        uniform kernel path and avoiding the mixed FA3+FA4 penalty.
--        When FA4 is not available we fall back to Triton.
-+        Gemma4 uses different head dimensions for sliding window vs full attention
-+        layers. The default FA3 on Hopper cannot handle head_dim > 256, which causes
-+        mixed backend selection and numerical divergence.
-+
-+        When FA4 is available we force it for ALL layers, giving a uniform kernel path
-+        and avoiding the mixed FA3+FA4 penalty. When FA4 is not available we fall back
-+        to Triton.
-         """
--        hf_text_config = vllm_config.model_config.hf_text_config
--        head_dim = getattr(hf_text_config, "head_dim", None)
--        global_head_dim = getattr(hf_text_config, "global_head_dim", None)
-+        model_config = vllm_config.model_config
-+        arch_config = model_config.model_arch_config
-+        layer_types = getattr(model_config.hf_text_config, "layer_types", None) or []
-+        head_dims = {
-+            layer_types[i]: arch_config[i].head_size
-+            for i in range(min(arch_config.total_num_hidden_layers, len(layer_types)))
-+        }
- 
--        if head_dim is None or global_head_dim is None or head_dim == global_head_dim:
-+        if len(set(head_dims.values())) <= 1:
-             return
- 
-         from vllm.v1.attention.backends.fa_utils import is_fa_version_supported
-         from vllm.v1.attention.backends.registry import AttentionBackendEnum
- 
--        max_head_dim = max(head_dim, global_head_dim)
-+        max_head_dim = max(head_dims.values())
- 
-         if is_fa_version_supported(4) and max_head_dim <= 512:
-             if (
-@@ -229,20 +232,16 @@ class Gemma4Config(VerifyAndUpdateConfig):
-             ):
-                 vllm_config.attention_config.flash_attn_version = 4
-                 logger.info(
--                    "Gemma4 model has heterogeneous head dimensions "
--                    "(head_dim=%d, global_head_dim=%d). Using FA4 for "
-+                    "Gemma4 model has heterogeneous head dimensions %s. Using FA4 for "
-                     "all layers to avoid mixed FA3/FA4 penalty.",
--                    head_dim,
--                    global_head_dim,
-+                    head_dims,
-                 )
-         elif vllm_config.attention_config.backend is None:
-             vllm_config.attention_config.backend = AttentionBackendEnum.TRITON_ATTN
-             logger.info(
-                 "Gemma4 model has heterogeneous head dimensions "
--                "(head_dim=%d, global_head_dim=%d). FA4 not available, "
--                "forcing TRITON_ATTN backend.",
--                head_dim,
--                global_head_dim,
-+                "%s. FA4 not available, forcing TRITON_ATTN backend.",
-+                head_dims,
-             )
- 
- 
-diff --git a/vllm/model_executor/models/gemma4.py b/vllm/model_executor/models/gemma4.py
-index 0fe539886..f0ac972b2 100644
---- a/vllm/model_executor/models/gemma4.py
-+++ b/vllm/model_executor/models/gemma4.py
-@@ -63,6 +63,7 @@ from vllm.model_executor.model_loader.weight_utils import (
- )
- from vllm.platforms import current_platform
- from vllm.sequence import IntermediateTensors
-+from vllm.transformers_utils.configs.gemma4 import gemma4_layer_config
- from vllm.triton_utils import tl, triton
- from vllm.v1.attention.backends.utils import KVSharingFastPrefillMetadata
- 
-@@ -380,7 +381,6 @@ class Gemma4Attention(nn.Module):
-         num_kv_heads: int,
-         head_dim: int,
-         max_position_embeddings: int,
--        use_k_eq_v: bool = False,
-         cache_config: CacheConfig | None = None,
-         quant_config: QuantizationConfig | None = None,
-         attn_logits_soft_cap: float | None = None,
-@@ -389,7 +389,6 @@ class Gemma4Attention(nn.Module):
-         super().__init__()
-         self.config = config
-         self.hidden_size = hidden_size
--        self.use_k_eq_v = use_k_eq_v
- 
-         tp_size = get_tensor_model_parallel_world_size()
-         self.tp_rank = get_tensor_model_parallel_rank()
-@@ -570,27 +569,9 @@ class Gemma4DecoderLayer(nn.Module):
-         self.layer_idx = layer_idx
- 
-         # Gemma4 uses different head dimensions for sliding vs full attention
--        layer_type = config.layer_types[layer_idx]
--        self.is_full_attention = layer_type == "full_attention"
--        if self.is_full_attention:
--            head_dim = getattr(config, "global_head_dim", config.head_dim)
--        else:
--            head_dim = config.head_dim
--
--        # Determine if this full-attention layer uses k_eq_v
--        # (laptop variant: no v_proj, K reused as V on full attention layers)
--        use_k_eq_v = self.is_full_attention and getattr(
--            config, "attention_k_eq_v", False
--        )
--
--        # For k_eq_v full-attention layers, use num_global_key_value_heads
--        # as the KV head count when k_eq_v is enabled.
--        if use_k_eq_v:
--            num_kv_heads = getattr(
--                config, "num_global_key_value_heads", config.num_key_value_heads
--            )
--        else:
--            num_kv_heads = config.num_key_value_heads
-+        layer_config = gemma4_layer_config(config, layer_idx)
-+        head_dim = layer_config.head_dim
-+        num_kv_heads = layer_config.num_key_value_heads
- 
-         self.self_attn = Gemma4Attention(
-             config=config,
-@@ -599,7 +580,6 @@ class Gemma4DecoderLayer(nn.Module):
-             num_kv_heads=num_kv_heads,
-             head_dim=head_dim,
-             max_position_embeddings=config.max_position_embeddings,
--            use_k_eq_v=use_k_eq_v,
-             cache_config=cache_config,
-             quant_config=quant_config,
-             attn_logits_soft_cap=getattr(config, "attn_logit_softcapping", None),
-diff --git a/vllm/model_executor/models/gemma4_dspark.py b/vllm/model_executor/models/gemma4_dspark.py
-index a77448da5..f19c3857d 100644
---- a/vllm/model_executor/models/gemma4_dspark.py
-+++ b/vllm/model_executor/models/gemma4_dspark.py
-@@ -20,6 +20,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
-     VocabParallelEmbedding,
- )
- from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-+from vllm.transformers_utils.configs.gemma4 import gemma4_layer_config
- 
- from .gemma4_mtp import Gemma4MTPAttention, Gemma4MTPDecoderLayer
- from .qwen3_dflash import DFlashQwen3Model, _dflash_layer_causal
-@@ -38,18 +39,14 @@ class Gemma4DSparkAttention(Gemma4MTPAttention):
-         prefix: str,
-     ) -> None:
-         layer_idx = extract_layer_index(prefix)
--        is_full = config.layer_types[layer_idx] == "full_attention"
--        head_dim = (
--            getattr(config, "global_head_dim", config.head_dim)
--            if is_full
--            else config.head_dim
--        )
--        use_k_eq_v = is_full and getattr(config, "attention_k_eq_v", False)
--        num_kv_heads = (
--            getattr(config, "num_global_key_value_heads", config.num_key_value_heads)
--            if use_k_eq_v
--            else config.num_key_value_heads
-+        layer_type = config.layer_types[layer_idx]
-+        self.use_k_eq_v = layer_type == "full_attention" and getattr(
-+            config, "attention_k_eq_v", False
-         )
-+
-+        layer_config = gemma4_layer_config(config, layer_idx)
-+        head_dim = layer_config.head_dim
-+        num_kv_heads = layer_config.num_key_value_heads
-         super().__init__(
-             config=config,
-             hidden_size=config.hidden_size,
-@@ -64,7 +61,6 @@ class Gemma4DSparkAttention(Gemma4MTPAttention):
-         )
-         self.is_kv_shared_layer = False
-         self.causal = _dflash_layer_causal(config, layer_idx)
--        self.use_k_eq_v = use_k_eq_v
-         self.kv_size = self.num_kv_heads * self.head_dim
-         attn_bias = getattr(config, "attention_bias", False)
-         self.k_proj = ColumnParallelLinear(
-@@ -76,7 +72,7 @@ class Gemma4DSparkAttention(Gemma4MTPAttention):
-         )
-         self.v_proj = (
-             None
--            if use_k_eq_v
-+            if self.use_k_eq_v
-             else ColumnParallelLinear(
-                 config.hidden_size,
-                 self.total_num_kv_heads * self.head_dim,
-diff --git a/vllm/model_executor/models/gemma4_mtp.py b/vllm/model_executor/models/gemma4_mtp.py
-index f4d200d11..0fe972691 100644
---- a/vllm/model_executor/models/gemma4_mtp.py
-+++ b/vllm/model_executor/models/gemma4_mtp.py
-@@ -45,6 +45,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
-     VocabParallelEmbedding,
- )
- from vllm.sequence import IntermediateTensors
-+from vllm.transformers_utils.configs.gemma4 import gemma4_layer_config
- 
- from .gemma4 import Gemma4MLP, _get_text_config
- from .utils import (
-@@ -271,21 +272,9 @@ class Gemma4MTPDecoderLayer(nn.Module):
-         self.hidden_size = config.hidden_size
- 
-         layer_idx = extract_layer_index(prefix)
--        layer_type = config.layer_types[layer_idx]
--        is_full_attention = layer_type == "full_attention"
--        head_dim = (
--            getattr(config, "global_head_dim", config.head_dim)
--            if is_full_attention
--            else config.head_dim
--        )
--
--        use_k_eq_v = is_full_attention and getattr(config, "attention_k_eq_v", False)
--        if use_k_eq_v:
--            num_kv_heads = getattr(
--                config, "num_global_key_value_heads", config.num_key_value_heads
--            )
--        else:
--            num_kv_heads = config.num_key_value_heads
-+        layer_config = gemma4_layer_config(config, layer_idx)
-+        head_dim = layer_config.head_dim
-+        num_kv_heads = layer_config.num_key_value_heads
- 
-         self.self_attn = Gemma4MTPAttention(
-             config=config,
-diff --git a/vllm/model_executor/models/transformers/base.py b/vllm/model_executor/models/transformers/base.py
-index 35e5c9d1a..33e722ff9 100644
---- a/vllm/model_executor/models/transformers/base.py
-+++ b/vllm/model_executor/models/transformers/base.py
-@@ -524,9 +524,6 @@ class Base(
-         """
-         text_config = self.text_config
- 
--        num_heads = self.model_config.get_num_attention_heads(self.parallel_config)
--        head_size = self.model_config.get_head_size()
--        num_kv_heads = self.model_config.get_num_kv_heads(self.parallel_config)
-         logits_soft_cap = getattr(text_config, "attn_logit_softcapping", None)
- 
-         # In encoder models, the attention layers will have `is_causal=False`
-@@ -547,6 +544,15 @@ class Base(
- 
-         attention_instances = {}
-         for i in range(start, end):
-+            arch_config = self.model_config.model_arch_config[i]
-+            num_heads = self.model_config.get_num_attention_heads(
-+                self.parallel_config, arch_config
-+            )
-+            head_size = arch_config.head_size
-+            num_kv_heads = self.model_config.get_num_kv_heads(
-+                self.parallel_config, arch_config
-+            )
-+
-             # Handle interleaved sliding window attention
-             per_layer_sliding_window = None
-             if (
-diff --git a/vllm/model_executor/models/transformers/fusers/base.py b/vllm/model_executor/models/transformers/fusers/base.py
-index 920e63101..e15b442d0 100644
---- a/vllm/model_executor/models/transformers/fusers/base.py
-+++ b/vllm/model_executor/models/transformers/fusers/base.py
-@@ -57,6 +57,17 @@ class BaseFuser(ABC):
-         return {}
- 
- 
-+def fused_head_size(module: nn.Module, vllm_config: "VllmConfig") -> int:
-+    """The head size of `module`, which head counts are derived from.
-+
-+    Prefer the module's own `head_dim`, which Transformers sets per instance:
-+    the model-wide value is the largest head size across layers, so on a
-+    heterogeneous checkpoint it would divide out the wrong number of heads, and
-+    it is the text head size, so it does not describe a vision tower at all.
-+    """
-+    return getattr(module, "head_dim", None) or vllm_config.model_config.get_head_size()
-+
-+
- def local_output_sizes(merged_name: str) -> str:
-     """Source for the per-rank widths of the merged linear `self.<merged_name>`."""
-     merged = f"self.{merged_name}"
-diff --git a/vllm/model_executor/models/transformers/fusers/packed_qkv.py b/vllm/model_executor/models/transformers/fusers/packed_qkv.py
-index ae5612fa8..8b1b30b03 100644
---- a/vllm/model_executor/models/transformers/fusers/packed_qkv.py
-+++ b/vllm/model_executor/models/transformers/fusers/packed_qkv.py
-@@ -12,6 +12,7 @@ from vllm.logger import init_logger
- from vllm.model_executor.layers.linear import QKVParallelLinear
- from vllm.model_executor.models.transformers.fusers.base import (
-     RewriteFuser,
-+    fused_head_size,
-     local_output_sizes,
- )
- from vllm.model_executor.models.transformers.fx_utils import (
-@@ -122,7 +123,7 @@ class PackedQKVFuser(RewriteFuser):
- 
-     def validate(self, module: nn.Module, vllm_config: "VllmConfig") -> bool:
-         """Shapes must be compatible with a head-sharded packed GEMM."""
--        head_size = vllm_config.model_config.get_head_size()
-+        head_size = fused_head_size(module, vllm_config)
-         qkv = module.get_submodule(self.qkv_name)
-         compatible = (
-             self.q_size % head_size == 0
-@@ -137,7 +138,7 @@ class PackedQKVFuser(RewriteFuser):
-         self, module: nn.Module, prefix: str, vllm_config: "VllmConfig"
-     ) -> None:
-         quant_config = vllm_config.quant_config
--        head_size = vllm_config.model_config.get_head_size()
-+        head_size = fused_head_size(module, vllm_config)
-         qkv_prefix = maybe_prefix(prefix, self.qkv_name)
-         qkv = module.get_submodule(self.qkv_name)
-         merged = QKVParallelLinear(
-diff --git a/vllm/model_executor/models/transformers/fusers/qkv.py b/vllm/model_executor/models/transformers/fusers/qkv.py
-index 370c0cdf4..dcc8534c0 100644
---- a/vllm/model_executor/models/transformers/fusers/qkv.py
-+++ b/vllm/model_executor/models/transformers/fusers/qkv.py
-@@ -12,6 +12,7 @@ from vllm.logger import init_logger
- from vllm.model_executor.layers.linear import QKVParallelLinear
- from vllm.model_executor.models.transformers.fusers.base import (
-     StackedFuser,
-+    fused_head_size,
-     local_output_sizes,
- )
- from vllm.model_executor.models.transformers.fx_utils import (
-@@ -158,7 +159,7 @@ class QKVFuser(StackedFuser):
-         q = module.get_submodule(self.q_name)
-         k = module.get_submodule(self.k_name)
-         v = module.get_submodule(self.v_name)
--        head_size = vllm_config.model_config.get_head_size()
-+        head_size = fused_head_size(module, vllm_config)
-         compatible = (
-             q.in_features == k.in_features == v.in_features
-             and len({proj.bias is None for proj in (q, k, v)}) == 1
-@@ -174,7 +175,7 @@ class QKVFuser(StackedFuser):
-         self, module: nn.Module, prefix: str, vllm_config: "VllmConfig"
-     ) -> None:
-         quant_config = vllm_config.quant_config
--        head_size = vllm_config.model_config.get_head_size()
-+        head_size = fused_head_size(module, vllm_config)
-         q = module.get_submodule(self.q_name)
-         k = module.get_submodule(self.k_name)
-         merged = QKVParallelLinear(
-diff --git a/vllm/transformers_utils/configs/gemma4.py b/vllm/transformers_utils/configs/gemma4.py
-new file mode 100644
-index 000000000..c57ba5b7e
---- /dev/null
-+++ b/vllm/transformers_utils/configs/gemma4.py
-@@ -0,0 +1,34 @@
-+# SPDX-License-Identifier: Apache-2.0
-+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-+"""Per-layer config resolution for Gemma4 and its variants."""
-+
-+from copy import copy
-+
-+from transformers import PretrainedConfig
-+
-+
-+def gemma4_layer_config(
-+    text_config: PretrainedConfig, layer_idx: int
-+) -> PretrainedConfig:
-+    """The Gemma4 text config as it applies to one layer.
-+
-+    Gemma4 uses a larger head dimension on its full attention layers than on its
-+    sliding ones, and with `attention_k_eq_v` it uses more KV heads there too.
-+    Transformers >= 5.15.0 says so in the config itself; before that the values
-+    are flat attributes that `layer_types` picks between, so resolve them here.
-+    The result is homogeneous either way, so callers read `head_dim` and
-+    `num_key_value_heads` off it without caring which version they are on.
-+    """
-+    if getattr(text_config, "is_heterogeneous", False):
-+        return text_config.per_layer_config[layer_idx]
-+
-+    layer = copy(text_config)
-+    if text_config.layer_types[layer_idx] == "full_attention":
-+        global_head_dim = getattr(text_config, "global_head_dim", None)
-+        layer.head_dim = global_head_dim or text_config.head_dim
-+        if getattr(text_config, "attention_k_eq_v", False):
-+            global_kv_heads = getattr(text_config, "num_global_key_value_heads", None)
-+            layer.num_key_value_heads = (
-+                global_kv_heads or text_config.num_key_value_heads
-+            )
-+    return layer
-diff --git a/vllm/transformers_utils/model_arch_config_convertor.py b/vllm/transformers_utils/model_arch_config_convertor.py
-index 90c026cf9..254ec8ca8 100644
---- a/vllm/transformers_utils/model_arch_config_convertor.py
-+++ b/vllm/transformers_utils/model_arch_config_convertor.py
-@@ -17,6 +17,7 @@ from vllm.transformers_utils.config import (
-     ConfigFormat,
-     get_safetensors_params_metadata,
- )
-+from vllm.transformers_utils.configs.gemma4 import gemma4_layer_config
- from vllm.utils.torch_utils import common_broadcastable_dtype
- 
- logger = init_logger(__name__)
-@@ -27,6 +28,37 @@ class ModelArchConfigConvertorBase:
-         self.hf_config = hf_config
-         self.hf_text_config = hf_text_config
- 
-+    def get_per_layer_hf_configs(
-+        self,
-+    ) -> list[tuple[PretrainedConfig, PretrainedConfig]] | None:
-+        """`(hf_config, hf_text_config)` per layer, or `None` if homogeneous.
-+
-+        This is the only place that decides whether a checkpoint is heterogeneous
-+        and how many layers it has, so a convertor can declare variation that
-+        Transformers does not express (see `Gemma4ModelArchConfigConvertor`).
-+
-+        Each pair is converted independently and the results are diffed, so a
-+        convertor that overrides this must not also collapse a varying field in
-+        its getters: the collapse would then be applied per layer and every layer
-+        would report the same value.
-+        """
-+        config_het = getattr(self.hf_config, "is_heterogeneous", False)
-+        text_het = getattr(self.hf_text_config, "is_heterogeneous", False)
-+        if not (config_het or text_het):
-+            return None
-+        # The text config decides the layer count when it is the heterogeneous one:
-+        # its stack is what vLLM builds attention layers for.
-+        source = self.hf_text_config if text_het else self.hf_config
-+        return [
-+            (
-+                self.hf_config.per_layer_config[i] if config_het else self.hf_config,
-+                self.hf_text_config.per_layer_config[i]
-+                if text_het
-+                else self.hf_text_config,
-+            )
-+            for i in range(len(source.per_layer_config))
-+        ]
-+
-     def get_architectures(self) -> list[str]:
-         # Sometimes we get here from `vllm_config.with_hf_config(text_config)` where
-         # `text_config` is a sub-config from a multi-modal model. If this is the case,
-@@ -368,6 +400,35 @@ class ModelArchConfigConvertorBase:
-         return derived_max_model_len, max_len_key
- 
-     def convert(self, supports_multimodal: bool = True) -> ModelArchitectureConfig:
-+        if (per_layer := self.get_per_layer_hf_configs()) is None:
-+            return self.convert_layer(supports_multimodal)
-+
-+        if self.is_deepseek_mla():
-+            raise NotImplementedError(
-+                "Heterogeneous MLA models are not supported: `get_head_size` "
-+                "patches the config in place for them, which a per-layer "
-+                "conversion would apply to a throwaway copy."
-+            )
-+        # Convert each layer and let the result work out which fields differ.
-+        # Reading a varying attribute off the global config would raise, so the
-+        # whole-model config has to be built up from the layers.
-+        return ModelArchitectureConfig.from_layers(
-+            [
-+                type(self)(*configs).convert_layer(supports_multimodal)
-+                for configs in per_layer
-+            ]
-+        )
-+
-+    def convert_layer(
-+        self, supports_multimodal: bool = True
-+    ) -> ModelArchitectureConfig:
-+        """Convert one homogeneous config, without resolving per-layer values.
-+
-+        `convert` calls this once per layer, so it must not recurse back into
-+        per-layer resolution: the configs it receives are already layer-specific,
-+        and they can still carry the attributes that made the model look
-+        heterogeneous in the first place.
-+        """
-         model_arch_config = ModelArchitectureConfig(
-             architectures=self.get_architectures(),
-             model_type=self.hf_config.model_type,
-@@ -601,13 +662,26 @@ class Gemma4ModelArchConfigConvertor(ModelArchConfigConvertorBase):
-             == "vision"
-         )
- 
--    def get_head_size(self) -> int:
--        # Gemma4 uses dual head dimensions: head_dim (sliding attention)
--        # and global_head_dim (full attention).  Return the largest so
--        # that attention backends allocate buffers large enough for both.
--        head_dim = getattr(self.hf_text_config, "head_dim", 0)
--        global_head_dim = getattr(self.hf_text_config, "global_head_dim", 0)
--        return max(head_dim, global_head_dim) or super().get_head_size()
-+    def get_per_layer_hf_configs(
-+        self,
-+    ) -> list[tuple[PretrainedConfig, PretrainedConfig]] | None:
-+        # Gemma4 uses a larger head dimension, and sometimes more KV heads, on its
-+        # full attention layers than on its sliding ones. Transformers >= 5.15.0
-+        # says so in the config; before that the values are flat attributes picked
-+        # apart by `layer_types`, so build the per-layer configs here instead. Both
-+        # then reach the base convertor as ordinary homogeneous configs.
-+        if getattr(self.hf_text_config, "is_heterogeneous", False):
-+            return super().get_per_layer_hf_configs()
-+        text_config = self.hf_text_config
-+        if not getattr(text_config, "layer_types", None):
-+            return None
-+        # `num_hidden_layers` is what the stack is built from, and it is what
-+        # Transformers sizes `per_layer_config` by. `layer_types` can be longer,
-+        # e.g. when a test truncates the layer count to build a small model.
-+        return [
-+            (self.hf_config, gemma4_layer_config(text_config, layer_idx))
-+            for layer_idx in range(self.get_num_hidden_layers())
-+        ]
- 
- 
- class MossAudioModelArchConfigConvertor(ModelArchConfigConvertorBase):
 diff --git a/vllm/utils/network_utils.py b/vllm/utils/network_utils.py
 index cf3141a0c..85de5bff4 100644
 --- a/vllm/utils/network_utils.py
@@ -1099,71 +556,92 @@ index 0a52ceaa3..5ece8d514 100644
          # Initialize the distributed environment.
          init_worker_distributed_environment(
              self.vllm_config,
+diff --git a/vllm/distributed/weight_transfer/base.py b/vllm/distributed/weight_transfer/base.py
+index 3fd21101e7..2f26985217 100644
+--- a/vllm/distributed/weight_transfer/base.py
++++ b/vllm/distributed/weight_transfer/base.py
+@@ -170,5 +170,7 @@ class WeightTransferUpdateRequest:
+     """API-level weight update request."""
+
+-    update_info: dict[str, Any] = field(default_factory=dict)
++    update_info: dict[str, Any] | list[dict[str, Any] | None] = field(
++        default_factory=dict
++    )
+
+
+@@ -392,5 +394,7 @@ class VLLMWeightSyncClient(Protocol):
+     def start_weight_update(self) -> None: ...
+
+-    def update_weights(self, update_info: dict[str, Any]) -> None: ...
++    def update_weights(
++        self, update_info: dict[str, Any] | list[dict[str, Any] | None]
++    ) -> None: ...
+
+     def finish_weight_update(self, weight_version: str | None = None) -> None: ...
+diff --git a/vllm/distributed/weight_transfer/clients.py b/vllm/distributed/weight_transfer/clients.py
+index 12dd0c9eac..528445fba1 100644
+--- a/vllm/distributed/weight_transfer/clients.py
++++ b/vllm/distributed/weight_transfer/clients.py
+@@ -73,8 +73,16 @@ class HTTPVLLMWeightSyncClient:
+         self._post("start_weight_update")
+
+-    def update_weights(self, update_info: dict[str, Any]) -> None:
+-        self._post(
+-            "update_weights", {"update_info": _json_safe_update_info(update_info)}
+-        )
++    def update_weights(
++        self, update_info: dict[str, Any] | list[dict[str, Any] | None]
++    ) -> None:
++        json_update_info: dict[str, Any] | list[dict[str, Any] | None]
++        if isinstance(update_info, list):
++            json_update_info = [
++                _json_safe_update_info(info) if info is not None else None
++                for info in update_info
++            ]
++        else:
++            json_update_info = _json_safe_update_info(update_info)
++        self._post("update_weights", {"update_info": json_update_info})
+
+     def finish_weight_update(self, weight_version: str | None = None) -> None:
+@@ -106,5 +114,7 @@ class RayVLLMWeightSyncClient:
+         ray.get([h.start_weight_update.remote() for h in self.handles])
+
+-    def update_weights(self, update_info: dict[str, Any]) -> None:
++    def update_weights(
++        self, update_info: dict[str, Any] | list[dict[str, Any] | None]
++    ) -> None:
+         import ray
+
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index bbab98dbd..780138af0 100644
+index bbab98dbd7..a3aa364119 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
-@@ -4,7 +4,9 @@
- 
- import gc
- import os
-+import shutil
- import time
-+import uuid
- from collections.abc import Callable
- from contextlib import AbstractContextManager, contextmanager, nullcontext
- from datetime import timedelta
-@@ -456,6 +458,53 @@ class Worker(WorkerBase):
+@@ -1270,5 +1270,5 @@ class Worker(WorkerBase):
+         self._weight_update_active = True
+
+-    def update_weights(self, update_info: dict) -> None:
++    def update_weights(self, update_info: dict | list[dict | None]) -> None:
+         """
+         Receive one weight update chunk from the trainer.
+@@ -1280,5 +1280,6 @@ class Worker(WorkerBase):
+
+         Args:
+-            update_info: Dictionary containing backend-specific update info
++            update_info: Backend-specific update info, or a list indexed by
++                worker rank. A `None` entry skips that worker.
+         """
+         self._check_weight_transfer_engine()
+@@ -1292,5 +1293,12 @@ class Worker(WorkerBase):
          with set_current_vllm_config(self.vllm_config):
-             self.model_runner.reload_weights(*args, **kwargs)
- 
-+    def pull_weights(
-+        self,
-+        local_checkpoint_dir: str,
-+        source_dir: str,
-+        target_version: int,
-+    ) -> dict[str, Any]:
-+        """Copy a published full checkpoint into host-local storage."""
-+        import fcntl
-+
-+        source = os.path.join(source_dir, f"weight_v{target_version:06d}")
-+        if not os.path.isdir(source):
-+            raise FileNotFoundError(f"Published checkpoint does not exist: {source}")
-+
-+        local_checkpoint_dir = os.path.abspath(local_checkpoint_dir)
-+        parent = os.path.dirname(local_checkpoint_dir)
-+        os.makedirs(parent, exist_ok=True)
-+        lock_path = f"{local_checkpoint_dir}.pull.lock"
-+        marker_name = ".vllm_weight_version"
-+
-+        with open(lock_path, "a+b") as lock_file:
-+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-+            marker = os.path.join(local_checkpoint_dir, marker_name)
-+            if os.path.isfile(marker):
-+                with open(marker) as marker_file:
-+                    if marker_file.read().strip() == str(target_version):
-+                        return {"success": True, "weight_version": str(target_version)}
-+
-+            temporary = f"{local_checkpoint_dir}.tmp-{uuid.uuid4().hex}"
-+            previous = f"{local_checkpoint_dir}.previous-{uuid.uuid4().hex}"
-+            try:
-+                shutil.copytree(source, temporary, symlinks=True)
-+                with open(os.path.join(temporary, marker_name), "w") as marker_file:
-+                    marker_file.write(str(target_version))
-+                if os.path.exists(local_checkpoint_dir):
-+                    os.replace(local_checkpoint_dir, previous)
-+                os.replace(temporary, local_checkpoint_dir)
-+                shutil.rmtree(previous, ignore_errors=True)
-+            except BaseException:
-+                shutil.rmtree(temporary, ignore_errors=True)
-+                if os.path.exists(previous) and not os.path.exists(
-+                    local_checkpoint_dir
-+                ):
-+                    os.replace(previous, local_checkpoint_dir)
-+                raise
-+
-+        return {"success": True, "weight_version": str(target_version)}
-+
-     @torch.inference_mode()
-     def determine_available_memory(self) -> int:
-         """Profiles the peak memory usage of the model to determine how much
+             try:
+-                self.weight_transfer_engine.update_weights(update_info)
++                local_update_info = (
++                    update_info[self.rank]
++                    if isinstance(update_info, list)
++                    else update_info
++                )
++                if local_update_info is None:
++                    return
++                self.weight_transfer_engine.update_weights(local_update_info)
+             except BaseException:
+                 self._weight_update_active = False

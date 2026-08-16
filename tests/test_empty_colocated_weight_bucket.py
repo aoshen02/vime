@@ -44,14 +44,14 @@ class _FakeRemoteMethod:
     def __init__(self):
         self.calls = []
 
-    def remote(self, **kwargs):
-        self.calls.append(kwargs)
+    def remote(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
         return f"ref-{len(self.calls)}"
 
 
 class _FakeEngine:
     def __init__(self):
-        self.update_weights_from_tensor = _FakeRemoteMethod()
+        self.update_weights = _FakeRemoteMethod()
 
 
 def _install_fake_deps(monkeypatch):
@@ -177,68 +177,6 @@ def _load_update_weight_module(monkeypatch):
     return module, dist_state
 
 
-def test_packed_colocated_bucket_rejects_mismatched_rank_metadata(monkeypatch):
-    module, _ = _load_update_weight_module(monkeypatch)
-    first = {
-        "names": ["shared.weight"],
-        "dtype_names": ["float16"],
-        "shapes": [[2, 2]],
-        "tensor_sizes": [8],
-        "ipc_handles": {"gpu-0": ("first",)},
-    }
-    remote = {
-        "names": ["expert.weight"],
-        "dtype_names": ["bfloat16"],
-        "shapes": [[4, 8]],
-        "tensor_sizes": [64],
-        "ipc_handles": {"gpu-1": ("remote",)},
-    }
-
-    with pytest.raises(ValueError, match="packed IPC metadata must match"):
-        module._merge_ipc_update_infos([first, remote])
-
-
-def test_packed_colocated_bucket_merges_rank_handles(monkeypatch):
-    module, _ = _load_update_weight_module(monkeypatch)
-    first = {
-        "names": ["shared.weight", "expert.weight"],
-        "dtype_names": ["float16", "bfloat16"],
-        "shapes": [[2, 2], [4, 8]],
-        "tensor_sizes": [8, 64],
-        "ipc_handles": {"gpu-0": ("first",)},
-    }
-    second = {
-        **first,
-        "ipc_handles": {"gpu-1": ("second",)},
-    }
-
-    assert module._merge_ipc_update_infos([first, second]) == {
-        **first,
-        "ipc_handles": {"gpu-0": ("first",), "gpu-1": ("second",)},
-    }
-
-
-def test_packed_colocated_bucket_groups_different_rank_metadata(monkeypatch):
-    module, _ = _load_update_weight_module(monkeypatch)
-    first = {
-        "names": ["experts.0.weight"],
-        "dtype_names": ["bfloat16"],
-        "shapes": [[4, 8]],
-        "tensor_sizes": [64],
-        "ipc_handles": {"gpu-0": ("first",)},
-    }
-    second = {
-        **first,
-        "names": ["experts.1.weight"],
-        "ipc_handles": {"gpu-1": ("second",)},
-    }
-
-    assert module._group_ipc_update_infos([first, second]) == [
-        {**first, "empty_gpu_uuids": ["gpu-1"]},
-        {**second, "empty_gpu_uuids": ["gpu-0"]},
-    ]
-
-
 def test_empty_colocated_bucket_still_participates_in_gather(monkeypatch):
     module, dist_state = _load_update_weight_module(monkeypatch)
     dist_state.gathered = lambda local: [local, local]
@@ -249,13 +187,12 @@ def test_empty_colocated_bucket_still_participates_in_gather(monkeypatch):
         ipc_engine=engine,
         ipc_gather_src=0,
         ipc_gather_group=object(),
-        weight_version=3,
     )
 
-    assert module._deserialize_ipc_update_info(dist_state.local_object)["empty_gpu_uuids"] == ["gpu-0"]
+    assert module._deserialize_ipc_update_info(dist_state.local_object)["names"] == []
     assert refs == []
     assert long_lived_tensor is None
-    assert engine.update_weights_from_tensor.calls == []
+    assert engine.update_weights.calls == []
 
 
 def test_source_rank_marks_empty_colocated_bucket_gpu(monkeypatch):
@@ -275,18 +212,11 @@ def test_source_rank_marks_empty_colocated_bucket_gpu(monkeypatch):
         ipc_engine=engine,
         ipc_gather_src=0,
         ipc_gather_group=object(),
-        weight_version=7,
     )
 
     assert refs == ["ref-1"]
     assert long_lived_tensor is None
-    assert engine.update_weights_from_tensor.calls == [
-        {
-            **remote_info,
-            "empty_gpu_uuids": ["gpu-0"],
-            "weight_version": "7",
-        }
-    ]
+    assert engine.update_weights.calls == [(([None, remote_info],), {})]
 
 
 def test_source_rank_sends_different_expert_metadata_as_separate_updates(monkeypatch):
@@ -312,15 +242,11 @@ def test_source_rank_sends_different_expert_metadata_as_separate_updates(monkeyp
         ipc_engine=engine,
         ipc_gather_src=0,
         ipc_gather_group=object(),
-        weight_version=8,
     )
 
-    assert refs == ["ref-1", "ref-2"]
+    assert refs == ["ref-1"]
     assert long_lived_tensor == "packed"
-    assert engine.update_weights_from_tensor.calls == [
-        {**local_info, "empty_gpu_uuids": ["gpu-1"], "weight_version": "8"},
-        {**remote_info, "empty_gpu_uuids": ["gpu-0"], "weight_version": "8"},
-    ]
+    assert engine.update_weights.calls == [(([local_info, remote_info],), {})]
 
 
 if __name__ == "__main__":

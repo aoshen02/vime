@@ -117,7 +117,6 @@ def _build_packed_ipc_update_info(
                 "shapes": [],
                 "tensor_sizes": [],
                 "ipc_handles": {},
-                "empty_gpu_uuids": [gpu_uuid],
             },
             None,
         )
@@ -153,61 +152,6 @@ def _deserialize_ipc_update_info(payload: str) -> dict[str, Any]:
     import cloudpickle
 
     return cloudpickle.loads(base64.b64decode(payload.encode("ascii")))
-
-
-def _merge_ipc_update_infos(infos: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Merge the per-rank handles for one packed IPC update."""
-    if not infos:
-        raise ValueError("no IPC update_info payloads to merge")
-
-    metadata_keys = ("names", "dtype_names", "shapes", "tensor_sizes")
-    nonempty_infos = [info for info in infos if info["names"]]
-    if not nonempty_infos:
-        return {}
-    base = nonempty_infos[0]
-    if "tensor_sizes" not in base or any(
-        "tensor_sizes" not in info or any(info[key] != base[key] for key in metadata_keys)
-        for info in nonempty_infos[1:]
-    ):
-        raise ValueError("packed IPC metadata must match across all ranks in a slot")
-    handles = {}
-    empty_gpu_uuids = []
-    for info in infos:
-        handles.update(info["ipc_handles"])
-        empty_gpu_uuids.extend(info.get("empty_gpu_uuids", []))
-    merged = {**base, "ipc_handles": handles}
-    if empty_gpu_uuids:
-        merged["empty_gpu_uuids"] = empty_gpu_uuids
-    return merged
-
-
-def _group_ipc_update_infos(infos: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group per-rank IPC payloads by metadata for rank-local expert updates."""
-    if not infos:
-        raise ValueError("no IPC update_info payloads to group")
-
-    metadata_keys = ("names", "dtype_names", "shapes", "tensor_sizes")
-    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
-    all_gpu_uuids = set()
-    for info in infos:
-        all_gpu_uuids.update(info["ipc_handles"])
-        all_gpu_uuids.update(info.get("empty_gpu_uuids", []))
-        if not info["names"]:
-            continue
-        key = tuple(
-            tuple(tuple(value) if isinstance(value, list) else value for value in info[field])
-            for field in metadata_keys
-        )
-        groups[key].append(info)
-
-    merged_groups = []
-    for group in groups.values():
-        merged = _merge_ipc_update_infos(group)
-        empty_gpu_uuids = sorted(all_gpu_uuids - set(merged["ipc_handles"]))
-        if empty_gpu_uuids:
-            merged["empty_gpu_uuids"] = empty_gpu_uuids
-        merged_groups.append(merged)
-    return merged_groups
 
 
 class UpdateWeightFromTensor:
@@ -495,60 +439,23 @@ class UpdateWeightFromTensor:
         """
         version++, flush caches, process buckets. Progress on rank 0.
         """
-        previous_version = self.weight_version
         self.weight_version += 1
-        try:
-            rank = dist.get_rank()
-            if rank == 0:
-                ray.get([engine.pause_generation.remote() for engine in self._all_rollout_engines])
-                ray.get([engine.flush_cache.remote() for engine in self._all_rollout_engines])
-                if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                    post_process_weights(
-                        restore_weights_before_load=True,
-                        post_process_quantization=False,
-                        rollout_engines=self._all_rollout_engines,
-                    )
-            dist.barrier(group=get_gloo_group())
+        rank = dist.get_rank()
+        if rank == 0:
+            ray.get([engine.pause_generation.remote() for engine in self._all_rollout_engines])
+            ray.get([engine.flush_cache.remote() for engine in self._all_rollout_engines])
+            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                post_process_weights(
+                    restore_weights_before_load=True,
+                    post_process_quantization=False,
+                    rollout_engines=self._all_rollout_engines,
+                )
+        dist.barrier(group=get_gloo_group())
 
-            if self._native_ipc_trainer is not None:
-                self._native_ipc_trainer.send_weights()
-                torch.cuda.ipc_collect()
-                torch.cuda.empty_cache()
-                if rank == 0:
-                    if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                        post_process_weights(
-                            restore_weights_before_load=False,
-                            post_process_quantization=True,
-                            rollout_engines=self._all_rollout_engines,
-                        )
-                    ray.get([engine.continue_generation.remote() for engine in self._all_rollout_engines])
-                dist.barrier(group=get_gloo_group())
-                return
-
-            self._start_weight_update(draft=False)
-
-            megatron_local_weights = self.weights_getter()
-            self._send_weight_chunks(megatron_local_weights)
-
-            dist.barrier(group=get_gloo_group())
-            # After the barrier all engines have returned, so every rank's last-chunk
-            # IPC handles are now released by the consumers.  Clean them up.
+        if self._native_ipc_trainer is not None:
+            self._native_ipc_trainer.send_weights()
             torch.cuda.ipc_collect()
             torch.cuda.empty_cache()
-
-            self._finish_weight_update()
-
-            if self.args.enable_mtp_training and (self.args.vllm_speculative_config or {}).get("method") == "mtp":
-                self._start_weight_update(draft=True)
-
-                self._send_weight_chunks(megatron_local_weights)
-
-                dist.barrier(group=get_gloo_group())
-                torch.cuda.ipc_collect()
-                torch.cuda.empty_cache()
-                self._finish_weight_update()
-
-            # int4/fp4 post_process
             if rank == 0:
                 if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                     post_process_weights(
@@ -558,9 +465,41 @@ class UpdateWeightFromTensor:
                     )
                 ray.get([engine.continue_generation.remote() for engine in self._all_rollout_engines])
             dist.barrier(group=get_gloo_group())
-        except Exception:
-            self.weight_version = previous_version
-            raise
+            return
+
+        self._start_weight_update(draft=False)
+
+        megatron_local_weights = self.weights_getter()
+        self._send_weight_chunks(megatron_local_weights)
+
+        dist.barrier(group=get_gloo_group())
+        # After the barrier all engines have returned, so every rank's last-chunk
+        # IPC handles are now released by the consumers. Clean them up.
+        torch.cuda.ipc_collect()
+        torch.cuda.empty_cache()
+
+        self._finish_weight_update()
+
+        if self.args.enable_mtp_training and (self.args.vllm_speculative_config or {}).get("method") == "mtp":
+            self._start_weight_update(draft=True)
+
+            self._send_weight_chunks(megatron_local_weights)
+
+            dist.barrier(group=get_gloo_group())
+            torch.cuda.ipc_collect()
+            torch.cuda.empty_cache()
+            self._finish_weight_update()
+
+        # int4/fp4 post_process
+        if rank == 0:
+            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                post_process_weights(
+                    restore_weights_before_load=False,
+                    post_process_quantization=True,
+                    rollout_engines=self._all_rollout_engines,
+                )
+            ray.get([engine.continue_generation.remote() for engine in self._all_rollout_engines])
+        dist.barrier(group=get_gloo_group())
 
     def _start_weight_update(self, *, draft: bool) -> None:
         rank = dist.get_rank()
@@ -624,7 +563,6 @@ class UpdateWeightFromTensor:
             ipc_engine=self._ipc_engine,
             ipc_gather_src=self._ipc_gather_src,
             ipc_gather_group=self._ipc_gather_group,
-            weight_version=self.weight_version,
         )
         all_refs.extend(refs_colocated)
 
@@ -647,7 +585,6 @@ def _send_to_colocated_engine(
     ipc_engine,
     ipc_gather_src,
     ipc_gather_group,
-    weight_version,
 ) -> tuple[list[ObjectRef], Any]:
     # Placeholder ranks (GPU slots reserved but no engine) have no gather group.
     # all_gather_object is only collective among group members, so we skip entirely.
@@ -660,7 +597,7 @@ def _send_to_colocated_engine(
     if slot_size <= 1:
         if not local_info["names"]:
             return [], weight_ref
-        ref = ipc_engine.update_weights_from_tensor.remote(**local_info, weight_version=str(weight_version))
+        ref = ipc_engine.update_weights.remote(local_info)
         return [ref], weight_ref
 
     payload = _serialize_ipc_update_info(local_info)
@@ -673,7 +610,8 @@ def _send_to_colocated_engine(
         if any(p is None for p in gathered_payloads):
             raise RuntimeError(f"Missing IPC payloads in slot {ipc_gather_src}; got {gathered_payloads!r}")
         slot_infos = [_deserialize_ipc_update_info(p) for p in gathered_payloads]
-        for merged in _group_ipc_update_infos(slot_infos):
-            refs.append(ipc_engine.update_weights_from_tensor.remote(**merged, weight_version=str(weight_version)))
+        rank_local_infos = [info if info["names"] else None for info in slot_infos]
+        if any(info is not None for info in rank_local_infos):
+            refs.append(ipc_engine.update_weights.remote(rank_local_infos))
 
     return refs, weight_ref

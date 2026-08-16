@@ -10,7 +10,7 @@ from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_
 from megatron.training.training import get_model
 
 from vime.backends.megatron_utils.arguments import set_default_megatron_args
-from vime.backends.megatron_utils.hf_to_megatron import load_hf_weights, supports_hf_weight_loading
+from vime.backends.megatron_utils.hf_to_megatron import load_hf_weights
 from vime.backends.megatron_utils.initialize import init
 from vime.backends.megatron_utils.model_provider import get_model_provider_func
 from vime.utils.logging_utils import configure_logger
@@ -20,12 +20,6 @@ from vime.utils.memory_utils import print_memory
 def add_convertion_args(parser):
     """Add conversion arguments to the parser"""
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
-    parser.add_argument(
-        "--megatron-to-hf-mode",
-        choices=["raw", "bridge"],
-        default="raw",
-        help="The method to convert Megatron weights to Hugging Face weights for vLLM.",
-    )
     parser.add_argument(
         "--custom-model-provider-path",
         type=str,
@@ -118,14 +112,7 @@ def main():
 
     # Load model
     hf_model_path = args.hf_checkpoint
-    if supports_hf_weight_loading(hf_model_path):
-        load_hf_weights(args, model, hf_model_path)
-    else:
-        import vime_plugins.mbridge  # noqa: F401
-        from mbridge import AutoBridge
-
-        bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
-        bridge.load_weights(model, hf_model_path, memory_efficient=True)
+    load_hf_weights(args, model, hf_model_path)
     print(f"Model loaded: {hf_model_path}")
 
     if args.use_cpu_initialization:
