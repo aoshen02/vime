@@ -623,23 +623,29 @@ index bbab98dbd7..a3aa364119 100644
 +    def update_weights(self, update_info: dict | list[dict | None]) -> None:
          """
          Receive one weight update chunk from the trainer.
-@@ -1280,5 +1280,6 @@ class Worker(WorkerBase):
+@@ -1280,5 +1280,7 @@ class Worker(WorkerBase):
 
          Args:
 -            update_info: Dictionary containing backend-specific update info
 +            update_info: Backend-specific update info, or a list indexed by
-+                worker rank. A `None` entry skips that worker.
++                global worker rank across data parallel replicas. A `None`
++                entry skips that worker.
          """
          self._check_weight_transfer_engine()
-@@ -1292,5 +1293,12 @@ class Worker(WorkerBase):
+@@ -1292,5 +1294,17 @@ class Worker(WorkerBase):
          with set_current_vllm_config(self.vllm_config):
              try:
 -                self.weight_transfer_engine.update_weights(update_info)
-+                local_update_info = (
-+                    update_info[self.rank]
-+                    if isinstance(update_info, list)
-+                    else update_info
-+                )
++                if isinstance(update_info, list):
++                    parallel_config = self.vllm_config.parallel_config
++                    worker_rank = (
++                        parallel_config.data_parallel_rank
++                        * parallel_config.world_size
++                        + self.rank
++                    )
++                    local_update_info = update_info[worker_rank]
++                else:
++                    local_update_info = update_info
 +                if local_update_info is None:
 +                    return
 +                self.weight_transfer_engine.update_weights(local_update_info)
