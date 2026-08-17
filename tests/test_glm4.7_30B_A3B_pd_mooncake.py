@@ -69,8 +69,7 @@ def execute():
         "--n-samples-per-prompt 2 "
         "--rollout-max-response-len 512 "
         "--rollout-temperature 1.0 "
-        "--rollout-top-k 20 "
-        "--rollout-top-p 0.95 "
+        "--rollout-top-p 1.0 "
         "--global-batch-size 8 "
     )
     optimizer_args = (
