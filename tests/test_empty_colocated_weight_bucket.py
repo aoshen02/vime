@@ -105,7 +105,10 @@ def _install_fake_deps(monkeypatch):
 
     vllm_mod = types.ModuleType("vime.backends.megatron_utils.vllm")
     vllm_mod.FlattenedTensorBucket = _FakeFlattenedTensorBucket
+    vllm_mod.HfWeightSource = object
     vllm_mod.MultiprocessingSerializer = _FakeMultiprocessingSerializer
+    vllm_mod.VimeRayWeightSyncClient = object
+    vllm_mod.create_nccl_trainer = lambda *args, **kwargs: None
 
     megatron_to_hf_mod = types.ModuleType("vime.backends.megatron_utils.megatron_to_hf")
     megatron_to_hf_mod.convert_to_hf = lambda *args, **kwargs: []
@@ -189,7 +192,7 @@ def test_empty_colocated_bucket_still_participates_in_gather(monkeypatch):
         ipc_gather_group=object(),
     )
 
-    assert module._deserialize_ipc_update_info(dist_state.local_object)["names"] == []
+    assert dist_state.local_object["names"] == []
     assert refs == []
     assert long_lived_tensor is None
     assert engine.update_weights.calls == []
@@ -204,7 +207,7 @@ def test_source_rank_marks_empty_colocated_bucket_gpu(monkeypatch):
         "tensor_sizes": [64],
         "ipc_handles": {"gpu-1": ("remote",)},
     }
-    dist_state.gathered = lambda local: [local, module._serialize_ipc_update_info(remote_info)]
+    dist_state.gathered = lambda local: [local, remote_info]
     engine = _FakeEngine()
 
     refs, long_lived_tensor = module._send_to_colocated_engine(
@@ -233,7 +236,7 @@ def test_source_rank_sends_different_expert_metadata_as_separate_updates(monkeyp
         "names": ["experts.1.weight"],
         "ipc_handles": {"gpu-1": ("remote",)},
     }
-    dist_state.gathered = lambda local: [local, module._serialize_ipc_update_info(remote_info)]
+    dist_state.gathered = lambda local: [local, remote_info]
     engine = _FakeEngine()
 
     monkeypatch.setattr(module, "_build_packed_ipc_update_info", lambda _tensors: (local_info, "packed"))

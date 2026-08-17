@@ -668,7 +668,7 @@ def _compute_server_args(
 
     if args.use_rollout_routing_replay:
         kwargs["enable_return_routed_experts"] = True
-    if args.rollout_top_p != 1.0:
+    if getattr(args, "rollout_top_p", 1.0) != 1.0:
         kwargs["return_sampling_mask"] = True
     if args.fp16:
         kwargs["dtype"] = "float16"
