@@ -100,6 +100,7 @@ def create_nccl_trainer(
             master_port=master_port,
             world_size=sum(engine_gpu_counts) + 1,
             rank=dist.get_rank(),
+            packed_num_buffers=1,
         ),
         client=client,
         source=source,

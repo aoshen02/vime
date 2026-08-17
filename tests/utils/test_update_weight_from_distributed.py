@@ -154,6 +154,45 @@ def test_weight_source_caches_metadata_and_reiterates(update_module, monkeypatch
 
 
 @pytest.mark.unit
+def test_nccl_trainer_uses_single_packed_buffer(update_module, monkeypatch):
+    adapter = sys.modules[update_module.create_nccl_trainer.__module__]
+    created = []
+
+    class NCCLTrainerInitInfo:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class Factory:
+        @staticmethod
+        def trainer_init(init_info, *, client, source):
+            created.append((init_info, client, source))
+            return "trainer"
+
+    factory_module = types.ModuleType("vllm.distributed.weight_transfer.factory")
+    factory_module.WeightTransferTrainerFactory = Factory
+    nccl_module = types.ModuleType("vllm.distributed.weight_transfer.nccl_engine")
+    nccl_module.NCCLTrainerInitInfo = NCCLTrainerInitInfo
+    monkeypatch.setitem(sys.modules, factory_module.__name__, factory_module)
+    monkeypatch.setitem(sys.modules, nccl_module.__name__, nccl_module)
+    monkeypatch.setattr(adapter.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(adapter.dist, "broadcast_object_list", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adapter, "get_gloo_group", lambda: None)
+    monkeypatch.setattr(
+        sys.modules["ray"],
+        "_private",
+        types.SimpleNamespace(services=types.SimpleNamespace(get_node_ip_address=lambda: "127.0.0.1")),
+        raising=False,
+    )
+
+    assert adapter.create_nccl_trainer("client", "source", [2, 2]) == "trainer"
+    init_info, client, source = created[0]
+    assert init_info.packed_num_buffers == 1
+    assert init_info.world_size == 5
+    assert client == "client"
+    assert source == "source"
+
+
+@pytest.mark.unit
 def test_connect_replaces_existing_trainer(update_module, monkeypatch):
     updater = object.__new__(update_module.UpdateWeightFromDistributed)
     updater.args = types.SimpleNamespace(rollout_num_gpus_per_engine=2)
