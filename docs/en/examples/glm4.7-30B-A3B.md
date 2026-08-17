@@ -71,8 +71,9 @@ GLM-4.7-Flash is a Mixture-of-Experts (MoE) model with 64 routed experts (top-4 
     ```bash
     VLLM_ARGS=(
        --rollout-num-gpus-per-engine 8
-       --vllm-gpu-memory-utilization 0.8
+       --vllm-gpu-memory-utilization 0.7
        --vllm-data-parallel-size 8
+       --vllm-enable-expert-parallel
        ...
     )
     ```
@@ -85,7 +86,7 @@ GLM-4.7-Flash includes 1 MTP (Multi-Token Prediction) layer, which can be used f
 VLLM_ARGS=(
    ...
    # MTP speculative decoding
-   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
 )
 ```
 
@@ -139,6 +140,8 @@ When the total number of GPUs is not a multiple or divisor of the total number o
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 24
    --vllm-gpu-memory-utilization 0.7
+   --vllm-data-parallel-size 3
+   --vllm-enable-expert-parallel
    --vllm-eplb-config '{"num_redundant_experts": 16}'
 )
 ```

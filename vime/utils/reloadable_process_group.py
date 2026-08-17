@@ -16,13 +16,6 @@ logger = logging.getLogger(__name__)
 
 old_new_group_dict = {}
 default_process_group_states = {}
-process_group_reload_warning_pids = set()
-
-
-def _python_process_group_reload_supported() -> bool:
-    version = torch.__version__.split("+", 1)[0].split(".")
-    major_minor = tuple(int(part) for part in version[:2])
-    return major_minor < (2, 14)
 
 
 @dataclass
@@ -162,8 +155,6 @@ def monkey_patch_torch_dist():
 
     def new_group(*args, **kwargs):
         group = old_new_group(*args, **kwargs)
-        if not _python_process_group_reload_supported():
-            return group
         explicit_backend = args[2] if len(args) >= 3 else kwargs.get("backend")
         backend = str(explicit_backend) if explicit_backend is not None else str(dist.get_backend())
 
@@ -482,16 +473,6 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
 
 def destroy_process_groups():
     """Destroy registered subgroups and replace NCCL WORLD with a temporary Gloo WORLD."""
-    if not _python_process_group_reload_supported():
-        pid = os.getpid()
-        if pid not in process_group_reload_warning_pids:
-            logger.warning(
-                "Skipping process-group teardown on PyTorch %s because reusing Python ProcessGroup wrappers after "
-                "reload can segfault in PyWorkHolder.wait; model tensors are still offloaded.",
-                torch.__version__,
-            )
-            process_group_reload_warning_pids.add(pid)
-        return
     state = default_process_group_states.get(os.getpid())
     if state is not None and not state.nccl_world_destroyed and _uses_nccl(state.backend):
         _destroy_default_nccl_process_group()
@@ -501,8 +482,6 @@ def destroy_process_groups():
 
 def reload_process_groups():
     """Restore NCCL WORLD and recreate all registered subgroups."""
-    if not _python_process_group_reload_supported():
-        return
     _reload_default_process_group()
     ReloadableProcessGroup.reload_process_groups()
 

@@ -162,6 +162,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     last_usage: dict[str, Any] | None = None
     weight_version: str | None = None
     request_spec_decode_stats: dict[str, int] | None = None
+    sampling_mask: list[list[int]] | None = None
     finish_reason: Any = None
 
     client = http_utils._http_client
@@ -197,6 +198,10 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                     continue
                 choice = choices[0]
                 last_choice = choice
+                if choice.get("sampling_mask") is not None:
+                    if sampling_mask is None:
+                        sampling_mask = []
+                    sampling_mask.extend(choice["sampling_mask"])
                 if chunk.get("usage"):
                     last_usage = chunk["usage"]
                 if choice.get("finish_reason"):
@@ -276,6 +281,18 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
         if last_choice.get("routed_experts") is not None:
             raw = base64.b64decode(last_choice["routed_experts"].encode("ascii"), validate=True)
             meta["routed_experts"] = np.load(io.BytesIO(raw), allow_pickle=False)
+        if sampling_mask is not None:
+            top_p_meta = {"top_p_token_ids": [token_id for token_ids in sampling_mask for token_id in token_ids]}
+            offsets = [0]
+            for token_ids in sampling_mask:
+                offsets.append(offsets[-1] + len(token_ids))
+            top_p_meta["top_p_token_offsets"] = offsets
+            sample._apply_meta_info(
+                args,
+                top_p_meta,
+                new_token_count=len(new_response_tokens),
+                update_terminal_info=False,
+            )
         # tokens already accumulated above; finalize metadata only (no token re-append).
         sample.append_response_tokens(args, meta_info=meta)
     elif state.aborted:

@@ -25,7 +25,6 @@ def _run_pp_group_reload_worker(rank: int, world_size: int, rendezvous_path: str
     )
     distributed_utils.init_gloo_group()
     rpg.register_default_process_group(timeout=timeout)
-    rpg._python_process_group_reload_supported = lambda: True
 
     # Exercise the NCCL lifecycle with Gloo so this remains a CPU test.  The
     # relevant contract is the global ordering of WORLD and subgroup teardown,
@@ -98,7 +97,6 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
         world_size=4,
     )
     monkeypatch.setattr(rpg, "default_process_group_states", {rpg.os.getpid(): state})
-    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
 
     events = []
 
@@ -198,7 +196,6 @@ def test_pp_topology_survives_repeated_world_and_subgroup_reload(tmp_path):
 def test_unregistered_world_preserves_subgroup_only_behavior(monkeypatch):
     events = []
     monkeypatch.setattr(rpg, "default_process_group_states", {})
-    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
         "destroy_process_groups",
@@ -219,33 +216,6 @@ def test_unregistered_world_preserves_subgroup_only_behavior(monkeypatch):
     rpg.reload_process_groups()
 
     assert events == ["destroy_subgroups", "reload_subgroups"]
-
-
-@pytest.mark.unit
-def test_unsupported_torch_keeps_process_groups_alive(monkeypatch):
-    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: False)
-    monkeypatch.setattr(
-        rpg.ReloadableProcessGroup,
-        "destroy_process_groups",
-        staticmethod(lambda: pytest.fail("unsupported reload must not destroy subgroups")),
-    )
-    monkeypatch.setattr(
-        rpg.ReloadableProcessGroup,
-        "reload_process_groups",
-        staticmethod(lambda: pytest.fail("unsupported reload must not rebuild subgroups")),
-    )
-
-    rpg.destroy_process_groups()
-    rpg.reload_process_groups()
-
-
-@pytest.mark.unit
-def test_torch_213_supports_process_group_reload(monkeypatch):
-    monkeypatch.setattr(rpg.torch, "__version__", "2.13.0+cu130")
-    assert rpg._python_process_group_reload_supported()
-
-    monkeypatch.setattr(rpg.torch, "__version__", "2.14.0+cu130")
-    assert not rpg._python_process_group_reload_supported()
 
 
 @pytest.mark.unit

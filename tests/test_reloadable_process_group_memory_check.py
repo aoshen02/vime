@@ -101,7 +101,6 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
         world_size=4,
     )
     monkeypatch.setattr(rpg, "default_process_group_states", {rpg.os.getpid(): state})
-    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
 
     events = []
 
@@ -180,7 +179,6 @@ def test_world_and_subgroups_follow_destroy_reload_order(monkeypatch):
 def test_unregistered_world_preserves_subgroup_only_behavior(monkeypatch):
     events = []
     monkeypatch.setattr(rpg, "default_process_group_states", {})
-    monkeypatch.setattr(rpg, "_python_process_group_reload_supported", lambda: True)
     monkeypatch.setattr(
         rpg.ReloadableProcessGroup,
         "destroy_process_groups",

@@ -71,8 +71,9 @@ GLM-4.7-Flash 是一个 MoE（混合专家）模型，包含 64 个路由专家�
    ```bash
    VLLM_ARGS=(
       --rollout-num-gpus-per-engine 8
-      --vllm-gpu-memory-utilization 0.8
+      --vllm-gpu-memory-utilization 0.7
       --vllm-data-parallel-size 8
+      --vllm-enable-expert-parallel
       ...
    )
    ```
@@ -85,7 +86,7 @@ GLM-4.7-Flash 包含 1 层 MTP（Multi-Token Prediction）层，可用于推理�
 VLLM_ARGS=(
    ...
    # MTP 投机解码
-   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
 )
 ```
 
@@ -139,6 +140,8 @@ bash scripts/run-glm4.7-30B-A3B.sh
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 24
    --vllm-gpu-memory-utilization 0.7
+   --vllm-data-parallel-size 3
+   --vllm-enable-expert-parallel
    --vllm-eplb-config '{"num_redundant_experts": 16}'
 )
 ```

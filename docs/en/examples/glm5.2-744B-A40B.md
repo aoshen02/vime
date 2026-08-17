@@ -132,14 +132,14 @@ vllm:
       - worker_type: prefill
         num_gpus: 64
         num_gpus_per_engine: 64
-        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_high_throughput, ... }
+        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_high_throughput, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_producer, ... }, ... }
       - worker_type: decode
         num_gpus: 192
         num_gpus_per_engine: 64
-        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_low_latency, ... }
+        overrides: { data_parallel_size: 64, enable_expert_parallel: true, max_cudagraph_capture_size: 72, all2all_backend: deepep_low_latency, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_consumer, ... }, ... }
 ```
 
-Vime configures vLLM's `NixlConnector` producer/consumer roles automatically for the prefill and decode groups. The script supplies the cluster-specific NCCL and NVSHMEM network settings through the Ray runtime environment.
+The source `mooncake` transport maps to vLLM's `MooncakeConnector`. The source IB-device list maps to `kv_connector_extra_config.device_name`; the prefill and decode groups use `kv_producer` and `kv_consumer`, respectively.
 
 The shared rollout arguments use vLLM-native FP8 KV cache and CUDA-graph settings:
 
@@ -148,7 +148,7 @@ VLLM_ARGS=(
    --rollout-num-gpus-per-engine 64
    --vllm-gpu-memory-utilization 0.70
    --vllm-kv-cache-dtype fp8_e4m3
-   --vllm-max-cudagraph-capture-size 8
+   --vllm-max-cudagraph-capture-size 48
    --vllm-config "${VLLM_CONFIG_FILE}"
 )
 ```
@@ -156,8 +156,10 @@ VLLM_ARGS=(
 MTP / EAGLE speculative decoding is enabled using the model's own next-token-prediction layer (the GLM-5.2 checkpoint ships an MTP layer), so no separate draft model is needed:
 
 ```bash
---vllm-speculative-config '{"method":"eagle","num_speculative_tokens":5}'
+--vllm-speculative-config '{"method":"mtp","num_speculative_tokens":5}'
 ```
+
+vLLM measures CUDA-graph capture size in flattened query tokens, while SGLang's `cuda_graph_max_bs` measures request batch size. With five speculative tokens, each decode request contributes `1 + 5 = 6` query tokens. The shared SGLang limit `8` therefore maps to `48`, and the decode-group override `12` maps to `72`. vLLM derives the DeepEP dispatch-buffer size from its scheduler token capacity, so it does not need the SGLang-specific `SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=64` setting.
 
 `VLLM_ENGINE_ITERATION_TIMEOUT_S=3600` raises vLLM's engine watchdog for this long-running multi-node workload.
 

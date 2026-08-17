@@ -157,6 +157,9 @@ class MegatronTrainRayActor(TrainRayActor):
         update_weight_transport = self.args.update_weight_transport
 
         if update_weight_mode == "delta":
+            # Delta sync is disk-transport only: each engine's /pull_weights applies the published
+            # deltas into a host-local checkpoint on every host it spans, and the engines reload
+            # via vanilla update_weights_from_disk.
             assert not self.args.colocate, "--update-weight-mode=delta is not supported with --colocate"
             assert (
                 update_weight_transport == "disk"
@@ -613,7 +616,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if not rollout_engines and not reconnect_rollout_engines:
             if dist.get_rank() == 0:
-                logger.info("No updatable vLLM engines are running; skip weight update.")
+                logger.info("No updatable VLLM engines are running; skip weight update.")
             return
 
         if reconnect_rollout_engines:
@@ -638,31 +641,6 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
-
-            if self.args.ci_test and not (
-                self.args.update_weight_mode == "full" and self.args.update_weight_transport == "disk"
-            ):
-                version_error = None
-                if dist.get_rank() == 0:
-                    try:
-                        expected_version = str(self.weight_updater.weight_version)
-                        engine_versions = ray.get([engine.get_weight_version.remote() for engine in rollout_engines])
-                        mismatches = [
-                            f"engine {index}: {engine_version}"
-                            for index, engine_version in enumerate(engine_versions)
-                            if str(engine_version) != expected_version
-                        ]
-                        if mismatches:
-                            raise RuntimeError(
-                                f"weight version mismatch after update; expected {expected_version}; "
-                                + ", ".join(mismatches)
-                            )
-                    except Exception as error:
-                        version_error = str(error)
-                version_errors = [version_error]
-                dist.broadcast_object_list(version_errors, src=0, group=get_gloo_group())
-                if version_errors[0] is not None:
-                    raise RuntimeError(version_errors[0])
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:

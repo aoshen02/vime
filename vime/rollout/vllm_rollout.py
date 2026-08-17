@@ -165,9 +165,6 @@ class GenerateState(metaclass=SingletonMeta):
             no_stop_trim=True,
             spaces_between_special_tokens=False,
         )
-        if args.rollout_top_p != 1.0:
-            self.sampling_params["custom_params"] = {"return_top_p_token_ids": True}
-
         if getattr(args, "vllm_enable_deterministic_inference", False):
             sampling_seed_base = args.rollout_seed
             self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
@@ -444,6 +441,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if routed_experts is not None:
         raw = base64.b64decode(routed_experts.encode("ascii"), validate=True)
         meta["routed_experts"] = np.load(io.BytesIO(raw), allow_pickle=False)
+
+    sampling_mask = choice.get("sampling_mask")
+    if sampling_mask is not None:
+        meta["top_p_token_ids"] = [token_id for token_ids in sampling_mask for token_id in token_ids]
+        offsets = [0]
+        for token_ids in sampling_mask:
+            offsets.append(offsets[-1] + len(token_ids))
+        meta["top_p_token_offsets"] = offsets
 
     sample.append_response_tokens(
         args,

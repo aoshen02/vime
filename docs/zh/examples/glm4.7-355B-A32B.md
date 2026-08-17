@@ -89,6 +89,8 @@ GLM-4.7 是一个 MoE（混合专家）模型，包含 160 个路由专家（top
    VLLM_ARGS=(
       --rollout-num-gpus-per-engine 32
       --vllm-gpu-memory-utilization 0.7
+      --vllm-data-parallel-size 4
+      --vllm-enable-expert-parallel
       ...
    )
    ```
@@ -101,7 +103,7 @@ GLM-4.7 包含 MTP（Multi-Token Prediction）层，可以在推理阶段用于�
 VLLM_ARGS=(
    ...
    # MTP 投机解码
-   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
 )
 ```
 
@@ -163,7 +165,10 @@ python tools/convert_hf_to_fp8.py \
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 32
    --vllm-gpu-memory-utilization 0.7
-   --vllm-max-cudagraph-capture-size 64
-   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+   --vllm-data-parallel-size 32
+   --vllm-enable-expert-parallel
+   --vllm-cudagraph-capture-sizes 5 10 20 40 $(seq 80 40 640)
+   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
+   --vllm-all2all-backend deepep_high_throughput
 )
 ```

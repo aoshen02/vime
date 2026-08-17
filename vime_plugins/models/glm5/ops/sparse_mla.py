@@ -70,7 +70,7 @@ class VLLMSparseMLA(torch.autograd.Function):
             assert required_padding % num_heads == 0, (
                 f"flash_mla_sparse num_heads {num_heads} cannot be padded to " f"{required_padding}"
             )
-            q_input = q.new_empty((q.shape[0], required_padding, q.shape[2]))
+            q_input = q.new_zeros((q.shape[0], required_padding, q.shape[2]))
             q_input[:, :num_heads, :] = q
         else:
             q_input = q

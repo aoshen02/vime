@@ -49,6 +49,7 @@ def vllm_args() -> SimpleNamespace:
         fp16=False,
         offload_rollout=False,
         use_rollout_routing_replay=False,
+        rollout_top_p=1.0,
         vllm_pipeline_parallel_size=1,
         vllm_prefill_context_parallel_size=1,
         vllm_data_parallel_size=1,
@@ -196,6 +197,26 @@ def test_compute_server_args_applies_worker_type_and_bootstrap_port(vllm_args):
 
 
 @pytest.mark.unit
+def test_compute_server_args_allows_mooncake_group_override(vllm_args):
+    config = {
+        "kv_connector": "MooncakeConnector",
+        "kv_role": "kv_producer",
+        "kv_connector_extra_config": {"device_name": "mlx5_0,mlx5_1"},
+    }
+    server_args, _ = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        worker_type="prefill",
+        disaggregation_bootstrap_port=12345,
+        vllm_overrides={"kv_transfer_config": config},
+    )
+    assert server_args["kv_transfer_config"] == config
+
+
+@pytest.mark.unit
 def test_compute_server_args_prefill_requires_bootstrap_port(vllm_args):
     with pytest.raises(AssertionError, match="disaggregation_bootstrap_port"):
         mod._compute_server_args(
@@ -211,9 +232,11 @@ def test_compute_server_args_prefill_requires_bootstrap_port(vllm_args):
 @pytest.mark.unit
 def test_compute_server_args_applies_rollout_and_dtype_flags(vllm_args):
     vllm_args.use_rollout_routing_replay = True
+    vllm_args.rollout_top_p = 0.9
     vllm_args.fp16 = True
     sa, _ = mod._compute_server_args(vllm_args, rank=0, dist_init_addr=None, host="127.0.0.1", port=8000)
     assert sa["enable_return_routed_experts"] is True
+    assert sa["return_sampling_mask"] is True
     assert sa["dtype"] == "float16"
 
 

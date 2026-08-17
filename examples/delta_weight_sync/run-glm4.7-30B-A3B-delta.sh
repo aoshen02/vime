@@ -81,6 +81,7 @@ VLLM_ARGS=(
    --rollout-num-gpus-per-engine 8
    --vllm-gpu-memory-utilization 0.8
    --vllm-data-parallel-size 8
+   --vllm-enable-expert-parallel
 )
 
 RUNTIME_ENV_JSON="{

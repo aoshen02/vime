@@ -846,7 +846,7 @@ class DSAMLASelfAttention(DSAMultiLatentAttention):
                 if parallel_state.get_tensor_model_parallel_world_size() != 1:
                     raise RuntimeError("MEGATRON_USE_VLLM_ROPE requires TP=1")
                 if parallel_state.get_context_parallel_world_size() != 1:
-                    raise RuntimeError("The github-slime GLM5 VLLM RoPE alignment currently requires CP=1")
+                    raise RuntimeError("The Vime GLM5 vLLM RoPE alignment currently requires CP=1")
                 token_ids = torch.arange(q.shape[0], dtype=torch.int64, device=q.device)
                 seq_ids = torch.searchsorted(cu_seqlens[1:], token_ids, right=True)
                 positions = token_ids - cu_seqlens[seq_ids]

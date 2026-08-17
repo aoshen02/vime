@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=vllm/vllm-openai:v0.27.1-ubuntu2404
+ARG BASE_IMAGE=vllm/vllm-openai:nightly
 FROM ${BASE_IMAGE}
 
 # ======================================== Arguments =============================================

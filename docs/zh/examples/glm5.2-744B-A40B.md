@@ -130,14 +130,14 @@ vllm:
       - worker_type: prefill
         num_gpus: 64
         num_gpus_per_engine: 64
-        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_high_throughput, ... }
+        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_high_throughput, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_producer, ... }, ... }
       - worker_type: decode
         num_gpus: 192
         num_gpus_per_engine: 64
-        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_low_latency, ... }
+        overrides: { data_parallel_size: 64, enable_expert_parallel: true, max_cudagraph_capture_size: 72, all2all_backend: deepep_low_latency, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_consumer, ... }, ... }
 ```
 
-Vime 会自动为 prefill/decode group 配置 vLLM `NixlConnector` 的 producer/consumer role。脚本通过 Ray runtime environment 提供集群相关的 NCCL 和 NVSHMEM 网络配置。
+上游的 `mooncake` 传输对应 vLLM 的 `MooncakeConnector`。上游的 IB device 列表对应 `kv_connector_extra_config.device_name`；prefill 和 decode group 分别使用 `kv_producer` 与 `kv_consumer`。
 
 共享 rollout 参数使用 vLLM 原生的 FP8 KV cache 和 CUDA graph 配置:
 
@@ -146,7 +146,7 @@ VLLM_ARGS=(
    --rollout-num-gpus-per-engine 64
    --vllm-gpu-memory-utilization 0.70
    --vllm-kv-cache-dtype fp8_e4m3
-   --vllm-max-cudagraph-capture-size 8
+   --vllm-max-cudagraph-capture-size 48
    --vllm-config "${VLLM_CONFIG_FILE}"
 )
 ```
@@ -154,8 +154,10 @@ VLLM_ARGS=(
 MTP / EAGLE speculative decoding 直接使用模型自带的 next-token-prediction 层（GLM-5.2 checkpoint 自带 MTP 层），因此不需要单独的 draft model：
 
 ```bash
---vllm-speculative-config '{"method":"eagle","num_speculative_tokens":5}'
+--vllm-speculative-config '{"method":"mtp","num_speculative_tokens":5}'
 ```
+
+vLLM 的 CUDA graph capture size 按展开后的 query token 数计算，而 SGLang 的 `cuda_graph_max_bs` 按请求数计算。启用 5 个 speculative token 后，每个 decode 请求对应 `1 + 5 = 6` 个 query token。因此 SGLang 的共享上限 `8` 映射为 `48`，decode group 的覆盖值 `12` 映射为 `72`。vLLM 会根据 scheduler token capacity 自动推导 DeepEP dispatch buffer 大小，不需要对应 SGLang 专属的 `SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=64`。
 
 `VLLM_ENGINE_ITERATION_TIMEOUT_S=3600` 会为这个长时间运行的多节点任务提高 vLLM engine watchdog 的超时时间。
 

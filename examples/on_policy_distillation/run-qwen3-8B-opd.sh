@@ -147,7 +147,7 @@ WANDB_ARGS=(
 
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --vllm-gpu-memory-utilization 0.25
+   --vllm-gpu-memory-utilization 0.4
 )
 
 MISC_ARGS=(

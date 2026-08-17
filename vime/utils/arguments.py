@@ -6,7 +6,6 @@ import os
 from typing import Any
 
 import yaml
-from vllm_router.launch_router import RouterArgs
 
 from vime.backends.vllm_utils.arguments import validate_args as vllm_validate_args
 from vime.backends.vllm_utils.arguments import vllm_parse_args
@@ -50,7 +49,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                     "Number of GPUs for inference. Note that when using --colocate, "
                     "i.e. the training and the inference engines are on the same gpus, this param will be set as "
                     "actor_num_gpus_per_node * actor_num_nodes unless it is explicitly set. "
-                    "Set it to 0 to launch routers without local vLLM engines."
+                    "Set it to 0 to launch routers without local VLLM engines."
                 ),
             )
             parser.add_argument(
@@ -320,8 +319,8 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "The huggingface checkpoint of the trained model. "
-                    "This is used to initialize vLLM and also provide the tokenizer. "
-                    "Note that, we will always update the parameters in vLLM with that of megatron before training, "
+                    "This is used to initialize vllm and also provide the tokenizer. "
+                    "Note that, we will always update the parameters in vllm with that of megatron before training, "
                     "so you only need to provide a huggingface checkpoint that has the same architecture as the model you want to train. "
                     "It doesn't necessary need to contain the most up-to-date parameters."
                 ),
@@ -1144,7 +1143,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Type of on-policy distillation. "
-                    "'vllm': Teacher log-probs are obtained from external vLLM server during rollout. "
+                    "'vllm': Teacher log-probs are obtained from external VLLM server during rollout. "
                     "'megatron': Teacher model is loaded via --opd-teacher-load and forwarded during training."
                 ),
             )
@@ -1177,10 +1176,6 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                     "hf_checkpoint, which would mis-name a teacher!=student server."
                 ),
             )
-            return parser
-
-        def add_router_arguments(parser):
-            RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
             return parser
 
         # wandb
@@ -1293,7 +1288,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                     "a literal file and reused across every rollout_id; a path containing {rollout_id} "
                     "loads a per-rollout file (with eval_<id>.pt for the eval pipeline). Unlike "
                     "--load-debug-rollout-data, this does NOT force debug_train_only / skip_vllm -- "
-                    "vLLM servers, router, weight_update and the colocate offload/onload dance all "
+                    "vllm servers, router, weight_update and the colocate offload/onload dance all "
                     "stay live, which is the point (memory measurement at long context)."
                 ),
             )
@@ -1747,11 +1742,6 @@ def parse_megatron_role_args(base_args, megatron_config_path, role):
     return role_args
 
 
-def parse_critic_args(actor_args, megatron_config_path):
-    """Backward-compatible wrapper for critic-specific Megatron role parsing."""
-    return parse_megatron_role_args(actor_args, megatron_config_path, role="critic")
-
-
 def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     """
     Build evaluation dataset configurations from either --eval-config or --eval-prompt-data.
@@ -1793,32 +1783,6 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
         args.eval_prompt_data = None
 
     return eval_datasets
-
-
-def _validate_update_weight_args(args) -> None:
-    if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
-        raise ValueError(
-            "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
-            "a filesystem shared between the trainer and the rollout engines."
-        )
-
-    if args.update_weight_mode == "delta":
-        if args.update_weight_transport != "disk":
-            raise ValueError(
-                "--update-weight-mode=delta requires --update-weight-transport=disk, "
-                f"got {args.update_weight_transport!r}."
-            )
-        if args.colocate:
-            raise ValueError(
-                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
-                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
-                "(snapshot + diff + encode) is pure overhead."
-            )
-        if not args.update_weight_local_checkpoint_dir:
-            raise ValueError(
-                "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
-                "(a rollout-host-local NVMe directory)."
-            )
 
 
 def vime_validate_args(args):
@@ -1949,7 +1913,7 @@ def vime_validate_args(args):
     if args.load_debug_rollout_data is not None:
         logger.info(
             f"load_debug_rollout_data {args.load_debug_rollout_data} is set, "
-            "will not instantiate vLLM servers and will only run the training process."
+            "will not instantiate vllm servers and will only run the training process."
         )
         args.debug_train_only = True
 
@@ -1996,7 +1960,7 @@ def vime_validate_args(args):
     # Colocate normally offloads Megatron between rollout and train. Release-train
     # destroys Megatron actors instead, so only rollout needs memory-saver offload.
     if args.colocate:
-        if getattr(args, "release_train", False):
+        if args.release_train:
             if args.offload_train:
                 logger.info("Ignoring --offload-train because --release-train releases train actors instead.")
             args.offload_train = False
@@ -2016,7 +1980,7 @@ def vime_validate_args(args):
         if args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
         elif args.rollout_num_gpus == 0:
-            logger.info("rollout_num_gpus is 0 under colocate; no local vLLM engines will be launched.")
+            logger.info("rollout_num_gpus is 0 under colocate; no local VLLM engines will be launched.")
 
     if args.offload_train is None:
         args.offload_train = False
@@ -2102,7 +2066,13 @@ def vime_validate_args(args):
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
-    if getattr(args, "release_train", False):
+    # disk-backed sync (full or delta) writes on the trainer and reads on the engines: needs a shared dir
+    if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
+        raise ValueError(
+            "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
+            "a filesystem shared between the trainer and the rollout engines."
+        )
+    if args.release_train:
         if args.train_backend != "megatron":
             raise ValueError("--release-train is only supported with the Megatron train backend.")
         if args.use_critic:
@@ -2115,5 +2085,20 @@ def vime_validate_args(args):
             args.save_interval = 1
         if args.update_weight_mode != "full" or args.update_weight_transport != "disk":
             raise ValueError("--release-train requires --update-weight-mode=full and --update-weight-transport=disk.")
-
-    _validate_update_weight_args(args)
+    if args.update_weight_mode == "delta":
+        if args.update_weight_transport != "disk":
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-transport=disk, "
+                f"got {args.update_weight_transport!r}."
+            )
+        if args.colocate:
+            raise ValueError(
+                "--update-weight-mode=delta is not supported with --colocate. Colocate transfers "
+                "weights via CUDA IPC (only a handle crosses processes), so the delta bookkeeping "
+                "(snapshot + diff + encode) is pure overhead."
+            )
+        if not args.update_weight_local_checkpoint_dir:
+            raise ValueError(
+                "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
+                "(a rollout-host-local NVMe directory)."
+            )

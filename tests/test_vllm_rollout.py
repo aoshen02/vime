@@ -132,6 +132,7 @@ def _generate_response(
     token_ids: list[int] | None = None,
     weight_version: str | None = None,
     request_spec_decode_stats: dict[str, int] | None = None,
+    sampling_mask: list[list[int]] | None = None,
 ) -> dict:
     tids = token_ids or [50, 51]
     response = {
@@ -148,6 +149,8 @@ def _generate_response(
         response["weight_version"] = weight_version
     if request_spec_decode_stats is not None:
         response["request_spec_decode_stats"] = request_spec_decode_stats
+    if sampling_mask is not None:
+        response["choices"][0]["sampling_mask"] = sampling_mask
     return response
 
 
@@ -325,6 +328,7 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
         return_value=_generate_response(
             [50, 51],
             weight_version="step-7",
+            sampling_mask=[[1, 50], [2, 3, 51]],
             request_spec_decode_stats={
                 "num_accepted_tokens": 6,
                 "num_draft_tokens": 8,
@@ -346,6 +350,8 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
     assert result.tokens == [97, 98, 99, 50, 51]
     assert result.response_length == 2
     assert result.rollout_log_probs == pytest.approx([-0.1, -0.2])
+    assert result.rollout_top_p_token_ids.tolist() == [1, 50, 2, 3, 51]
+    assert result.rollout_top_p_token_offsets.tolist() == [0, 2, 5]
     assert result.weight_versions == ["step-7"]
     assert result.spec_info.spec_accept_token_num == 6
     assert result.spec_info.spec_draft_token_num == 8
@@ -382,6 +388,7 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
                     "choices": [
                         {
                             "token_ids": [50],
+                            "sampling_mask": [[1, 50]],
                             "finish_reason": None,
                             "logprobs": {"content": [{"logprob": -0.1}]},
                         }
@@ -392,6 +399,7 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
                     "choices": [
                         {
                             "token_ids": [51],
+                            "sampling_mask": [[2, 3, 51]],
                             "finish_reason": "stop",
                             "logprobs": {"content": [{"logprob": -0.2}]},
                         }
@@ -420,6 +428,8 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
 
     assert result.tokens == [97, 98, 99, 50, 51]
     assert result.rollout_log_probs == pytest.approx([-0.1, -0.2])
+    assert result.rollout_top_p_token_ids.tolist() == [1, 50, 2, 3, 51]
+    assert result.rollout_top_p_token_offsets.tolist() == [0, 2, 5]
     assert result.weight_versions == ["step-7"]
     assert result.spec_info.spec_accept_token_num == 6
     assert result.spec_info.spec_draft_token_num == 8

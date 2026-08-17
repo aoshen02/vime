@@ -89,6 +89,8 @@ GLM-4.7 is a Mixture-of-Experts (MoE) model with 160 routed experts (top-8 activ
    VLLM_ARGS=(
       --rollout-num-gpus-per-engine 32
       --vllm-gpu-memory-utilization 0.7
+      --vllm-data-parallel-size 4
+      --vllm-enable-expert-parallel
       ...
    )
    ```
@@ -101,7 +103,7 @@ GLM-4.7 includes MTP (Multi-Token Prediction) layers that can be used for specul
 VLLM_ARGS=(
    ...
    # MTP speculative decoding
-   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
 )
 ```
 
@@ -163,7 +165,10 @@ An example FP8 `VLLM_ARGS` setup is:
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 32
    --vllm-gpu-memory-utilization 0.7
-   --vllm-max-cudagraph-capture-size 64
-   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+   --vllm-data-parallel-size 32
+   --vllm-enable-expert-parallel
+   --vllm-cudagraph-capture-sizes 5 10 20 40 $(seq 80 40 640)
+   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
+   --vllm-all2all-backend deepep_high_throughput
 )
 ```

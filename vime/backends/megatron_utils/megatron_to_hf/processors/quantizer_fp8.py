@@ -4,7 +4,7 @@ import torch
 
 from vime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
 
-from ...fp8_helpers import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0, transform_scale_ue8m0
+from ...vllm import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0, transform_scale_ue8m0
 
 
 def quantize_params_fp8(args, megatron_name, converted_named_params, quantization_config, transform_ue8m0=True):
