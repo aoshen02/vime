@@ -128,7 +128,11 @@ def _default_sampling_params(**overrides) -> dict:
     return sp
 
 
-def _generate_response(token_ids: list[int] | None = None, weight_version: str | None = None) -> dict:
+def _generate_response(
+    token_ids: list[int] | None = None,
+    weight_version: str | None = None,
+    request_spec_decode_stats: dict[str, int] | None = None,
+) -> dict:
     tids = token_ids or [50, 51]
     response = {
         "choices": [
@@ -142,6 +146,8 @@ def _generate_response(token_ids: list[int] | None = None, weight_version: str |
     }
     if weight_version is not None:
         response["weight_version"] = weight_version
+    if request_spec_decode_stats is not None:
+        response["request_spec_decode_stats"] = request_spec_decode_stats
     return response
 
 
@@ -315,13 +321,23 @@ def test_mm_render_response_empty_engine_prompts_raises():
 
 @pytest.mark.unit
 def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
-    post_mock = AsyncMock(return_value=_generate_response([50, 51], weight_version="step-7"))
+    post_mock = AsyncMock(
+        return_value=_generate_response(
+            [50, 51],
+            weight_version="step-7",
+            request_spec_decode_stats={
+                "num_accepted_tokens": 6,
+                "num_draft_tokens": 8,
+                "num_verify_steps": 2,
+            },
+        )
+    )
     monkeypatch.setattr(mod, "post", post_mock)
 
     sample = Sample(index=0, prompt="abc")
     result = asyncio.run(
         mod.generate(
-            _rollout_args(),
+            _rollout_args(vllm_speculative_config={"method": "mtp"}),
             sample,
             _default_sampling_params(max_new_tokens=8),
         )
@@ -331,6 +347,9 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
     assert result.response_length == 2
     assert result.rollout_log_probs == pytest.approx([-0.1, -0.2])
     assert result.weight_versions == ["step-7"]
+    assert result.spec_info.spec_accept_token_num == 6
+    assert result.spec_info.spec_draft_token_num == 8
+    assert result.spec_info.spec_verify_ct == 2
     assert result.status == Sample.Status.COMPLETED
     body = post_mock.await_args_list[0].args[1]
     assert body["token_ids"] == [97, 98, 99]
@@ -355,6 +374,11 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
             chunks = [
                 {
                     "weight_version": "step-7",
+                    "request_spec_decode_stats": {
+                        "num_accepted_tokens": 6,
+                        "num_draft_tokens": 8,
+                        "num_verify_steps": 2,
+                    },
                     "choices": [
                         {
                             "token_ids": [50],
@@ -388,7 +412,7 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
 
     result = asyncio.run(
         streaming.generate_streaming(
-            _rollout_args(),
+            _rollout_args(vllm_speculative_config={"method": "mtp"}),
             Sample(index=0, prompt="abc"),
             _default_sampling_params(max_new_tokens=8),
         )
@@ -397,6 +421,9 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
     assert result.tokens == [97, 98, 99, 50, 51]
     assert result.rollout_log_probs == pytest.approx([-0.1, -0.2])
     assert result.weight_versions == ["step-7"]
+    assert result.spec_info.spec_accept_token_num == 6
+    assert result.spec_info.spec_draft_token_num == 8
+    assert result.spec_info.spec_verify_ct == 2
     assert result.status == Sample.Status.COMPLETED
 
 

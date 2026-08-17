@@ -25,23 +25,6 @@ from .common import all_gather_param, named_params_and_buffers
 logger = logging.getLogger(__name__)
 
 
-def _begin_vllm_weight_update_session(rollout_engines: Sequence[ActorHandle]) -> None:
-    if dist.get_rank() == 0:
-        logger.info("vLLM weight update: start_weight_update")
-        ray.get([engine.start_weight_update.remote() for engine in rollout_engines])
-    dist.barrier(group=get_gloo_group())
-
-
-def _end_vllm_weight_update_session(
-    rollout_engines: Sequence[ActorHandle],
-    weight_version: int,
-) -> None:
-    if dist.get_rank() == 0:
-        logger.info("vLLM weight update: finish_weight_update")
-        ray.get([engine.finish_weight_update.remote(weight_version=str(weight_version)) for engine in rollout_engines])
-    dist.barrier(group=get_gloo_group())
-
-
 class UpdateWeightFromDistributed:
     """
     Update distributed engines via NCCL. For PP=1, keep one persistent transfer
@@ -63,7 +46,6 @@ class UpdateWeightFromDistributed:
         """
         self.args = args
         self.model = model
-        self.weights_getter = weights_getter
         self.model_name = model_name
         self.quantization_config = quantization_config
         self.weight_version = 0
@@ -79,9 +61,6 @@ class UpdateWeightFromDistributed:
         )
         if self._is_pp_src_rank:
             self._group_name = f"vime-pp_{pp_rank}"
-
-    def _uses_persistent_group(self) -> bool:
-        return self._pp_world_size == 1
 
     def connect_rollout_engines(
         self,
@@ -103,7 +82,7 @@ class UpdateWeightFromDistributed:
         # For TP:
         #   1. AllGather parameters to rank 0
         #   2. Broadcast parameters from rank 0 to all vLLM engines
-        if self._is_pp_src_rank and self._uses_persistent_group():
+        if self._is_pp_src_rank and self._pp_world_size == 1:
             if self._model_update_groups is not None:
                 disconnect_rollout_engines_from_distributed(
                     self.args, self._group_name, self._model_update_groups, self.rollout_engines
@@ -149,16 +128,10 @@ class UpdateWeightFromDistributed:
                 )
         dist.barrier(group=get_gloo_group())
 
-        _begin_vllm_weight_update_session(self.rollout_engines)
-        self._send_weights_to_rollout_engines()
-        _end_vllm_weight_update_session(self.rollout_engines, self.weight_version)
+        self._update_rollout_weights(draft=False)
 
         if self.args.enable_mtp_training and (self.args.vllm_speculative_config or {}).get("method") == "mtp":
-            if dist.get_rank() == 0:
-                ray.get([engine.start_draft_weight_update.remote() for engine in self.rollout_engines])
-            dist.barrier(group=get_gloo_group())
-            self._send_weights_to_rollout_engines()
-            _end_vllm_weight_update_session(self.rollout_engines, self.weight_version)
+            self._update_rollout_weights(draft=True)
 
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
@@ -172,8 +145,23 @@ class UpdateWeightFromDistributed:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
+    def _update_rollout_weights(self, *, draft: bool) -> None:
+        if dist.get_rank() == 0:
+            start = "start_draft_weight_update" if draft else "start_weight_update"
+            ray.get([getattr(engine, start).remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
+        self._send_weights_to_rollout_engines()
+        if dist.get_rank() == 0:
+            ray.get(
+                [
+                    engine.finish_weight_update.remote(weight_version=str(self.weight_version))
+                    for engine in self.rollout_engines
+                ]
+            )
+        dist.barrier(group=get_gloo_group())
+
     def _send_weights_to_rollout_engines(self) -> None:
-        if self._uses_persistent_group():
+        if self._pp_world_size == 1:
             pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
             self._send_weights(pbar)
             if self._is_pp_src_rank:
@@ -208,16 +196,13 @@ class UpdateWeightFromDistributed:
         finally:
             self._active_weight_sync_pp_rank = None
 
-    def _is_active_weight_sync_pp_stage(self) -> bool:
-        active_pp_rank = getattr(self, "_active_weight_sync_pp_rank", None)
-        return active_pp_rank is None or mpu.get_pipeline_model_parallel_rank() == active_pp_rank
-
     def _send_weights(self, pbar: tqdm | None) -> None:
         """
         Non-expert (TP) pass → barrier → expert (EP) pass → barrier. Each iterator
         yields broadcast-ready chunks (bucketing happens internally).
         """
-        is_active_stage = self._is_active_weight_sync_pp_stage()
+        active_pp_rank = getattr(self, "_active_weight_sync_pp_rank", None)
+        is_active_stage = active_pp_rank is None or mpu.get_pipeline_model_parallel_rank() == active_pp_rank
         if is_active_stage:
             if self._is_pp_src_rank:
                 logger.info("Using vLLM packed weight sync (bucketed; metadata + trainer_send_weights per bucket)")

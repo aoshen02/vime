@@ -1,16 +1,3 @@
-"""
-Colocated vLLM weight sync (trainer side)
-=========================================
-
-``UpdateWeightFromTensor`` — Megatron → HF chunks → CUDA IPC handles
-→ ``POST /update_weights`` to vLLM's native ``IPCWeightTransferEngine``.
-
-vLLM handles UUID routing + device_index remapping + layerwise reload
-internally; no worker extension or monkey-patch is needed.
-
-https://docs.vllm.ai/en/stable/examples/rl/rlhf_ipc/
-"""
-
 from __future__ import annotations
 
 import os
@@ -204,10 +191,6 @@ class UpdateWeightFromTensor:
         self._ipc_initialized_engine_ids: set[str] = set()
         # vLLM IPC handle payloads may use cloudpickle on the Ray/HTTP bridge.
         os.environ.setdefault("VLLM_ALLOW_INSECURE_SERIALIZATION", "1")
-
-    # ------------------------------------------------------------------
-    # connect / disconnect
-    # ------------------------------------------------------------------
 
     def connect_rollout_engines(
         self,
@@ -430,10 +413,6 @@ class UpdateWeightFromTensor:
         del staging_buffers
         torch.cuda.empty_cache()
 
-    # ------------------------------------------------------------------
-    # weight update
-    # ------------------------------------------------------------------
-
     @torch.no_grad()
     def update_weights(self) -> None:
         """
@@ -467,28 +446,11 @@ class UpdateWeightFromTensor:
             dist.barrier(group=get_gloo_group())
             return
 
-        self._start_weight_update(draft=False)
-
         megatron_local_weights = self.weights_getter()
-        self._send_weight_chunks(megatron_local_weights)
-
-        dist.barrier(group=get_gloo_group())
-        # After the barrier all engines have returned, so every rank's last-chunk
-        # IPC handles are now released by the consumers. Clean them up.
-        torch.cuda.ipc_collect()
-        torch.cuda.empty_cache()
-
-        self._finish_weight_update()
+        self._update_rollout_weights(megatron_local_weights, draft=False)
 
         if self.args.enable_mtp_training and (self.args.vllm_speculative_config or {}).get("method") == "mtp":
-            self._start_weight_update(draft=True)
-
-            self._send_weight_chunks(megatron_local_weights)
-
-            dist.barrier(group=get_gloo_group())
-            torch.cuda.ipc_collect()
-            torch.cuda.empty_cache()
-            self._finish_weight_update()
+            self._update_rollout_weights(megatron_local_weights, draft=True)
 
         # int4/fp4 post_process
         if rank == 0:
@@ -501,7 +463,7 @@ class UpdateWeightFromTensor:
             ray.get([engine.continue_generation.remote() for engine in self._all_rollout_engines])
         dist.barrier(group=get_gloo_group())
 
-    def _start_weight_update(self, *, draft: bool) -> None:
+    def _update_rollout_weights(self, megatron_local_weights, *, draft: bool) -> None:
         rank = dist.get_rank()
         if self._ipc_engine is not None and rank == self._ipc_gather_src:
             method = self._ipc_engine.start_draft_weight_update if draft else self._ipc_engine.start_weight_update
@@ -514,8 +476,11 @@ class UpdateWeightFromTensor:
             ray.get(refs)
         dist.barrier(group=get_gloo_group())
 
-    def _finish_weight_update(self) -> None:
-        rank = dist.get_rank()
+        self._send_weight_chunks(megatron_local_weights)
+        dist.barrier(group=get_gloo_group())
+        torch.cuda.ipc_collect()
+        torch.cuda.empty_cache()
+
         if self._ipc_engine is not None and rank == self._ipc_gather_src:
             ray.get(self._ipc_engine.finish_weight_update.remote(weight_version=str(self.weight_version)))
         if rank == 0 and self.distributed_rollout_engines:

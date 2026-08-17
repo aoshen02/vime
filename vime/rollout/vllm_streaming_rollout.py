@@ -161,6 +161,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     last_choice: dict[str, Any] | None = None
     last_usage: dict[str, Any] | None = None
     weight_version: str | None = None
+    request_spec_decode_stats: dict[str, int] | None = None
     finish_reason: Any = None
 
     client = http_utils._http_client
@@ -185,6 +186,8 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
 
                 if chunk.get("weight_version") is not None:
                     weight_version = str(chunk["weight_version"])
+                if chunk.get("request_spec_decode_stats") is not None:
+                    request_spec_decode_stats = chunk["request_spec_decode_stats"]
 
                 choices = chunk.get("choices") or []
                 if not choices:
@@ -259,6 +262,10 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
             meta["prompt_tokens"] = last_usage.get("prompt_tokens", 0)
             meta["completion_tokens"] = last_usage.get("completion_tokens", 0)
             meta["cached_tokens"] = (last_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        if request_spec_decode_stats:
+            meta["spec_accept_token_num"] = request_spec_decode_stats.get("num_accepted_tokens", 0)
+            meta["spec_draft_token_num"] = request_spec_decode_stats.get("num_draft_tokens", 0)
+            meta["spec_verify_ct"] = request_spec_decode_stats.get("num_verify_steps", 0)
         if new_response_tokens:
             meta["output_token_logprobs"] = [
                 [float(lp), int(tid)] for lp, tid in zip(new_response_log_probs, new_response_tokens, strict=True)

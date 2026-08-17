@@ -138,6 +138,9 @@ class RecordingEngine:
     )
     start_weight_update: RecordingRemoteMethod = field(default_factory=lambda: RecordingRemoteMethod("start_ref"))
     finish_weight_update: RecordingRemoteMethod = field(default_factory=lambda: RecordingRemoteMethod("finish_ref"))
+    pause_generation: RecordingRemoteMethod = field(default_factory=lambda: RecordingRemoteMethod("pause_ref"))
+    flush_cache: RecordingRemoteMethod = field(default_factory=lambda: RecordingRemoteMethod("flush_ref"))
+    continue_generation: RecordingRemoteMethod = field(default_factory=lambda: RecordingRemoteMethod("continue_ref"))
 
 
 @dataclass
@@ -548,7 +551,7 @@ def test_multi_pp_weight_sync_connects_only_active_pp_stage(upw, monkeypatch):
         send_calls.append(
             (
                 self._active_weight_sync_pp_rank,
-                self._is_active_weight_sync_pp_stage(),
+                upw.mpu.get_pipeline_model_parallel_rank() == self._active_weight_sync_pp_rank,
                 self._group_name,
                 pbar is not None,
                 self._model_update_groups,
@@ -589,41 +592,12 @@ def test_inactive_pp_stage_joins_raw_send_barriers_without_iterating(upw, monkey
 
 
 @pytest.mark.unit
-def test_weight_update_session_calls_start_and_finish(upw, monkeypatch):
-    import torch.distributed as dist
-
-    engines = [RecordingEngine(), RecordingEngine()]
-    ray_refs = []
-    barrier_calls: list[object] = []
-
-    def fake_barrier(*, group=None, **kwargs):
-        barrier_calls.append(group)
-
-    monkeypatch.setattr(dist, "get_rank", lambda: 0)
-    monkeypatch.setattr(dist, "barrier", fake_barrier)
-    monkeypatch.setattr(upw, "get_gloo_group", lambda: "dummy-gloo-group")
-    monkeypatch.setattr(upw.ray, "get", lambda refs: ray_refs.extend(refs) or refs)
-
-    upw._begin_vllm_weight_update_session(engines)
-    upw._end_vllm_weight_update_session(engines, 12)
-
-    assert len(engines[0].start_weight_update.calls) == 1
-    assert engines[0].start_weight_update.calls[0].kwargs == {}
-    assert len(engines[1].start_weight_update.calls) == 1
-    assert len(engines[0].finish_weight_update.calls) == 1
-    assert len(engines[1].finish_weight_update.calls) == 1
-    assert engines[0].finish_weight_update.calls[0].kwargs == {"weight_version": "12"}
-    assert engines[1].finish_weight_update.calls[0].kwargs == {"weight_version": "12"}
-    assert barrier_calls == ["dummy-gloo-group", "dummy-gloo-group"]
-
-
-@pytest.mark.unit
 def test_source_wraps_sync_with_weight_update_session(upw):
-    src = inspect.getsource(upw.UpdateWeightFromDistributed.update_weights)
-    assert "_begin_vllm_weight_update_session" in src
+    src = inspect.getsource(upw.UpdateWeightFromDistributed._update_rollout_weights)
+    assert "start_weight_update" in src
     assert "start_draft_weight_update" in src
-    assert "_end_vllm_weight_update_session" in src
-    assert src.count("_send_weights_to_rollout_engines") == 2
+    assert "finish_weight_update" in src
+    assert src.count("_send_weights_to_rollout_engines") == 1
 
 
 @pytest.mark.unit
@@ -631,19 +605,20 @@ def test_failed_transfer_does_not_finish_weight_update(upw, monkeypatch):
     obj = _make_instance(upw)
     obj.args.enable_mtp_training = False
     obj.args.vllm_speculative_config = None
-    obj.rollout_engines = []
+    obj.rollout_engines = [RecordingEngine()]
     session_events = []
+
+    def fake_get(refs):
+        if refs == ["start_ref"]:
+            session_events.append("begin")
+        elif refs == ["finish_ref"]:
+            session_events.append("finish")
+        return refs
 
     monkeypatch.setattr(upw.dist, "get_rank", lambda: 0)
     monkeypatch.setattr(upw.dist, "barrier", lambda *args, **kwargs: None)
-    monkeypatch.setattr(upw.ray, "get", lambda refs: refs)
+    monkeypatch.setattr(upw.ray, "get", fake_get)
     monkeypatch.setattr(upw, "get_gloo_group", lambda: "gloo")
-    monkeypatch.setattr(upw, "_begin_vllm_weight_update_session", lambda engines: session_events.append("begin"))
-    monkeypatch.setattr(
-        upw,
-        "_end_vllm_weight_update_session",
-        lambda engines, version: session_events.append(("finish", version)),
-    )
     obj._send_weights_to_rollout_engines = lambda: (_ for _ in ()).throw(RuntimeError("transfer failed"))
 
     with pytest.raises(RuntimeError, match="transfer failed"):
