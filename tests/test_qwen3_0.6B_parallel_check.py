@@ -73,6 +73,7 @@ def execute():
         "--vllm-gpu-memory-utilization 0.8 "
         "--vllm-max-cudagraph-capture-size 16 "
         '--vllm-compilation-config \'{"cudagraph_mode":"FULL_DECODE_ONLY"}\' '
+        "--vllm-enable-deterministic-inference "
     )
 
     ci_args = "--ci-test "
