@@ -139,7 +139,12 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
         "command": command,
         "agents": {"queue": GPU_QUEUE},
         "timeout_in_minutes": 360,
-        "retry": {"automatic": [{"exit_status": -1, "limit": 2}]},
+        "retry": {
+            "automatic": [
+                {"exit_status": -1, "limit": 2},
+                {"exit_status": 1, "limit": 2},
+            ]
+        },
         "plugins": [
             {
                 "kubernetes": {

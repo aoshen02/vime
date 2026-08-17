@@ -26,6 +26,10 @@ steps:
       automatic:
         - exit_status: -1  # agent lost (fresh instance failed to boot)
           limit: 2
+        - exit_status: 1  # transient package-index failure
+          limit: 2
+        - exit_status: 3  # pre-commit environment install failure
+          limit: 2
     command: |
       docker run --rm \
         -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
@@ -45,6 +49,8 @@ steps:
     retry:
       automatic:
         - exit_status: -1
+          limit: 2
+        - exit_status: 1
           limit: 2
     command: |
       # GLOO/TP_SOCKET_IFNAME=lo: the torch.distributed tests (e.g.
@@ -99,6 +105,8 @@ steps:
       automatic:
         - exit_status: -1
           limit: 2
+        - exit_status: 1
+          limit: 2
     command: |
       docker run --rm --shm-size=2g \
         -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
@@ -124,6 +132,8 @@ steps:
     retry:
       automatic:
         - exit_status: -1
+          limit: 2
+        - exit_status: 1
           limit: 2
     command: |
       image="$${VIME_CI_IMAGE:-vllm/vime:latest}"
@@ -173,6 +183,8 @@ steps:
     retry:
       automatic:
         - exit_status: -1
+          limit: 2
+        - exit_status: 1
           limit: 2
     command: |
       docker run --rm --network host --ipc=host \
