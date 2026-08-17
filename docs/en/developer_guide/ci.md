@@ -1,8 +1,7 @@
 # CI (Continuous Integration)
 
 Vime uses Buildkite for continuous integration. The committed pipeline is
-`.buildkite/pipeline.yml`; Vime does not use the upstream generated
-`.github/workflows/pr-test.yml` files.
+`.buildkite/pipeline.yml`.
 
 ## Always-on checks
 
@@ -32,9 +31,8 @@ After the CPU steps pass, the Buildkite build exposes a block step named
 - `ckpt`
 
 `.buildkite/gpu_suites.py` expands each selected suite into one Buildkite job
-per test. GPU tests use `vllm/vime:latest` by default. When a pull request
-changes the image or vLLM patch, set `VIME_CI_IMAGE` to the immutable image
-tag built from that commit.
+per test. GPU tests use `vllm/vime:latest`; rebuild and publish that image
+before validating a Dockerfile or vLLM patch change.
 
 ## Registering tests
 

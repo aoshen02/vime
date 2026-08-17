@@ -79,7 +79,7 @@ class UpdateWeightFromTensor:
     """
     Update rollout engines from tensor dict:
     gather TP(GPU NCCL) → convert HF(GPU) → send.
-    Colocated: build CUDA IPC handles → all_gather_object(Gloo CPU, over the engine
+    Colocated: build CUDA IPC handles → gather_object(Gloo CPU, over the engine
     slot ranks) → Ray IPC to engine.  Distributed: GPU NCCL broadcast to remote engines.
     """
 
@@ -237,10 +237,6 @@ class UpdateWeightFromTensor:
             )
 
     def pop_metrics(self) -> dict[str, float]:
-        """
-        Return and clear ``update_weight_metrics``. Empty under colocate today;
-        kept symmetric with UpdateWeightFromDistributed so the actor can drain unconditionally.
-        """
         out, self.update_weight_metrics = self.update_weight_metrics, {}
         return out
 
@@ -419,7 +415,7 @@ def _send_to_colocated_engine(
     ipc_gather_group,
 ) -> tuple[list[ObjectRef], Any]:
     # Placeholder ranks (GPU slots reserved but no engine) have no gather group.
-    # all_gather_object is only collective among group members, so we skip entirely.
+    # gather_object is only collective among group members, so we skip entirely.
     if ipc_gather_group is None:
         return [], None
 

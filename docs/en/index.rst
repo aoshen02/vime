@@ -56,6 +56,7 @@ Start by Use Case
    :maxdepth: 1
    :caption: Advanced Features
 
+   advanced/on-policy-distillation.md
    advanced/speculative-decoding.md
    advanced/reproducibility.md
    advanced/fault-tolerance.md
@@ -88,4 +89,3 @@ Start by Use Case
    :caption: Hardware Platforms
 
    platform_support/amd_tutorial.md
-   platform_support/ascend_tutorial.md

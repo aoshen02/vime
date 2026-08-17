@@ -56,6 +56,7 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
    :maxdepth: 1
    :caption: 高级特性
 
+   advanced/on-policy-distillation.md
    advanced/speculative-decoding.md
    advanced/reproducibility.md
    advanced/fault-tolerance.md
@@ -86,5 +87,3 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
 .. toctree::
    :maxdepth: 1
    :caption: 硬件平台
-
-   platform_support/ascend_tutorial.md

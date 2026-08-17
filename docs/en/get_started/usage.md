@@ -19,7 +19,7 @@ There are four main parameters for cluster resource allocation:
   - `--actor-num-nodes`: The number of nodes required for RL actor training.
   - `--actor-num-gpus-per-node`: The number of GPUs per node for RL actor training.
   - `--rollout-num-gpus`: The total number of GPUs required for rollout (inference). Set it to `0` to still parse vLLM arguments and launch the router without launching local vLLM servers.
-  - `--rollout-num-gpus-per-engine`: The number of GPUs per inference engine. This parameter is similar to vLLM's `tp_size`. When performing multi-node serving, this value should be the total number of GPUs. For example, if serving one model with 2 nodes and 16 GPUs, this value should be 16.
+  - `--rollout-num-gpus-per-engine`: The total worker GPU count for one inference engine. It equals vLLM's `tensor_parallel_size` only when data and pipeline parallelism are both 1. For example, if one model is served across 2 nodes and 16 GPUs, this value should be 16.
 
 With the default configuration, we use these parameters to allocate `actor_num_nodes * actor_num_gpus_per_node` GPUs for training and `rollout_num_gpus` GPUs for inference via Ray, thus achieving a separation of training and inference resources.
 
@@ -323,7 +323,6 @@ vime supports customizing data generation (rollout) to various degrees.
         output = await post(
             f"http://{args.vllm_router_ip}:{args.vllm_router_port}/inference/v1/generate",
             {
-                "model": args.hf_checkpoint,
                 "token_ids": prompt_token_ids,
                 "sampling_params": {"max_tokens": sampling_params["max_new_tokens"]},
             }
@@ -406,7 +405,7 @@ Each model gets its own router. The per-model router info is accessible via `arg
 **Server group features:**
 - `worker_type`: `regular`, `prefill`, `decode`, or `placeholder` (reserves GPU slots without creating engines)
 - `overrides`: Dict of vLLM `EngineArgs` field overrides applied on top of `--vllm-*` CLI args
-- `num_gpus_per_engine`: Per-group TP size override
+- `num_gpus_per_engine`: Per-group total worker GPU count override
 
 ## How to Use Megatron
 

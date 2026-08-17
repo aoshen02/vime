@@ -166,7 +166,7 @@ def _launch_vllm_server(
         f"port={port} tp={tp} (pid={process.pid}), log: {log_path}"
     )
 
-    # Wait up to ~10 minutes for /server_info to come up.  /health_generate
+    # Wait up to ~10 minutes for /server_info to come up.  /health
     # is unreliable for prefill/decode-only nodes, so we poll /server_info
     # — that's what vime's discover_external_engines uses anyway.
     deadline = time.time() + 600

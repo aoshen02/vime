@@ -159,7 +159,7 @@ MTP / EAGLE speculative decoding is enabled using the model's own next-token-pre
 --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":5}'
 ```
 
-vLLM measures CUDA-graph capture size in flattened query tokens, while SGLang's `cuda_graph_max_bs` measures request batch size. With five speculative tokens, each decode request contributes `1 + 5 = 6` query tokens. The shared SGLang limit `8` therefore maps to `48`, and the decode-group override `12` maps to `72`. vLLM derives the DeepEP dispatch-buffer size from its scheduler token capacity, so it does not need the SGLang-specific `SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=64` setting.
+vLLM measures CUDA-graph capture size in flattened query tokens. With five speculative tokens, each decode request contributes `1 + 5 = 6` query tokens. The shared limit `48` therefore covers 8 requests, while the decode-group override `72` covers 12 requests. vLLM derives the DeepEP dispatch-buffer size from its scheduler token capacity.
 
 `VLLM_ENGINE_ITERATION_TIMEOUT_S=3600` raises vLLM's engine watchdog for this long-running multi-node workload.
 

@@ -77,6 +77,9 @@ SUITES = {
         ("test_qwen2_5_0_5B_non_colocate_pp.py", 4, "", {}),
         ("test_geo3k_vlm_multi_turn_e2e.py", 1, "", {}),
         ("test_qwen2.5_vl_3B_ep_disaggregation.py", 3, "", {}),
+        ("test_moonlight_16B_A3B_non_colocate_nccl.py", 8, "", {}),
+        ("test_qwen3_5_0_8B_top_p_cp2.py", 4, "", {}),
+        ("test_qwen3_5_vl_train_rollout_e2e.py", 8, "", {}),
     ],
     "precision": [
         ("test_qwen3_0.6B_parallel_check.py", 8, "", {}),

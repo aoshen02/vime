@@ -67,18 +67,13 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
-        if args.offload_train:
-            monkey_patch_torch_dist()
+        monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
         # Destroying and recreating WORLD invalidates raw dist.group.WORLD references cached by external code.
         # Set VIME_DESTROY_WORLD_PROCESS_GROUP=0 when such references may outlive a train sleep/wake cycle.
-        if args.offload_train and os.getenv("VIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {
-            "0",
-            "false",
-            "no",
-        }:
+        if os.getenv("VIME_DESTROY_WORLD_PROCESS_GROUP", "1").lower() not in {"0", "false", "no"}:
             register_default_process_group(timeout=timedelta(minutes=args.distributed_timeout_minutes))
-        elif args.offload_train:
+        else:
             logger.info("Default WORLD process-group destruction is disabled")
 
         init(args)
@@ -624,7 +619,7 @@ class MegatronTrainRayActor(TrainRayActor):
         elif self.args.offload_train:
             reload_process_groups()
 
-        if self.rollout_engines is None or num_new_engines > 0 or reconnect_rollout_engines:
+        if num_new_engines > 0 or reconnect_rollout_engines:
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
@@ -632,7 +627,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 engine_gpu_offsets=engine_gpu_offsets,
                 engine_parallel_configs=engine_parallel_configs,
             )
-            self.rollout_engines = rollout_engines
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
                 ray.get(self.rollout_manager.clear_updatable_num_new_engines.remote())

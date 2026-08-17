@@ -627,9 +627,8 @@ def train_one_step(
                 "loss_mask": batch["full_loss_masks"],
             }
 
-            # vime-patch: mcore MambaModel.forward (hybrid NemotronH) has no
-            # loss_mask kwarg (GPTModel does). Drop it when unsupported; loss
-            # masking happens in vime's own loss fn, not the model.
+            # MCore MambaModel.forward does not accept loss_mask; masking is
+            # applied by the loss function instead.
             _m = model
             while hasattr(_m, "module"):
                 _m = _m.module
@@ -1007,7 +1006,7 @@ def initialize_model_and_optimizer(
         from vime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
 
         filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
-        logger.info("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
+        print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
 
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
     model[0].role = role

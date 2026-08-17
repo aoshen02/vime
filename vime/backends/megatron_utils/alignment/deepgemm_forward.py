@@ -329,23 +329,6 @@ class _VLLMRouterGEMMWithMegatronBackward(torch.autograd.Function):
         return grad_input, grad_weight, None
 
 
-def _build_vllm_gate_linear(
-    weight: torch.Tensor,
-) -> torch.nn.Module:
-    from vllm.model_executor.layers.fused_moe.router.gate_linear import GateLinear
-
-    gate_linear = GateLinear(
-        input_size=weight.shape[1],
-        output_size=weight.shape[0],
-        bias=False,
-        out_dtype=torch.float32,
-        params_dtype=weight.dtype,
-        prefix="",
-    )
-    gate_linear.weight = weight
-    return gate_linear
-
-
 class _VLLMSwiGLUWithAnalyticBackward(torch.autograd.Function):
     """VLLM fused SwiGLU forward with an analytic FP32 backward."""
 
@@ -655,6 +638,8 @@ def enable_deepgemm_forward(args, model, store_prefix: str) -> None:
 def enable_vllm_router_gemm(args, model, store_prefix: str) -> None:
     """Use VLLM GateLinear forward with Megatron GEMM backward."""
 
+    from vllm.model_executor.layers.fused_moe.router.gate_linear import GateLinear
+
     del store_prefix
     target_layers = _as_set(
         getattr(args, "megatron_deepgemm_moe_forward_layers", None),
@@ -677,7 +662,15 @@ def enable_vllm_router_gemm(args, model, store_prefix: str) -> None:
                 raise RuntimeError("VLLM router alignment does not support a biased Megatron router")
 
             original_gating = module.gating
-            gate_linear = _build_vllm_gate_linear(module.weight)
+            gate_linear = GateLinear(
+                input_size=module.weight.shape[1],
+                output_size=module.weight.shape[0],
+                bias=False,
+                out_dtype=torch.float32,
+                params_dtype=module.weight.dtype,
+                prefix="",
+            )
+            gate_linear.weight = module.weight
             object.__setattr__(module, "_vime_vllm_gate_linear", gate_linear)
 
             def gating(
