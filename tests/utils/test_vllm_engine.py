@@ -310,6 +310,13 @@ def test_build_vllm_subprocess_env_sets_batch_invariant_when_deterministic(vllm_
 
 
 @pytest.mark.unit
+def test_build_vllm_subprocess_env_sets_v2_runner_for_top_p_replay(vllm_args):
+    vllm_args.rollout_top_p = 0.95
+    env = mod._build_subprocess_env({"_args": vllm_args, "_visible_devices": "0"})
+    assert env["VLLM_USE_V2_MODEL_RUNNER"] == "1"
+
+
+@pytest.mark.unit
 def test_build_vllm_subprocess_env_no_batch_invariant_by_default(vllm_args, monkeypatch):
     monkeypatch.delenv("VLLM_BATCH_INVARIANT", raising=False)
     vllm_args.vllm_enable_deterministic_inference = False

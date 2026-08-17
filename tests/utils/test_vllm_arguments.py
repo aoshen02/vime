@@ -35,6 +35,8 @@ def _ns(**overrides):
         vllm_pipeline_parallel_size=1,
         vllm_prefill_context_parallel_size=1,
         rollout_num_gpus_per_engine=4,
+        rollout_top_k=-1,
+        rollout_top_p=1.0,
         vllm_router_ip=None,
     )
     base.update(overrides)
@@ -94,6 +96,17 @@ def test_validate_args_router_none_noop(args_mod):
     ns = _ns(vllm_router_ip=None)
     args_mod.validate_args(ns)
     assert ns.vllm_router_ip is None
+
+
+@pytest.mark.unit
+def test_validate_args_rejects_unbounded_top_p_replay(args_mod):
+    with pytest.raises(ValueError, match="requires --rollout-top-k > 0"):
+        args_mod.validate_args(_ns(rollout_top_p=0.95))
+
+
+@pytest.mark.unit
+def test_validate_args_accepts_bounded_top_p_replay(args_mod):
+    args_mod.validate_args(_ns(rollout_top_p=0.95, rollout_top_k=20))
 
 
 @pytest.mark.unit

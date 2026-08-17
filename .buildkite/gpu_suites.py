@@ -116,9 +116,10 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
         {"name": "VIME_TEST_USE_DEEPEP", "value": vime_flags.get("USE_DEEPEP", "0")},
         {"name": "VIME_TEST_USE_FP8_ROLLOUT", "value": vime_flags.get("USE_FP8_ROLLOUT", "0")},
         {"name": "VIME_TEST_ENABLE_EVAL", "value": vime_flags.get("ENABLE_EVAL", "1")},
+        {"name": "NCCL_NVLS_ENABLE", "value": env.get("NCCL_NVLS_ENABLE", "0")},
     ]
     # anything else in env is passed to the pod verbatim (e.g. allocator knobs)
-    pod_env += [{"name": k, "value": v} for k, v in env.items() if k not in vime_flags]
+    pod_env += [{"name": k, "value": v} for k, v in env.items() if k not in vime_flags and k != "NCCL_NVLS_ENABLE"]
     # Set a stable commit identifier for downstream tooling.
     command = "\n".join(
         [
