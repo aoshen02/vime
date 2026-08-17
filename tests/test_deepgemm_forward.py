@@ -508,11 +508,12 @@ def test_vllm_router_value_retains_megatron_backward(monkeypatch):
     gate_linear = FakeGateLinear(model_chunk.decoder.layers[0].mlp.router.weight)
     build_calls = []
 
-    def build_gate_linear(weight):
-        build_calls.append(weight)
+    def build_gate_linear(**kwargs):
+        build_calls.append(kwargs)
         return gate_linear
 
-    monkeypatch.setattr(deepgemm_forward, "_build_vllm_gate_linear", build_gate_linear)
+    gate_linear_module = importlib.import_module("vllm.model_executor.layers.fused_moe.router.gate_linear")
+    monkeypatch.setattr(gate_linear_module, "GateLinear", build_gate_linear)
 
     deepgemm_forward.enable_vllm_router_gemm(
         args,
@@ -525,7 +526,16 @@ def test_vllm_router_value_retains_megatron_backward(monkeypatch):
         output,
         torch.nn.functional.linear(input_.detach(), model_chunk.decoder.layers[0].mlp.router.weight.detach()) + 17,
     )
-    assert build_calls == [model_chunk.decoder.layers[0].mlp.router.weight]
+    assert build_calls == [
+        {
+            "input_size": 4,
+            "output_size": 3,
+            "bias": False,
+            "out_dtype": torch.float32,
+            "params_dtype": torch.float32,
+            "prefix": "",
+        }
+    ]
     assert gate_linear.weight is model_chunk.decoder.layers[0].mlp.router.weight
     assert len(gate_linear.calls) == 1
     assert gate_linear.calls[0].shape == (2, 4)
