@@ -64,8 +64,6 @@ RUN if [ "${INSTALL_FLASHQLA}" = "1" ]; then \
     else \
       echo "Skipping FlashQLA (INSTALL_FLASHQLA=0; sm90/Hopper-only — use --qwen-gdn-backend fla)"; \
     fi
-RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
-
 # cublas dev header for TE CMake (arm64 base ships runtime .so but not the header).
 # cu13 also needs the -13-0 headers that TE's nvcc build expects.
 RUN apt-get update && \
