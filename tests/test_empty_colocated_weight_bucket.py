@@ -75,10 +75,10 @@ def _install_fake_deps(monkeypatch):
     megatron_core_mod = types.ModuleType("megatron.core")
     megatron_core_mod.mpu = mpu_mod
 
-    vllm_weight_transfer_mod = types.ModuleType("vime.backends.megatron_utils.update_weight.vllm_weight_transfer")
-    vllm_weight_transfer_mod.HfWeightSource = object
-    vllm_weight_transfer_mod.VimeRayWeightSyncClient = object
-    vllm_weight_transfer_mod.create_nccl_trainer = lambda *args, **kwargs: None
+    update_weight_common_mod = types.ModuleType("vime.backends.megatron_utils.update_weight.common")
+    update_weight_common_mod.HfWeightSource = object
+    update_weight_common_mod.VimeRayWeightSyncClient = object
+    update_weight_common_mod.create_nccl_trainer = lambda *args, **kwargs: None
 
     megatron_to_hf_mod = types.ModuleType("vime.backends.megatron_utils.megatron_to_hf")
     megatron_to_hf_mod.convert_to_hf = lambda *args, **kwargs: []
@@ -119,8 +119,8 @@ def _install_fake_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "megatron.core.mpu", mpu_mod)
     monkeypatch.setitem(
         sys.modules,
-        "vime.backends.megatron_utils.update_weight.vllm_weight_transfer",
-        vllm_weight_transfer_mod,
+        "vime.backends.megatron_utils.update_weight.common",
+        update_weight_common_mod,
     )
     monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.megatron_to_hf", megatron_to_hf_mod)
     monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.update_weight.expert_routing", expert_routing_mod)
