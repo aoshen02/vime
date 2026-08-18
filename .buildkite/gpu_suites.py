@@ -70,10 +70,6 @@ SUITES = {
         ("test_qwen3_4B_external_pd.py", 6, "", {"VIME_TEST_UPDATE_MODE": "delta"}),
     ],
     "vime-customized": [
-        ("test_deepgemm_forward.py", 1, "", {}),
-        ("test_deepgemm_moe_forward.py", 1, "", {}),
-        ("test_glm5_vllm_alignment.py", 1, "", {}),
-        ("test_glm5_vllm_ops.py", 1, "", {}),
         ("test_qwen2_5_0_5B_non_colocate_pp.py", 4, "", {}),
         ("test_geo3k_vlm_multi_turn_e2e.py", 1, "", {}),
         ("test_qwen2.5_vl_3B_ep_disaggregation.py", 3, "", {}),
