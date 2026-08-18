@@ -24,6 +24,7 @@ MODULE_PATH = "vime.backends.megatron_utils.update_weight.update_weight_from_ten
 COMMON_MODULE = "vime.backends.megatron_utils.update_weight.common"
 HF_BASE_MODULE = "vime.backends.megatron_utils.update_weight.hf_weight_iterator_base"
 DISTRIBUTED_MODULE = "vime.backends.megatron_utils.update_weight.update_weight_from_distributed"
+VLLM_WEIGHT_TRANSFER_MODULE = "vime.backends.megatron_utils.update_weight.vllm_weight_transfer"
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +42,7 @@ def update_module():
         "vime.utils.distributed_utils",
         COMMON_MODULE,
         HF_BASE_MODULE,
+        VLLM_WEIGHT_TRANSFER_MODULE,
         DISTRIBUTED_MODULE,
         MODULE_PATH,
     )

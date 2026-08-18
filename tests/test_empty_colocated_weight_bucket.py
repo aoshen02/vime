@@ -12,34 +12,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-class _FakeFlattenedTensorBucket:
-    supports_multi_dtypes = True
-
-    def __init__(self, *, named_tensors=None, flattened_tensor=None, metadata=None):
-        if named_tensors is not None:
-            if not named_tensors:
-                raise ValueError("Cannot create empty tensor bucket")
-            self._flattened_tensor = ("flattened", tuple(name for name, _ in named_tensors))
-            self._metadata = tuple(name for name, _ in named_tensors)
-            return
-
-        self._flattened_tensor = flattened_tensor
-        self._metadata = metadata
-
-    def get_flattened_tensor(self):
-        return self._flattened_tensor
-
-    def get_metadata(self):
-        return self._metadata
-
-
-class _FakeMultiprocessingSerializer:
-    @staticmethod
-    def serialize(value, output_str):
-        assert output_str is True
-        return value
-
-
 class _FakeRemoteMethod:
     def __init__(self):
         self.calls = []
@@ -103,12 +75,10 @@ def _install_fake_deps(monkeypatch):
     megatron_core_mod = types.ModuleType("megatron.core")
     megatron_core_mod.mpu = mpu_mod
 
-    vllm_mod = types.ModuleType("vime.backends.megatron_utils.vllm")
-    vllm_mod.FlattenedTensorBucket = _FakeFlattenedTensorBucket
-    vllm_mod.HfWeightSource = object
-    vllm_mod.MultiprocessingSerializer = _FakeMultiprocessingSerializer
-    vllm_mod.VimeRayWeightSyncClient = object
-    vllm_mod.create_nccl_trainer = lambda *args, **kwargs: None
+    vllm_weight_transfer_mod = types.ModuleType("vime.backends.megatron_utils.update_weight.vllm_weight_transfer")
+    vllm_weight_transfer_mod.HfWeightSource = object
+    vllm_weight_transfer_mod.VimeRayWeightSyncClient = object
+    vllm_weight_transfer_mod.create_nccl_trainer = lambda *args, **kwargs: None
 
     megatron_to_hf_mod = types.ModuleType("vime.backends.megatron_utils.megatron_to_hf")
     megatron_to_hf_mod.convert_to_hf = lambda *args, **kwargs: []
@@ -147,7 +117,11 @@ def _install_fake_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "megatron", megatron_mod)
     monkeypatch.setitem(sys.modules, "megatron.core", megatron_core_mod)
     monkeypatch.setitem(sys.modules, "megatron.core.mpu", mpu_mod)
-    monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.vllm", vllm_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "vime.backends.megatron_utils.update_weight.vllm_weight_transfer",
+        vllm_weight_transfer_mod,
+    )
     monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.megatron_to_hf", megatron_to_hf_mod)
     monkeypatch.setitem(sys.modules, "vime.backends.megatron_utils.update_weight.expert_routing", expert_routing_mod)
     monkeypatch.setitem(

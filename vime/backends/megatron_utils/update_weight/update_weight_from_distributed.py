@@ -8,8 +8,8 @@ from ray.actor import ActorHandle
 
 from vime.utils.distributed_utils import get_gloo_group
 
-from ..vllm import HfWeightSource, VimeRayWeightSyncClient, create_nccl_trainer
 from .hf_weight_iterator_base import HfWeightIteratorBase
+from .vllm_weight_transfer import HfWeightSource, VimeRayWeightSyncClient, create_nccl_trainer
 
 
 class UpdateWeightFromDistributed:

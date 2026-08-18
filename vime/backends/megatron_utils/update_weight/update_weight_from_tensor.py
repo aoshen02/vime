@@ -17,10 +17,10 @@ from vime.utils.distributed_utils import get_gloo_group
 from vime.utils.types import ParamInfo
 
 from ..megatron_to_hf import convert_to_hf
-from ..vllm import HfWeightSource, VimeRayWeightSyncClient, create_nccl_trainer
 from .expert_routing import configure_expert_routing
 from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import post_process_weights
+from .vllm_weight_transfer import HfWeightSource, VimeRayWeightSyncClient, create_nccl_trainer
 
 
 def _native_ipc_buffer_size(args: Namespace, param_info_buckets: Sequence[Sequence[ParamInfo]] | None) -> int:
