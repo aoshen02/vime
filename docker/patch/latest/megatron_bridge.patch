@@ -1,0 +1,274 @@
+diff --git a/src/megatron/bridge/models/gemma/gemma4_bridge.py b/src/megatron/bridge/models/gemma/gemma4_bridge.py
+index 573dabfc..ddc85c7e 100644
+--- a/src/megatron/bridge/models/gemma/gemma4_bridge.py
++++ b/src/megatron/bridge/models/gemma/gemma4_bridge.py
+@@ -36,7 +36,6 @@ Key architecture-specific handling:
+   requires per-layer ``ffn_hidden_size`` and Per-Layer Embeddings (PLE) in MCore.
+ """
+ 
+-import re
+ from typing import Mapping
+ 
+ import torch
+@@ -210,76 +209,19 @@ class Gemma4Bridge(MegatronModelBridge):
+         converted_weights_dict,
+         hf_state_dict,
+     ):
+-        """Un-fuse fused weights and drop synthesized keys on export.
+-
+-        On import, two non-trivial fusions are applied to the MoE layers:
+-
+-        1. **Router fusion**: ``mg = hf * (scale * hidden^-0.5 / pffl2)``
+-        2. **Shared-expert gate/up fusion**: ``mg = hf * (pffl / pffl2)``
+-
+-        This method inverts both fusions on export so the resulting HF weights
+-        exactly match the original checkpoint.  It also drops the synthesized
+-        ``v_proj`` key produced for K=V global-attention layers where ``v_proj``
+-        is absent in HF.
+-        """
++        """Drop synthesized keys that are absent from the HF checkpoint."""
+         if not hf_state_dict:
+             return converted_weights_dict
+-
+-        result = {}
+-        for hf_name, tensor in converted_weights_dict.items():
+-            # Drop synthesized v_proj (absent for K=V global-attention layers)
+-            if hf_name not in hf_state_dict:
+-                continue
+-
+-            # ── Router weight inverse: hf = mg * pffl2 / (scale * hidden^-0.5)
+-            if hf_name.endswith("router.proj.weight"):
+-                layer_match = re.search(r"layers\.(\d+)\.", hf_name)
+-                if layer_match:
+-                    layer_idx = layer_match.group(1)
+-                    prefix = hf_name.rsplit("layers.", 1)[0]
+-                    scale_key = f"{prefix}layers.{layer_idx}.router.scale"
+-                    ln2_key = f"{prefix}layers.{layer_idx}.pre_feedforward_layernorm_2.weight"
+-                    if scale_key in hf_state_dict and ln2_key in hf_state_dict:
+-                        router_scale = hf_state_dict[scale_key].float().to(tensor.device)
+-                        ln2_weight = hf_state_dict[ln2_key].float().to(tensor.device)
+-                        hidden_size = tensor.shape[-1]
+-                        scalar_root_size = hidden_size**-0.5
+-                        fusion_factor = router_scale * scalar_root_size / ln2_weight
+-                        tensor = (tensor.float() / fusion_factor.unsqueeze(0)).to(tensor.dtype)
+-
+-            # ── Shared-expert gate/up inverse: hf = mg * (pffl2 / pffl)
+-            elif hf_name.endswith(("mlp.gate_proj.weight", "mlp.up_proj.weight")) and "experts" not in hf_name:
+-                layer_match = re.search(r"layers\.(\d+)\.", hf_name)
+-                if layer_match:
+-                    layer_idx = layer_match.group(1)
+-                    prefix = hf_name.rsplit("layers.", 1)[0]
+-                    pffl_key = f"{prefix}layers.{layer_idx}.pre_feedforward_layernorm.weight"
+-                    pffl2_key = f"{prefix}layers.{layer_idx}.pre_feedforward_layernorm_2.weight"
+-                    if pffl_key in hf_state_dict and pffl2_key in hf_state_dict:
+-                        w_pffl = hf_state_dict[pffl_key].float().to(tensor.device)
+-                        w_pffl2 = hf_state_dict[pffl2_key].float().to(tensor.device)
+-                        correction = w_pffl / w_pffl2
+-                        tensor = (tensor.float() / correction.unsqueeze(0)).to(tensor.dtype)
+-
+-            result[hf_name] = tensor
+-
+-        return result
++        return {
++            name: weight
++            for name, weight in converted_weights_dict.items()
++            if name in hf_state_dict
++        }
+ 
+     def maybe_modify_loaded_hf_weight(
+         self, hf_param: str | dict[str, str], hf_state_dict: Mapping[str, torch.Tensor]
+     ) -> torch.Tensor:
+-        """Handle special weight loading for Gemma 4.
+-
+-        1. K=V on global attention layers: synthesize ``v_proj`` from ``k_proj``.
+-        2. Router weight fusion: absorb ``router.scale * scalar_root_size / (1 + ln2_weight)``
+-           into ``router.proj.weight`` so MCore's router produces correct logits when
+-           receiving ``pre_feedforward_layernorm_2``-normed input.
+-        3. Shared expert pre-norm fusion: absorb the ratio
+-           ``(1 + pre_feedforward_layernorm) / (1 + pre_feedforward_layernorm_2)`` into
+-           shared expert gate/up weights so the shared expert effectively receives
+-           ``pre_feedforward_layernorm``-normed input even though MCore feeds it
+-           ``pre_feedforward_layernorm_2``-normed input.
+-        """
++        """Synthesize ``v_proj`` from ``k_proj`` on global attention layers."""
+         # Handle K=V on global layers
+         if isinstance(hf_param, dict) and "v" in hf_param:
+             v_name = hf_param["v"]
+@@ -293,97 +235,8 @@ class Gemma4Bridge(MegatronModelBridge):
+                         hf_weights[role] = hf_state_dict[name]
+                 return hf_weights
+ 
+-        # Load shared-expert gate/up weights raw (no pre-norm fusion): HF Gemma-4
+-        # applies the pre-norm at runtime (dual pre-norm), and fusing the w2 norm
+-        # into bf16 weights blows up on the ~5% near-zero channels.
+-        if isinstance(hf_param, dict) and "gate" in hf_param:
+-            gate_name = hf_param["gate"]
+-            if "mlp.gate_proj" in gate_name:
+-                return {role: hf_state_dict[name] for role, name in hf_param.items()}
+-
+-        # Fuse router scaling into router.proj.weight
+-        if isinstance(hf_param, str) and hf_param.endswith("router.proj.weight"):
+-            return self._fuse_router_weight(hf_param, hf_state_dict)
+-
+         return super().maybe_modify_loaded_hf_weight(hf_param, hf_state_dict)
+ 
+-    def _fuse_router_weight(self, hf_param: str, hf_state_dict: Mapping[str, torch.Tensor]) -> torch.Tensor:
+-        """Fuse router preprocessing into projection weight.
+-
+-        HF router: logits = proj(rms_norm(x) * scale * scalar_root_size)
+-        MCore router: logits = weight @ pre_feedforward_layernorm_2(x)
+-
+-        Since rms_norm(x) = pre_feedforward_layernorm_2(x) / ln2_weight
+-        (Gemma 4 uses standard gamma: x * w / rms(x)),
+-        we fuse: new_weight = proj.weight * (scale * scalar_root_size / ln2_weight)
+-        """
+-        proj_weight = hf_state_dict[hf_param]  # [num_experts, hidden]
+-
+-        # Extract layer index from param name
+-        layer_match = re.search(r"layers\.(\d+)\.", hf_param)
+-        if layer_match is None:
+-            return proj_weight
+-        layer_idx = layer_match.group(1)
+-
+-        # Get router.scale and pre_feedforward_layernorm_2.weight for this layer
+-        scale_key = f"model.language_model.layers.{layer_idx}.router.scale"
+-        ln2_key = f"model.language_model.layers.{layer_idx}.pre_feedforward_layernorm_2.weight"
+-
+-        if scale_key not in hf_state_dict or ln2_key not in hf_state_dict:
+-            return proj_weight
+-
+-        router_scale = hf_state_dict[scale_key].float()  # [hidden]
+-        ln2_weight = hf_state_dict[ln2_key].float()  # [hidden]
+-        hidden_size = proj_weight.shape[-1]
+-        scalar_root_size = hidden_size**-0.5
+-
+-        # Compute fusion factor: scale * scalar_root_size / ln2_weight
+-        # This corrects for the difference between parameter-free rms_norm
+-        # (used by HF router) and MCore's pre_mlp_layernorm (x * w / rms(x)).
+-        # Gemma 4 uses STANDARD gamma (not zero-centered), so the norm weight
+-        # directly multiplies: pre_mlp_ln(x) = x * w / rms(x).
+-        fusion_factor = router_scale * scalar_root_size / ln2_weight
+-
+-        # Fuse into weight: new_weight[i, j] = proj_weight[i, j] * fusion_factor[j]
+-        fused_weight = proj_weight.float() * fusion_factor.unsqueeze(0)
+-        return fused_weight.to(proj_weight.dtype)
+-
+-    def _fuse_shared_expert_prenorm(
+-        self, hf_param: dict[str, str], hf_state_dict: Mapping[str, torch.Tensor]
+-    ) -> dict[str, torch.Tensor]:
+-        """Fuse pre-norm correction into shared expert gate/up weights.
+-
+-        MCore feeds shared experts ``pre_feedforward_layernorm_2(x)`` but HF feeds them
+-        ``pre_feedforward_layernorm(x)``.  Since both norms are standard RMSNorm
+-        (``x * w / rms(x)``), the correction is element-wise:
+-
+-            correction[j] = w_pffl[j] / w_pffl2[j]
+-            new_weight[i, j] = weight[i, j] * correction[j]
+-        """
+-        gate_name = hf_param["gate"]
+-        layer_match = re.search(r"layers\.(\d+)\.", gate_name)
+-        if layer_match is None:
+-            return {role: hf_state_dict[name] for role, name in hf_param.items()}
+-
+-        layer_idx = layer_match.group(1)
+-        pffl_key = f"model.language_model.layers.{layer_idx}.pre_feedforward_layernorm.weight"
+-        pffl2_key = f"model.language_model.layers.{layer_idx}.pre_feedforward_layernorm_2.weight"
+-
+-        if pffl_key not in hf_state_dict or pffl2_key not in hf_state_dict:
+-            return {role: hf_state_dict[name] for role, name in hf_param.items()}
+-
+-        w_pffl = hf_state_dict[pffl_key].float()
+-        w_pffl2 = hf_state_dict[pffl2_key].float()
+-        correction = w_pffl / w_pffl2  # [hidden_size]
+-
+-        hf_weights = {}
+-        for role, name in hf_param.items():
+-            weight = hf_state_dict[name]
+-            # weight shape: [intermediate_size, hidden_size] — correct along hidden dim
+-            fused = weight.float() * correction.unsqueeze(0)
+-            hf_weights[role] = fused.to(weight.dtype)
+-        return hf_weights
+-
+     def mapping_registry(self) -> MegatronMappingRegistry:
+         """Define parameter mappings between Megatron and HF formats.
+ 
+@@ -406,12 +259,13 @@ class Gemma4Bridge(MegatronModelBridge):
+             "decoder.layers.*.self_attention.linear_proj.post_layernorm.weight": (
+                 "model.language_model.layers.*.post_attention_layernorm.weight"
+             ),
+-            # === Pre-MLP layernorm ===
+-            # MCore uses a single pre_mlp_layernorm for both shared and routed experts.
+-            # Gemma 4 has separate pre-norms: pre_feedforward_layernorm (dense)
+-            # and pre_feedforward_layernorm_2 (MoE).  We map the MoE pre-norm since
+-            # MCore's router also receives the normed input.
+-            "decoder.layers.*.pre_mlp_layernorm.weight": ("model.language_model.layers.*.pre_feedforward_layernorm_2.weight"),
++            # === Dual pre-MLP layernorm ===
++            "decoder.layers.*.mlp.pre_shared_layernorm.weight": (
++                "model.language_model.layers.*.pre_feedforward_layernorm.weight"
++            ),
++            "decoder.layers.*.mlp.pre_moe_layernorm.weight": (
++                "model.language_model.layers.*.pre_feedforward_layernorm_2.weight"
++            ),
+             # === Dense MLP → Shared Expert ===
+             "decoder.layers.*.mlp.shared_experts.linear_fc2.weight": ("model.language_model.layers.*.mlp.down_proj.weight"),
+             # Post-dense-MLP RMSNorm (Gemma 4: post_feedforward_layernorm_1)
+@@ -427,9 +281,7 @@ class Gemma4Bridge(MegatronModelBridge):
+             # === MoE Router ===
+             "decoder.layers.*.mlp.router.weight": "model.language_model.layers.*.router.proj.weight",
+             # === MoE Router ===
+-            # router.scale is fused into router.weight on import; stored as an inert buffer
+-            # (Gemma4TopKRouter.scale) so it round-trips on export without needing the
+-            # reference HF checkpoint.  Mapped via ReplicatedMapping below.
++            # router.scale is applied by Gemma4TopKRouter at runtime and mapped below.
+         }
+ 
+         mapping_list = []
+@@ -475,16 +327,11 @@ class Gemma4Bridge(MegatronModelBridge):
+                     megatron_param="decoder.layers.*.mlp.router.per_expert_scale",
+                     hf_param="model.language_model.layers.*.router.per_expert_scale",
+                 ),
+-                # === Router input scale (fused into router weight on import; stored as buffer) ===
++                # === Router input scale ===
+                 ReplicatedMapping(
+                     megatron_param="decoder.layers.*.mlp.router.scale",
+                     hf_param="model.language_model.layers.*.router.scale",
+                 ),
+-                # === Dense/shared-expert pre-norm (fused into gate/up on import; stored as buffer) ===
+-                ReplicatedMapping(
+-                    megatron_param="decoder.layers.*.pffl_weight",
+-                    hf_param="model.language_model.layers.*.pre_feedforward_layernorm.weight",
+-                ),
+                 # === Post-MoE layernorm (applied to routed expert output before combining) ===
+                 ReplicatedMapping(
+                     megatron_param="decoder.layers.*.mlp.post_moe_layernorm.weight",
+diff --git a/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/__init__.py b/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/__init__.py
+index 811d0b60..c04970ec 100644
+--- a/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/__init__.py
++++ b/src/megatron/bridge/models/qwen3_asr/hf_qwen3_asr/__init__.py
+@@ -29,12 +29,22 @@
+ # register the Auto classes ourselves below.
+ 
+ from transformers import AutoConfig, AutoModel, AutoProcessor
++from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+ 
+ from .configuration_qwen3_asr import Qwen3ASRAudioEncoderConfig, Qwen3ASRConfig, Qwen3ASRThinkerConfig
+ from .modeling_qwen3_asr import Qwen3ASRAudioEncoder, Qwen3ASRForConditionalGeneration
+ from .processing_qwen3_asr import Qwen3ASRProcessor
+ 
+ 
+-AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
+-AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
+-AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
++def _register_auto_classes(config_mapping=CONFIG_MAPPING) -> bool:
++    """Register vendored classes only when Transformers has no native Qwen3-ASR."""
++    if Qwen3ASRConfig.model_type in config_mapping:
++        return False
++
++    AutoConfig.register(Qwen3ASRConfig.model_type, Qwen3ASRConfig)
++    AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
++    AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
++    return True
++
++
++_register_auto_classes()
+

@@ -63,7 +63,7 @@ def save_hf_model_direct_to_path(
     from transformers import AutoConfig
 
     from .update_weight.common import named_params_and_buffers
-    from .update_weight.hf_weight_iterator_direct import HfWeightIteratorDirect
+    from .update_weight.hf_weight_iterator_base import HfWeightIteratorBase
 
     is_save_rank = _is_global_rank_zero()
 
@@ -101,7 +101,7 @@ def save_hf_model_direct_to_path(
         dist.broadcast_object_list(payload, src=0)
     model_name, quantization_config = payload[0]
 
-    hf_weight_iterator = HfWeightIteratorDirect(
+    hf_weight_iterator = HfWeightIteratorBase.create(
         args=args,
         model=model,
         model_name=model_name,

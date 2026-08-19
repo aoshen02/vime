@@ -32,11 +32,22 @@ _LOADERS = {
 
 def supports_hf_weight_loading(path: str | Path) -> bool:
     config = AutoConfig.from_pretrained(path, trust_remote_code=True)
-    return config.model_type in _LOADERS
+    if config.model_type in _LOADERS:
+        return True
+
+    from ..gemma4_bridge import is_gemma4_bridge_model
+
+    return is_gemma4_bridge_model(config)
 
 
 def load_hf_weights(args, model, path: str | Path) -> None:
     config = AutoConfig.from_pretrained(path, trust_remote_code=True)
+    from ..gemma4_bridge import create_gemma4_bridge, is_gemma4_bridge_model
+
+    if is_gemma4_bridge_model(config):
+        create_gemma4_bridge(path).load_hf_weights(model)
+        return
+
     try:
         get_hf_tensor = _LOADERS[config.model_type]
     except KeyError as exc:

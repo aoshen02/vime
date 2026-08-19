@@ -5,6 +5,7 @@ FROM ${BASE_IMAGE}
 
 ARG PATCH_VERSION=latest
 ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
+ARG MEGATRON_BRIDGE_COMMIT=688d34b85c6f3785d4a542ab202c35ab077a904b
 ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
 ARG DEEPEP_CUDA_ARCH_LIST=9.0;10.0;10.3
@@ -147,6 +148,14 @@ RUN cd Megatron-LM && \
     fi && \
     rm -f megatron*.patch && \
     pip install -e .
+
+COPY docker/patch/${PATCH_VERSION}/megatron_bridge.patch /tmp/megatron_bridge.patch
+RUN git clone https://github.com/radixark/Megatron-Bridge.git /tmp/Megatron-Bridge && \
+    cd /tmp/Megatron-Bridge && \
+    git checkout ${MEGATRON_BRIDGE_COMMIT} && \
+    git apply /tmp/megatron_bridge.patch && \
+    pip install . --no-deps --no-build-isolation && \
+    rm -rf /tmp/Megatron-Bridge /tmp/megatron_bridge.patch
 
 # Patch vLLM with vime's local fixes. vLLM is a pip install (not a git checkout)
 # so apply with plain `git apply` (no --3way).

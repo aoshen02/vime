@@ -115,6 +115,30 @@ def _get_model_provider_func(
 
         return wrapped_model_provider
 
+    from .gemma4_bridge import create_gemma4_provider, is_gemma4_bridge_model
+
+    if is_gemma4_bridge_model(args.hf_checkpoint):
+        provider = create_gemma4_provider(args)
+
+        def wrapped_gemma4_provider(
+            pre_process: bool = True,
+            post_process: bool = True,
+            vp_stage: int | None = None,
+            config: TransformerConfig | None = None,
+            pg_collection=None,
+        ) -> GPTModel:
+            assert config is None, "Gemma4 builds its Megatron config from the HuggingFace checkpoint"
+            if pg_collection is not None:
+                provider._pg_collection = pg_collection
+            model = provider.provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+            if post_process and role == "critic":
+                model.output_layer = LinearForLastLayer(
+                    input_size=model.config.hidden_size, output_size=1, config=model.config
+                )
+            return model
+
+        return wrapped_gemma4_provider
+
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.
 

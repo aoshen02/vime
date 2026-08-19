@@ -7,6 +7,13 @@ from vime.utils.types import ParamInfo
 class HfWeightIteratorBase(ABC):
     @staticmethod
     def create(args, model, **kwargs):
+        from ..gemma4_bridge import is_gemma4_bridge_model
+
+        if is_gemma4_bridge_model(args.hf_checkpoint):
+            from .hf_weight_iterator_bridge import HfWeightIteratorBridge
+
+            return HfWeightIteratorBridge(args, model, **kwargs)
+
         from .hf_weight_iterator_direct import HfWeightIteratorDirect
 
         return HfWeightIteratorDirect(args, model, **kwargs)
