@@ -16,7 +16,7 @@ from .common import all_gather_params_async, named_params_and_buffers
 
 
 class HfWeightIteratorDirect:
-    def __init__(self, args, model, model_name, quantization_config, transform_ue8m0=True):
+    def __init__(self, args, model, model_name, quantization_config, transform_ue8m0=False):
         self.args = args
         self.model = model
         self.model_name = model_name
