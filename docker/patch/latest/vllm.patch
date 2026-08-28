@@ -129,16 +129,3 @@ index bbbd85137ce..809f1a66ea5 100644
                      choices=[],
                      usage=final_usage_info,
                  )
-diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index 990fae6db2c..3d6156a22db 100644
---- a/vllm/v1/worker/gpu_worker.py
-+++ b/vllm/v1/worker/gpu_worker.py
-@@ -1357,6 +1357,8 @@ class Worker(WorkerBase):
-                         parallel_config.data_parallel_rank * parallel_config.world_size
-                         + self.rank
-                     ]
-+                    if not local_update_info.get("names"):
-+                        return
-                 else:
-                     local_update_info = update_info
-                 self.weight_transfer_engine.update_weights(local_update_info)
