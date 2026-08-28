@@ -541,7 +541,7 @@ def _resolve_parallel_sizes(
     invalid_fields = _INVALID_VLLM_PARALLEL_FIELDS.intersection(overrides)
     if invalid_fields:
         raise ValueError(
-            "vLLM 0.27.1 does not accept explicit EP/MoE-DP sizes; use "
+            "vLLM does not accept explicit EP/MoE-DP sizes; use "
             "enable_expert_parallel with TP/PCP/DP instead: "
             f"{sorted(invalid_fields)}"
         )

@@ -1,10 +1,13 @@
 import argparse
+import logging
 
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm_router.launch_router import RouterArgs
 
 from vime.utils.http_utils import _wrap_ipv6
+
+logger = logging.getLogger(__name__)
 
 
 def add_vllm_router_arguments(parser):
