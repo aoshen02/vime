@@ -1898,7 +1898,7 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 def vime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
-    args.dspark_enabled = (args.vllm_speculative_config or {}).get("method") == "dspark"
+    args.dspark_enabled = (getattr(args, "vllm_speculative_config", None) or {}).get("method") == "dspark"
 
     if args.rollout_temperature <= 0:
         raise ValueError(
