@@ -137,6 +137,7 @@ def _generate_response(
     weight_version: str | None = None,
     request_spec_decode_stats: dict[str, int] | None = None,
     sampling_mask: list[list[int]] | None = None,
+    request_metrics: dict[str, float] | None = None,
 ) -> dict:
     tids = token_ids or [50, 51]
     response = {
@@ -155,6 +156,8 @@ def _generate_response(
         response["request_spec_decode_stats"] = request_spec_decode_stats
     if sampling_mask is not None:
         response["choices"][0]["sampling_mask"] = sampling_mask
+    if request_metrics is not None:
+        response["request_metrics"] = request_metrics
     return response
 
 
@@ -355,6 +358,13 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
                 "num_draft_tokens": 8,
                 "num_spec_steps": 2,
             },
+            request_metrics={
+                "queue_time_ms": 100,
+                "time_to_first_token_ms": 200,
+                "generation_time_ms": 300,
+                "tokens_per_second": 20,
+                "remote_kv_wait_time_ms": 50,
+            },
         )
     )
     monkeypatch.setattr(mod, "post", post_mock)
@@ -378,6 +388,20 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
     assert result.spec_info.spec_draft_token_num == 8
     assert result.spec_info.spec_verify_ct == 2
     assert result.status == Sample.Status.COMPLETED
+    generate_span = next(
+        event for event in result.trace["events"] if event["type"] == "span_end" and event["name"] == "vllm_generate"
+    )
+    assert generate_span["attrs"] == {
+        "queue_time": pytest.approx(0.1),
+        "e2e_latency": pytest.approx(0.6),
+        "decode_throughput": pytest.approx(20),
+    }
+    decode_transfer_span = next(
+        event
+        for event in result.trace["events"]
+        if event["type"] == "span_end" and event["name"] == "vllm_pd_decode_transfer"
+    )
+    assert decode_transfer_span["attrs"] == {"pd_decode_transfer_duration": pytest.approx(0.05)}
     body = post_mock.await_args_list[0].args[1]
     assert body["token_ids"] == [97, 98, 99]
     assert body["sampling_params"]["max_tokens"] == 8
