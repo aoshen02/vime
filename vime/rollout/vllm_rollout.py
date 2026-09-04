@@ -525,19 +525,13 @@ async def generate_and_rm(
             return sample
 
         with state.dp_rank_context() as _:
-            # Check sample.generate_function_path for per-sample custom_generate_function_path (e.g., from eval dataset config)
-            custom_func_path = getattr(sample, "generate_function_path", None) or args.custom_generate_function_path
+            custom_func_path = sample.generate_function_path or args.custom_generate_function_path
+            generate_func = load_function(custom_func_path) if custom_func_path is not None else generate
 
-            if custom_func_path is not None:
-                generate_func = load_function(custom_func_path)
-                # if signature has evaluation, pass evaluation
-                if "evaluation" in inspect.signature(generate_func).parameters:
-                    generate_call = generate_func(args, sample, sampling_params, evaluation=evaluation)
-                else:
-                    generate_call = generate_func(args, sample, sampling_params)
+            if custom_func_path is not None and "evaluation" in inspect.signature(generate_func).parameters:
+                generate_call = generate_func(args, sample, sampling_params, evaluation=evaluation)
             else:
-                generate_func = generate
-                generate_call = generate(args, sample, sampling_params)
+                generate_call = generate_func(args, sample, sampling_params)
 
             if getattr(generate_func, "abort_mode", None) == "request":
                 sample = await _run_request_abortable_generate(state, sample, generate_call)

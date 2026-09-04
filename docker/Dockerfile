@@ -148,9 +148,8 @@ RUN cd Megatron-LM && \
     rm -f megatron*.patch && \
     pip install -e .
 
-# Patch vLLM with vime's local fixes. vLLM is a pip install (not a git checkout)
-# so apply with plain `git apply` (no --3way). Pull-weights lands first because
-# the general patch also updates gpu_worker.py against the resulting line layout.
+# Patch vLLM with vime's local fixes. vLLM is a pip install (not a git checkout),
+# so apply the independently maintained patches in their validated order.
 COPY docker/patch/${PATCH_VERSION}/vllm-pull_weights.patch /tmp/vllm-pull_weights.patch
 COPY docker/patch/${PATCH_VERSION}/vllm.patch /tmp/vllm.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-pd-request-metrics.patch /tmp/vllm-pd-request-metrics.patch

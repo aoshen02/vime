@@ -20,6 +20,9 @@ only replaces the inner HTTP call.
 This generator selects request-level abort, so Vime cancels each active HTTP
 stream instead of aborting every request on its vLLM server.
 
+Request cancellation preserves only metadata received before disconnect;
+terminal-only data such as routed-expert replay is unavailable after abort.
+
 vLLM's ``/inference/v1/generate`` SSE chunks carry **delta** ``token_ids`` +
 ``logprobs`` per ``GenerateResponseStreamChoice`` — so we *accumulate* the
 per-chunk deltas (``+=``) rather than overwriting from each chunk. Each delta
