@@ -67,6 +67,8 @@ class _PatchedGenerateState:
         self.aborted = False
         self.remaining_batch_size = 0
         self.pendings: set = set()
+        self.cancellable_tasks: set = set()
+        self.active_server_generations = 0
         self.dp_counts = [0]
         self.dp_rank = 0
         self.group_sampling_seeds = None
@@ -84,6 +86,8 @@ class _PatchedGenerateState:
     def reset(self) -> None:
         self.remaining_batch_size = 0
         self.pendings = set()
+        self.cancellable_tasks = set()
+        self.active_server_generations = 0
         self.aborted = False
 
 
@@ -455,6 +459,41 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
 
 
 @pytest.mark.unit
+def test_generate_streaming_rejects_unexpected_eof(patch_generate_state, monkeypatch):
+    from vime.rollout import vllm_streaming_rollout as streaming
+
+    class FakeStreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            yield 'data: {"choices": [{"token_ids": [50], "finish_reason": null}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(streaming, "GenerateState", _PatchedGenerateState)
+    monkeypatch.setattr(streaming.http_utils, "_http_client", FakeClient())
+
+    with pytest.raises(RuntimeError, match="without a terminal finish_reason"):
+        asyncio.run(
+            streaming.generate_streaming(
+                _rollout_args(),
+                Sample(index=0, prompt="abc"),
+                _default_sampling_params(max_new_tokens=8),
+            )
+        )
+
+
+@pytest.mark.unit
 def test_generate_consistent_hash_header(patch_generate_state, monkeypatch):
     post_mock = AsyncMock(return_value=_generate_response())
     monkeypatch.setattr(mod, "post", post_mock)
@@ -809,6 +848,7 @@ def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monke
     from vime.backends.vllm_utils import server_control
 
     state = _PatchedGenerateState(_rollout_args())
+    state.active_server_generations = 1
     monkeypatch.setattr(mod, "GenerateState", lambda args: state)
 
     aborted = asyncio.Event()
@@ -854,6 +894,7 @@ def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_stat
 
     args = _rollout_args(partial_rollout=True)
     state = _PatchedGenerateState(args)
+    state.active_server_generations = 1
     monkeypatch.setattr(mod, "GenerateState", lambda a: state)
 
     aborted = asyncio.Event()
@@ -871,9 +912,11 @@ def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_stat
 
     sample = Sample(index=0, prompt="p")
     sample.response = "partial"
+    sample.response_length = 1
 
     async def pending_group():
         await aborted.wait()
+        sample.status = Sample.Status.ABORTED
         return [sample]
 
     async def run_abort():
@@ -884,6 +927,37 @@ def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_stat
 
     assert aborted_samples == [[sample]]
     assert sample.metadata["start_rollout_id"] == 7
+
+
+@pytest.mark.unit
+def test_abort_cancels_request_without_server_abort(patch_generate_state, monkeypatch):
+    args = _rollout_args(partial_rollout=True)
+    state = _PatchedGenerateState(args)
+    monkeypatch.setattr(mod, "GenerateState", lambda a: state)
+    get_mock = AsyncMock()
+    monkeypatch.setattr(mod, "get", get_mock)
+
+    sample = Sample(index=0, prompt="p")
+    sample.response = "partial"
+    sample.response_length = 1
+
+    async def request():
+        await asyncio.Future()
+
+    async def run():
+        generate_task = asyncio.create_task(mod._run_request_abortable_generate(state, sample, request()))
+        await asyncio.sleep(0)
+
+        async def group():
+            return [await generate_task]
+
+        state.pendings = {asyncio.create_task(group())}
+        return await asyncio.wait_for(mod.abort(args, rollout_id=9), timeout=5.0)
+
+    assert asyncio.run(run()) == [[sample]]
+    assert sample.status == Sample.Status.ABORTED
+    assert sample.metadata["start_rollout_id"] == 9
+    get_mock.assert_not_awaited()
 
 
 if __name__ == "__main__":
