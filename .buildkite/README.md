@@ -70,8 +70,8 @@ startup, so a warm HF cache is all they need. `WANDB_API_KEY` is not wired up
 yet; runs report without wandb until it's added (e.g. as a k8s secret in the
 pod spec).
 
-GPU jobs use `vllm/vime:latest`. Rebuild and publish that image before validating
-Dockerfile or vLLM patch changes.
+Set `VIME_CI_IMAGE` to test an image candidate; otherwise jobs use
+`vllm/vime:latest`.
 
 ## Keeping it in sync
 
