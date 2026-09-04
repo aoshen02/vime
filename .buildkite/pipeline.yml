@@ -140,7 +140,7 @@ steps:
         -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
         -e GLOO_SOCKET_IFNAME=lo -e TP_SOCKET_IFNAME=lo \
         -v "$$PWD:/workspace" -w /workspace \
-        "$${VIME_CI_IMAGE:-vllm/vime:latest}" bash -lc '
+        vllm/vime:latest bash -lc '
           set -euo pipefail
           pip install -q -e . --no-deps --break-system-packages
           for test_file in \
