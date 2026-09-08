@@ -46,8 +46,8 @@ def main() -> int:
 
     dockerfile = (repo / "docker/Dockerfile").read_text()
     image_tag = (repo / "docker/version.txt").read_text().strip()
-    if not image_tag:
-        errors.append("docker/version.txt is empty")
+    if not re.fullmatch(r"nightly-dev-\d{8}[a-z]", image_tag):
+        errors.append(f"unexpected docker/version.txt format: {image_tag}")
     if not re.search(r"^ARG BASE_IMAGE=", dockerfile, re.MULTILINE):
         errors.append("docker/Dockerfile does not pin BASE_IMAGE")
     if not re.search(r"^ARG PATCH_VERSION=latest$", dockerfile, re.MULTILINE):
