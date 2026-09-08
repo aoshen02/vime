@@ -449,6 +449,10 @@ def _vllm_sampling_body(sp: dict) -> dict:
     }
     if "temperature" in sp:
         body["temperature"] = sp["temperature"]
+    if sp.get("min_new_tokens") is not None:
+        body["min_tokens"] = sp["min_new_tokens"]
+    if sp.get("repetition_penalty") is not None:
+        body["repetition_penalty"] = sp["repetition_penalty"]
     if "top_p" in sp:
         body["top_p"] = sp["top_p"]
     tk = sp.get("top_k")
