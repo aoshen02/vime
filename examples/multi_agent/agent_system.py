@@ -5,7 +5,11 @@ import traceback
 from copy import deepcopy
 
 from vime.rollout.rm_hub import batched_async_rm
-from vime.rollout.vllm_rollout import _build_inference_sampling_params, _inference_generate_tokens_and_logprobs
+from vime.rollout.vllm_rollout import (
+    _build_inference_sampling_params,
+    _inference_generate_meta_info,
+    _inference_generate_tokens_and_logprobs,
+)
 from vime.utils.http_utils import post
 from vime.utils.types import Sample
 
@@ -50,6 +54,7 @@ async def generate_response(args, prompt, key):
             tokens=new_response_tokens,
             log_probs=new_response_log_probs,
             trainable=True,
+            meta_info=_inference_generate_meta_info(output),
         )
         assert len(sample.rollout_log_probs) == sample.response_length, (
             f"rollout logprob length mismatch: {len(sample.rollout_log_probs)} logprobs "

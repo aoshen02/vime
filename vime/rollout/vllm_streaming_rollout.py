@@ -51,30 +51,12 @@ from vime.rollout.vllm_rollout import (
     prime_encoder,
 )
 from vime.utils import http_utils
-from vime.utils.processing_utils import build_multimodal_messages, build_processor_kwargs
+from vime.utils.processing_utils import build_multimodal_messages
 from vime.utils.types import Sample
 
 __all__ = ["generate_streaming"]
 
 logger = logging.getLogger(__name__)
-
-
-def _base_dataset_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
-    """Token ids for the dataset prompt only (never reuse ``sample.tokens``).
-
-    Used for partial-continuation budgeting: ``max_new_tokens -= len(sample.tokens)
-    - len(base_prompt_ids)`` when ``sample.response`` is non-empty. vLLM's
-    ``/inference/v1/generate`` is token-only, so on a partial resume we re-send the
-    full prefix and must subtract the already-generated tokens from the budget.
-    This lives here (not in ``vllm_rollout``) because it is specific to the
-    streaming path's partial-continuation handling.
-    """
-    raw_multimodal_inputs = sample.multimodal_inputs or {}
-    has_multimodal_inputs = any(value is not None for value in raw_multimodal_inputs.values())
-    if processor and has_multimodal_inputs:
-        processor_output = processor(text=sample.prompt, **build_processor_kwargs(raw_multimodal_inputs))
-        return _coerce_flat_int_token_ids(processor_output["input_ids"][0])
-    return _coerce_flat_int_token_ids(tokenizer.encode(sample.prompt, add_special_tokens=False))
 
 
 async def generate_streaming(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
@@ -96,17 +78,13 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     ), f"Sample status is {sample.status}"
 
     prompt_ids = _prepare_prompt_ids(sample, state.tokenizer, state.processor)
-    base_prompt_ids = _base_dataset_prompt_ids(sample, state.tokenizer, state.processor)
 
     messages = build_multimodal_messages(sample.prompt, sample.multimodal_inputs)
 
     params = dict(sampling_params)
-    if len(sample.response) > 0:
-        params["max_new_tokens"] -= len(sample.tokens) - len(base_prompt_ids)
+    params["max_new_tokens"] -= sample.response_length
 
-    assert (
-        params["max_new_tokens"] >= 0
-    ), f"max_new_tokens: {params['max_new_tokens']} should not be less than 0 (after partial continuation adjustment; tokens={len(sample.tokens)}, base_prompt={len(base_prompt_ids)})"
+    assert params["max_new_tokens"] >= 0, f"max_new_tokens: {params['max_new_tokens']} should not be less than 0"
     if params["max_new_tokens"] == 0:
         sample.status = Sample.Status.TRUNCATED
         return sample

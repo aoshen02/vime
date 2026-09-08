@@ -7,7 +7,7 @@ directory; each engine's `/pull_weights` applies them into a host-local checkpoi
 host it spans, and the engines reload through the ordinary `update_weights_from_disk` path —
 vime only ever talks to one endpoint per engine.
 
-See [Delta Weight Sync](../../docs/en/advanced/delta-weight-sync.md) for the full mechanism,
+See [Delta Weight Sync](https://github.com/vllm-project/vime/blob/main/docs/en/advanced/delta-weight-sync.md) for the full mechanism,
 encodings, integrity checks, and shared-filesystem visibility hooks.
 
 ## Try it
@@ -37,5 +37,5 @@ at `--update-weight-disk-dir`):
 
 For object-store-backed volumes that need an explicit commit/refresh to make writes visible
 across hosts, supply `--custom-update-weight-post-write-path` (trainer side) /
-`--vllm-custom-pull-weights-pre-read-hook` (engine side) — no vendor-specific code lives in vime
+`--custom-update-weight-pre-read-path` (engine side) — no vendor-specific code lives in vime
 or vllm; see the doc.

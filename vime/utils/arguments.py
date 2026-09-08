@@ -2076,8 +2076,8 @@ def vime_validate_args(args):
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
     )
 
-    # Colocate normally offloads Megatron between rollout and train. Release-train
-    # destroys Megatron actors instead, so only rollout needs memory-saver offload.
+    # Colocate normally offloads Megatron between rollout and train.  Release-train mode
+    # releases Megatron actors instead, so only rollout needs memory-saver offload.
     if args.colocate:
         if args.release_train:
             if args.offload_train:

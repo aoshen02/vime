@@ -170,7 +170,7 @@ def test_anthropic_messages_nonstream_records_token_segments():
         async with FakeVLLMServer([[(-0.1, 101), (-0.2, 102)]]) as vllm:
             tok = FakeTokenizer(outputs={(101, 102): "done now"})
             adapter = anthropic.AnthropicAdapter(tokenizer=tok, vllm_url=vllm.url)
-            adapter.open_session("sid-a")
+            adapter.open_session("sid-a", sampling_defaults={"min_new_tokens": 2, "repetition_penalty": 1.2})
             client = TestClient(TestServer(adapter.app))
             await client.start_server()
             try:
@@ -189,6 +189,8 @@ def test_anthropic_messages_nonstream_records_token_segments():
         assert data["content"] == [{"type": "text", "text": "done now"}]
         # adapter posted the rendered prompt ids and capped max_tokens at the request cap.
         assert vllm.requests[0]["sampling_params"]["max_tokens"] == 7
+        assert vllm.requests[0]["sampling_params"]["min_tokens"] == 2
+        assert vllm.requests[0]["sampling_params"]["repetition_penalty"] == 1.2
         assert vllm.routing_keys == ["sid-a"]
         # one trained turn: the two response ids carry loss=1 + real logprobs.
         assert len(samples) == 1

@@ -229,6 +229,10 @@ def _build_inference_sampling_params(sampling_params: dict[str, Any]) -> dict[st
         sp["stop_token_ids"] = sampling_params["stop_token_ids"]
     if sampling_params.get("seed") is not None:
         sp["seed"] = sampling_params["seed"]
+    if sampling_params.get("min_new_tokens") is not None:
+        sp["min_tokens"] = sampling_params["min_new_tokens"]
+    if sampling_params.get("repetition_penalty") is not None:
+        sp["repetition_penalty"] = sampling_params["repetition_penalty"]
     if sampling_params.get("skip_special_tokens") is not None:
         sp["skip_special_tokens"] = bool(sampling_params["skip_special_tokens"])
     return sp
@@ -415,6 +419,20 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     skip_decode = True if skip_sp is None else bool(skip_sp)
     text = state.tokenizer.decode(new_response_tokens, skip_special_tokens=skip_decode) if new_response_tokens else ""
 
+    sample.append_response_tokens(
+        args,
+        tokens=new_response_tokens,
+        log_probs=new_response_log_probs,
+        trainable=True,
+        meta_info=_inference_generate_meta_info(output),
+        text=text,
+    )
+
+    return sample
+
+
+def _inference_generate_meta_info(output: dict[str, Any]) -> dict[str, Any]:
+    choice = output["choices"][0]
     # Build meta_info from the vLLM `choices` response format.
     fr = choice.get("finish_reason") or "stop"
     if isinstance(fr, dict):
@@ -455,17 +473,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         for token_ids in sampling_mask:
             offsets.append(offsets[-1] + len(token_ids))
         meta["top_p_token_offsets"] = offsets
-
-    sample.append_response_tokens(
-        args,
-        tokens=new_response_tokens,
-        log_probs=new_response_log_probs,
-        trainable=True,
-        meta_info=meta,
-        text=text,
-    )
-
-    return sample
+    return meta
 
 
 async def _run_request_abortable_generate(

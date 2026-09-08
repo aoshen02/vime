@@ -118,7 +118,7 @@ RUN git clone https://github.com/zhuzilin/DeepEP.git /root/DeepEP && \
     TORCH_CUDA_ARCH_LIST="${CUDA_ARCHS}" MAX_JOBS=64 python setup.py bdist_wheel && \
     pip install --force-reinstall --no-deps dist/deep_ep-*.whl && \
     cd /root/ && rm -rf DeepEP
-RUN pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
+RUN pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --ignore-installed PyJWT && \
