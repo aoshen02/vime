@@ -86,5 +86,38 @@ def test_customization_anchor_links_exist(language):
     assert not missing, f"Local anchors without matching headings: {missing}"
 
 
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_agent_guide_is_in_get_started_toctree(language):
+    text = (ROOT / "docs" / language / "index.rst").read_text(encoding="utf-8")
+    assert re.search(r"^   get_started/agent\.md$", text, re.MULTILINE)
+
+
+def test_ci_skill_references_current_buildkite_sources():
+    text = (ROOT / ".claude/skills/add-tests-and-ci/SKILL.md").read_text(encoding="utf-8")
+    for source in (".buildkite/pipeline.yml", ".buildkite/gpu_suites.py"):
+        assert source in text
+        assert (ROOT / source).is_file()
+    assert ".github/workflows/pr-test" not in text
+    assert "generate_github_workflows.py" not in text
+
+
+@pytest.mark.parametrize("language, filename", [("en", "README.md"), ("zh", "README_zh.md")])
+def test_readme_links_deployment_and_correctness_guides(language, filename):
+    text = (ROOT / filename).read_text(encoding="utf-8")
+    for guide in (
+        "advanced/vllm-config.md",
+        "advanced/pd-disaggregation.md",
+        "advanced/delta-weight-sync.md",
+        "advanced/external-rollout-engines.md",
+        "advanced/reproducibility.md",
+        "advanced/fault-tolerance.md",
+        "developer_guide/ci.md",
+        "developer_guide/debug.md",
+        "developer_guide/trace.md",
+        "developer_guide/profiling.md",
+    ):
+        assert f"docs/{language}/{guide}" in text
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

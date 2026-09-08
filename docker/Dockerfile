@@ -12,6 +12,7 @@ ARG FLASH_QLA_COMMIT=821fd9d37ede18fdc2a4e707fefe3770bfc32e58
 ARG TRANSFORMER_ENGINE_COMMIT=c9877beb87ad7e711e1869dd0b5062167ede447a
 ARG TRANSFORMER_ENGINE_CUDA_ARCHS=90;100a;103a
 ARG TMS_COMMIT=8d30c59ca12a68d9deccbc9c6599076a1218cbc5
+ARG TMS_CUDA_MAJOR=
 
 ARG ENABLE_CUDA_13=1
 ARG FA2_MAX_JOBS=64
@@ -97,7 +98,7 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
 
 # zhuzilin fork builds, grouped together right after Megatron-LM:
 # torch_memory_saver, plus the GLM-5 train/rollout alignment kernels.
-RUN TMS_CUDA_MAJOR="$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" && \
+RUN TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}" && \
     export TMS_CUDA_MAJOR && \
     pip install git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} --no-cache-dir --force-reinstall
 

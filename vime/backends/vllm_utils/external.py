@@ -116,6 +116,9 @@ def _normalize_server_info(server_info: dict) -> dict:
     weight_transfer_config = find_config_value(vllm_config, "weight_transfer_config")
     if weight_transfer_config is not None:
         normalized["weight_transfer_config"] = weight_transfer_config
+    ec_transfer_config = find_config_value(vllm_config, "ec_transfer_config")
+    if ec_transfer_config is not None:
+        normalized["ec_transfer_config"] = ec_transfer_config
     if isinstance(kv_transfer_config, dict):
         role = kv_transfer_config.get("kv_role")
         if role == "kv_producer":
@@ -134,6 +137,13 @@ def _normalize_server_info(server_info: dict) -> dict:
 
 def _infer_worker_type(server_info: dict) -> str:
     if server_info.get("encoder_only"):
+        return "encoder"
+    ec_transfer_config = server_info.get("ec_transfer_config")
+    if (
+        isinstance(ec_transfer_config, dict)
+        and ec_transfer_config.get("ec_connector") is not None
+        and ec_transfer_config.get("ec_role") == "ec_producer"
+    ):
         return "encoder"
     kv_transfer_config = server_info.get("kv_transfer_config")
     if isinstance(kv_transfer_config, dict):

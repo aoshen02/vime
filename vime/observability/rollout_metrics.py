@@ -190,7 +190,7 @@ def _compute_top_p_kept_vocab_metrics(all_samples: list[Sample]):
 
 
 def _compute_spec_metrics(args, all_samples: list[Sample]):
-    if getattr(args, "vllm_speculative_algorithm", None) is None:
+    if getattr(args, "vllm_speculative_config", None) is None:
         return {}
     num_samples = len(all_samples)
     metrics = {}

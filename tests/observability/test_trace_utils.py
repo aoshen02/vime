@@ -96,6 +96,28 @@ def test_build_vllm_meta_trace_attrs_normalizes_request_metrics():
 
 
 @pytest.mark.unit
+def test_build_vllm_meta_trace_attrs_reads_tito_response():
+    attrs = build_vllm_meta_trace_attrs(
+        {
+            "request_id": "request-7",
+            "choices": [{"finish_reason": "length"}],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 7,
+                "prompt_tokens_details": {"cached_tokens": 3},
+            },
+        }
+    )
+    assert attrs == {
+        "vllm_request_id": "request-7",
+        "finish_reason": "length",
+        "prompt_tokens": 12,
+        "completion_tokens": 7,
+        "cached_tokens": 3,
+    }
+
+
+@pytest.mark.unit
 def test_trace_timeline_viewer_omits_virtual_pd_lanes_without_pd_attrs(tmp_path: Path):
     viewer = _load_trace_timeline_viewer_module()
     sample = Sample(index=0, prompt="hello")

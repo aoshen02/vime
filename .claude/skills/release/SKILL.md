@@ -23,7 +23,9 @@ images unless the user explicitly requests those external actions.
 - Review every remaining occurrence of the old Vime version rather than making
   a blind repository-wide replacement.
 - Verify every patch under `docker/patch/latest/` is consumed in Dockerfile
-  application order and applies to the pinned vLLM base.
+  application order and applies to its target in separate clean checkouts of
+  the pinned vLLM and Megatron revisions. Do not validate patch application
+  against a dirty developer checkout.
 
 ## Validate and publish
 

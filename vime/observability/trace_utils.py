@@ -140,6 +140,15 @@ def _new_span_id() -> str:
 def build_vllm_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
     attrs: dict[str, Any] = {}
     try:
+        if meta.get("choices"):
+            meta = dict(meta)
+            meta["finish_reason"] = meta["choices"][0].get("finish_reason")
+        if meta.get("usage"):
+            meta = dict(meta)
+            usage = meta["usage"]
+            meta["prompt_tokens"] = usage.get("prompt_tokens", 0)
+            meta["completion_tokens"] = usage.get("completion_tokens", 0)
+            meta["cached_tokens"] = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
         request_metrics = meta.get("request_metrics")
         if isinstance(request_metrics, dict):
             meta = dict(meta)
@@ -163,8 +172,9 @@ def build_vllm_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
         elif finish_reason is not None:
             attrs["finish_reason"] = finish_reason
 
-        if meta.get("id") is not None:
-            attrs["vllm_request_id"] = meta["id"]
+        request_id = meta.get("request_id", meta.get("id"))
+        if request_id is not None:
+            attrs["vllm_request_id"] = request_id
 
         trace_children = _build_vllm_pd_trace_children(meta)
         if trace_children:
