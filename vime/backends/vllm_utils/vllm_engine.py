@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import cloudpickle
 import requests
+from urllib3.exceptions import NewConnectionError
 from vllm.utils.system_utils import kill_process_tree
 
 from vime.backends.vllm_utils.external import get_server_info
@@ -286,9 +287,23 @@ class VLLMEngine(RayActor):
         if self.node_rank != 0:
             return
         params = {"reset_running_requests": False}
-        requests.post(
-            f"http://{self.server_host}:{self.server_port}/reset_prefix_cache", params=params
-        ).raise_for_status()
+        for _ in range(60):
+            try:
+                response = requests.post(
+                    f"http://{self.server_host}:{self.server_port}/reset_prefix_cache", params=params
+                )
+                if response.status_code == 200 and response.json()["success"]:
+                    break
+                logger.info(f"Error flushing cache: HTTP {response.status_code} {response.text!r}")
+                time.sleep(1)
+            except NewConnectionError as e:
+                raise e
+            except Exception as e:
+                logger.info(f"Error flushing cache: {e}")
+                time.sleep(1)
+                continue
+        else:
+            raise TimeoutError("Timeout while flushing cache.")
 
     def get_url(self):
         if self.node_rank != 0:
@@ -390,9 +405,7 @@ class VLLMEngine(RayActor):
             },
         )
         response.raise_for_status()
-        result = response.json()
-        self.set_weight_version(str(target_version))
-        return result
+        return response.json()
 
     def update_weights_from_disk(
         self,

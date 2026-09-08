@@ -44,7 +44,6 @@ def _start_router(
     router_args.host = router_ip
     router_args.port = router_port
     router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
-    router_args.log_level = "warning"
     router_args.request_timeout_secs = args.vllm_router_request_timeout_secs
 
     if has_pd_disaggregation:

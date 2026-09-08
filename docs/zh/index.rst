@@ -34,6 +34,7 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
    get_started/quick_start.md
    get_started/usage.md
    get_started/customization.md
+   get_started/agent.md
    get_started/qa.md
 
 .. toctree::

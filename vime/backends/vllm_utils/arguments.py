@@ -30,6 +30,7 @@ def add_vllm_router_arguments(parser):
         help="Timeout for requests to the vllm router in seconds",
     )
     RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
+    parser.set_defaults(router_log_level="warning")
     return parser
 
 

@@ -396,6 +396,10 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
         event for event in result.trace["events"] if event["type"] == "span_end" and event["name"] == "vllm_generate"
     )
     assert generate_span["attrs"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "cached_tokens": 0,
+        "finish_reason": "stop",
         "queue_time": pytest.approx(0.1),
         "e2e_latency": pytest.approx(0.6),
         "decode_throughput": pytest.approx(20),
@@ -430,6 +434,7 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
         async def aiter_lines(self):
             chunks = [
                 {
+                    "request_id": "stream-7",
                     "weight_version": "step-7",
                     "request_spec_decode_stats": {
                         "num_accepted_tokens": 6,
@@ -456,6 +461,12 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
                         }
                     ],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+                },
+                {
+                    "request_id": "stream-7",
+                    "choices": [],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+                    "request_metrics": {"queue_time_ms": 100},
                 },
             ]
             for chunk in chunks:
@@ -486,6 +497,16 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
     assert result.spec_info.spec_draft_token_num == 8
     assert result.spec_info.spec_verify_ct == 2
     assert result.status == Sample.Status.COMPLETED
+
+    event = next(
+        event
+        for event in result.trace["events"]
+        if event["type"] == "span_end" and event["name"] == "vllm_inference_generate_stream"
+    )
+    assert event["attrs"]["vllm_request_id"] == "stream-7"
+    assert event["attrs"]["finish_reason"] == "stop"
+    assert event["attrs"]["completion_tokens"] == 2
+    assert event["attrs"]["queue_time"] == pytest.approx(0.1)
 
 
 @pytest.mark.unit
@@ -1032,7 +1053,7 @@ def test_stream_cancellation_closes_http_and_preserves_prefix(patch_generate_sta
             return None
 
         async def aiter_lines(self):
-            chunk = _generate_response([120])
+            chunk = _generate_response([120], sampling_mask=[[12, 120]])
             chunk["choices"][0]["finish_reason"] = None
             yield f"data: {json.dumps(chunk)}"
             prefix_seen.set()
@@ -1086,6 +1107,8 @@ def test_stream_cancellation_closes_http_and_preserves_prefix(patch_generate_sta
     assert sample.response == "x"
     assert sample.response_length == 1
     assert sample.rollout_log_probs == [-0.1]
+    assert sample.rollout_top_p_token_ids.tolist() == [12, 120]
+    assert sample.rollout_top_p_token_offsets.tolist() == [0, 2]
     assert not state.cancellable_tasks
     assert state.active_server_generations == 0
 

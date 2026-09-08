@@ -203,6 +203,60 @@ def test_anthropic_messages_nonstream_records_token_segments():
     asyncio.run(run_case())
 
 
+@pytest.mark.parametrize("protocol", ["anthropic", "openai"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_session_sampling_defaults_reach_vllm(protocol, enabled):
+    defaults = {
+        "max_new_tokens": 20,
+        "min_new_tokens": 2,
+        "repetition_penalty": 1.2,
+        "seed": 37 if enabled else 0,
+        "min_p": 0.1 if enabled else 0.0,
+        "presence_penalty": 0.5 if enabled else 0.0,
+        "frequency_penalty": -0.5 if enabled else 0.0,
+        "ignore_eos": enabled,
+        "spaces_between_special_tokens": enabled,
+        "no_stop_trim": enabled,
+        "logit_bias": {"101": 0.5} if enabled else {},
+        "stop": ["END"],
+        "stop_token_ids": [99],
+        "skip_special_tokens": enabled,
+        "temperature": 0.8,
+        "top_p": 0.9,
+        "top_k": -1,
+    }
+
+    async def run_case():
+        async with FakeVLLMServer([[(-0.1, 101)]]) as vllm:
+            adapter_cls = anthropic.AnthropicAdapter if protocol == "anthropic" else openai.OpenAIAdapter
+            adapter = adapter_cls(tokenizer=FakeTokenizer(outputs={(101,): "done"}), vllm_url=vllm.url)
+            adapter.open_session("sampling", sampling_defaults=defaults)
+            client = TestClient(TestServer(adapter.app))
+            await client.start_server()
+            try:
+                response = await client.post(
+                    "/v1/messages" if protocol == "anthropic" else "/v1/chat/completions",
+                    headers={"Authorization": "Bearer sampling"},
+                    json={"model": "m", "max_tokens": 7, "messages": [{"role": "user", "content": "hi"}]},
+                )
+                await response.json()
+                assert response.status == 200
+            finally:
+                await client.close()
+            await _drain(adapter, "sampling")
+
+        expected = dict(defaults)
+        expected.pop("max_new_tokens")
+        expected["max_tokens"] = 7
+        expected["min_tokens"] = expected.pop("min_new_tokens")
+        expected["include_stop_str_in_output"] = expected.pop("no_stop_trim")
+        expected["logprobs"] = 1
+        assert vllm.requests[0]["sampling_params"] == expected
+        assert defaults["max_new_tokens"] == 20
+
+    asyncio.run(run_case())
+
+
 def test_openai_chat_completions_nonstream_records_token_segments():
     async def run_case():
         async with FakeVLLMServer([[(-0.3, 201)]]) as vllm:
