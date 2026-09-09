@@ -455,7 +455,8 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
 
 
 @pytest.mark.unit
-def test_generate_streaming_records_weight_version(patch_generate_state, monkeypatch):
+@pytest.mark.parametrize("terminal_only", [False, True])
+def test_generate_streaming_records_weight_version(patch_generate_state, monkeypatch, terminal_only):
     from vime.rollout import vllm_streaming_rollout as streaming
 
     class FakeStreamResponse:
@@ -506,6 +507,9 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
                     "request_metrics": {"queue_time_ms": 100},
                 },
             ]
+            if terminal_only:
+                chunks[1]["choices"][0]["finish_reason"] = None
+                chunks.insert(2, {"choices": [{"token_ids": [], "finish_reason": "stop"}]})
             for chunk in chunks:
                 yield f"data: {json.dumps(chunk)}"
             yield "data: [DONE]"
@@ -544,6 +548,54 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
     assert event["attrs"]["finish_reason"] == "stop"
     assert event["attrs"]["completion_tokens"] == 2
     assert event["attrs"]["queue_time"] == pytest.approx(0.1)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stream_interval", [1, 20, 64])
+def test_generate_streaming_preserves_metadata_across_stream_intervals(
+    patch_generate_state, monkeypatch, stream_interval
+):
+    from vime.rollout import vllm_streaming_rollout as streaming
+
+    response_tokens = list(range(11, 76))
+
+    class FakeStreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for start in range(0, len(response_tokens), stream_interval):
+                tokens = response_tokens[start : start + stream_interval]
+                chunk = _generate_response(tokens, sampling_mask=[[token + 1000] for token in tokens])
+                chunk["choices"][0]["logprobs"]["content"] = [{"logprob": -float(token)} for token in tokens]
+                chunk["choices"][0]["finish_reason"] = None
+                yield f"data: {json.dumps(chunk)}"
+            yield 'data: {"choices": [{"token_ids": [], "finish_reason": "stop"}]}'
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(streaming, "GenerateState", _PatchedGenerateState)
+    monkeypatch.setattr(streaming.http_utils, "_http_client", FakeClient())
+    result = asyncio.run(
+        streaming.generate_streaming(
+            _rollout_args(), Sample(prompt="abc"), _default_sampling_params(max_new_tokens=len(response_tokens))
+        )
+    )
+    assert result.status == Sample.Status.COMPLETED
+    assert result.tokens == [97, 98, 99, *response_tokens]
+    assert result.response_length == len(response_tokens)
+    assert result.rollout_log_probs == [-float(token) for token in response_tokens]
+    assert result.rollout_top_p_token_ids.tolist() == [token + 1000 for token in response_tokens]
+    assert result.rollout_top_p_token_offsets.tolist() == list(range(len(response_tokens) + 1))
 
 
 @pytest.mark.unit

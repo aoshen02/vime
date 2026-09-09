@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from aiohttp import ClientError, web
 from aiohttp.test_utils import TestClient, TestServer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +30,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from tests.test_agent._fakes import FakeTokenizer, FakeVLLMServer  # noqa: E402
 
-from vime.agent.adapters import anthropic, openai  # noqa: E402
+from vime.agent.adapters import anthropic, common, openai  # noqa: E402
 from vime.agent.parsing import parse_model_output, parse_xml_tool_uses  # noqa: E402
 from vime.utils.types import Sample  # noqa: E402
 
@@ -517,6 +520,31 @@ def test_parse_xml_tool_uses_ignores_unknown_tool():
     cleaned, uses = parse_xml_tool_uses(raw, [{"function": {"name": "lookup"}}])
     assert uses == []
     assert "<tool_call>" in cleaned  # left untouched
+
+
+def test_upstream_disconnect_does_not_cancel_caller():
+    async def disconnect(request):
+        request.transport.close()
+        return web.Response()
+
+    async def run():
+        app = web.Application()
+        app.router.add_post("/inference/v1/generate", disconnect)
+        async with TestServer(app) as server:
+            adapter = SimpleNamespace(
+                logger=logging.getLogger(__name__),
+                log_prefix="test",
+                max_token_keys=("max_tokens",),
+                stop_keys=("stop",),
+                vllm_url=str(server.make_url("/")).rstrip("/"),
+            )
+            session = SimpleNamespace(sampling_defaults={}, max_context_tokens=0)
+            with pytest.raises(ClientError):
+                await common.call_vllm_generate([1], session, {}, adapter=adapter)
+            assert asyncio.current_task().cancelling() == 0
+            await asyncio.sleep(0)
+
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

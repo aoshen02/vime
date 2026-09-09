@@ -539,7 +539,6 @@ async def call_vllm_generate(
     # see vime ``vllm_rollout.py`` headers handling.
     headers = {"x-session-id": session_id} if session_id and session_id != "default" else None
     timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
-    task = asyncio.current_task()
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess, sess.post(
             f"{vllm_url}/inference/v1/generate",
@@ -565,8 +564,6 @@ async def call_vllm_generate(
         # vLLM has no per-request abort endpoint. Closing this router request also
         # closes its selected worker request, so vLLM cancels the engine request.
         logger.debug("[%s] sid=%s turn aborted: %s", adapter.log_prefix, session_id, type(e).__name__)
-        if task is not None:
-            task.cancel()
         raise
 
     return TurnRecord(
