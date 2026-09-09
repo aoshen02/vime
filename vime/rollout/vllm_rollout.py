@@ -235,6 +235,8 @@ def _build_inference_sampling_params(sampling_params: dict[str, Any]) -> dict[st
         sp["repetition_penalty"] = sampling_params["repetition_penalty"]
     if sampling_params.get("skip_special_tokens") is not None:
         sp["skip_special_tokens"] = bool(sampling_params["skip_special_tokens"])
+    if sampling_params.get("spaces_between_special_tokens") is not None:
+        sp["spaces_between_special_tokens"] = bool(sampling_params["spaces_between_special_tokens"])
     return sp
 
 

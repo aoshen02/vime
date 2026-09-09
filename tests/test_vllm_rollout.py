@@ -236,6 +236,7 @@ def test_build_inference_sampling_params_maps_rollout_fields():
             "stop_token_ids": [2],
             "seed": 42,
             "skip_special_tokens": False,
+            "spaces_between_special_tokens": False,
         }
     )
     assert sp["max_tokens"] == 16
@@ -248,6 +249,7 @@ def test_build_inference_sampling_params_maps_rollout_fields():
     assert sp["stop_token_ids"] == [2]
     assert sp["seed"] == 42
     assert sp["skip_special_tokens"] is False
+    assert sp["spaces_between_special_tokens"] is False
     assert sp["logprobs"] == 1
 
 
