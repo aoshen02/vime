@@ -70,19 +70,17 @@ def _start_router(
 
 
 def _compute_rollout_offset(args) -> int:
-    """Offset (in PG bundle slots) where rollout GPUs start."""
+    """Offset (in placement-group bundle slots) where rollout GPUs start."""
     if args.debug_train_only or args.debug_rollout_only or args.colocate:
         return 0
-    offset = args.actor_num_nodes * args.actor_num_gpus_per_node
-    return offset
+    return args.actor_num_nodes * args.actor_num_gpus_per_node
 
 
 def _compute_megatron_num_gpus(args) -> int:
-    """Total number of megatron (actor + critic) GPU slots in the placement group."""
+    """Total number of Megatron GPU slots in the placement group."""
     if args.debug_rollout_only:
         return 0
-    num = args.actor_num_nodes * args.actor_num_gpus_per_node
-    return num
+    return args.actor_num_nodes * args.actor_num_gpus_per_node
 
 
 def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
