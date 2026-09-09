@@ -286,7 +286,7 @@ class VLLMEngine(RayActor):
     def flush_cache(self):
         if self.node_rank != 0:
             return
-        params = {"reset_running_requests": False}
+        params = {"reset_running_requests": True}
         for _ in range(60):
             try:
                 response = requests.post(
