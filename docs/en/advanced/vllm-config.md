@@ -57,7 +57,7 @@ vllm:
 |-------|------|---------|-------------|
 | `worker_type` | `str` | **Required** | Engine type: `regular` (standard), `prefill` (PD prefill worker), `decode` (PD decode worker), or `placeholder` (reserve GPU slots without launching engines). |
 | `num_gpus` | `int` | **Required** | Total number of GPUs for this group. Must be > 0. |
-| `num_gpus_per_engine` | `int` | Model's `num_gpus_per_engine` | Total worker GPU count per engine instance. This equals TP only when DP and PP are both 1. |
+| `num_gpus_per_engine` | `int` | Model's `num_gpus_per_engine` | Total worker GPU count per engine instance: TP × DP × PP × PCP (prefill context parallelism). This equals TP only when DP, PP, and PCP are all 1. |
 | `overrides` | `dict` | `{}` | vLLM `EngineArgs` field overrides. Applied on top of `--vllm-*` CLI args with highest priority. |
 
 ### Worker Types
