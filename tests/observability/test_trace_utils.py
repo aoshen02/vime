@@ -65,7 +65,9 @@ def test_build_vllm_meta_trace_attrs_normalizes_request_metrics():
                 "generation_time_ms": 300,
                 "tokens_per_second": 20,
                 "remote_kv_wait_time_ms": 500,
+                "kv_allocation_wait_time_ms": 25,
                 "kv_transfer_worker_time_ms": 50,
+                "kv_handshake_wait_worker_time_ms": 12,
             }
         }
     )
@@ -74,7 +76,9 @@ def test_build_vllm_meta_trace_attrs_normalizes_request_metrics():
     assert attrs == {
         "queue_time": pytest.approx(0.1),
         "pd_decode_remote_kv_wait_duration": pytest.approx(0.5),
+        "pd_decode_allocation_wait_duration": pytest.approx(0.025),
         "pd_transfer_worker_duration": pytest.approx(0.05),
+        "pd_handshake_wait_worker_duration": pytest.approx(0.012),
         "e2e_latency": pytest.approx(0.6),
         "decode_throughput": pytest.approx(20),
     }

@@ -36,7 +36,9 @@ _VLLM_PREFILL_PERF_FIELDS = (
 )
 _VLLM_DECODE_PERF_FIELDS = (
     ("decode/remote_kv_wait_duration", "pd_decode_remote_kv_wait_duration"),
+    ("decode/allocation_wait_duration", "pd_decode_allocation_wait_duration"),
     ("decode/transfer_worker_duration", "pd_transfer_worker_duration"),
+    ("decode/handshake_wait_worker_duration", "pd_handshake_wait_worker_duration"),
     ("decode/transfer_post_worker_duration", "pd_transfer_post_worker_duration"),
     ("decode/prealloc_duration", "pd_decode_prealloc_duration"),
     ("decode/bootstrap_duration", "pd_decode_bootstrap_duration"),
