@@ -27,6 +27,7 @@ VLLM_TRACE_META_KEYS = (
     "pd_transfer_worker_duration",
     "pd_handshake_wait_worker_duration",
     "pd_prefill_queue_duration",
+    "pd_prefill_allocation_wait_duration",
     "pd_prefill_ttft_duration",
     "pd_transfer_post_worker_duration",
 )
@@ -168,6 +169,7 @@ def build_vllm_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
                 ("pd_handshake_wait_worker_duration", "kv_handshake_wait_worker_time_ms", 0.001),
                 ("pd_transfer_post_worker_duration", "kv_transfer_post_worker_time_ms", 0.001),
                 ("pd_prefill_queue_duration", "prefill_queue_time_ms", 0.001),
+                ("pd_prefill_allocation_wait_duration", "prefill_kv_allocation_wait_time_ms", 0.001),
                 ("pd_prefill_ttft_duration", "prefill_time_to_first_token_ms", 0.001),
                 ("pd_transfer_total_mb", "kv_transfer_bytes", 1e-6),
             ):
