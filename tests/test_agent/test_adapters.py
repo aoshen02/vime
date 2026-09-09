@@ -497,6 +497,7 @@ def test_parse_model_output_think_split_fallback():
     pytest.importorskip("vllm.entrypoints.openai.chat_completion.protocol")
     parsed = parse_model_output(
         "<think>reason here</think>visible",
+        tokenizer=SimpleNamespace(get_vocab=lambda: {"<think>": 0, "</think>": 1}),
         tools_schema=None,
         tool_parser_name=None,
         reasoning_parser_name="qwen3",
