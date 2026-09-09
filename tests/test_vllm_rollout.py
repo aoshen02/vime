@@ -223,6 +223,41 @@ def test_get_model_url_named_router_and_fallback():
 
 
 @pytest.mark.unit
+def test_geo3k_turn_preserves_sampling_metadata(monkeypatch):
+    from examples.geo3k_vlm_multi_turn import rollout as geo3k
+
+    monkeypatch.setattr(geo3k, "GenerateState", _PatchedGenerateState)
+    monkeypatch.setattr(
+        geo3k,
+        "post",
+        AsyncMock(
+            return_value={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "token_ids": [65],
+                        "logprobs": {"content": [{"logprob": -0.1}]},
+                        "sampling_mask": [[65, 66]],
+                    }
+                ],
+                "weight_version": "7",
+            }
+        ),
+    )
+    sample = Sample(tokens=[1])
+    rollout = geo3k._Geo3kRollout(
+        _rollout_args(max_turns=2, rollout_top_p=0.9),
+        sample,
+        {"max_new_tokens": 8, "temperature": 0.8, "top_p": 0.9},
+    )
+    turn = asyncio.run(rollout._generate_turn(rollout.inference_params))
+    rollout._append_generated(turn)
+    assert sample.rollout_top_p_token_ids.tolist() == [65, 66]
+    assert sample.rollout_top_p_token_offsets.tolist() == [0, 2]
+    assert sample.weight_versions == ["7"]
+
+
+@pytest.mark.unit
 def test_build_inference_sampling_params_maps_rollout_fields():
     sp = mod._build_inference_sampling_params(
         {
