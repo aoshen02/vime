@@ -1,3 +1,4 @@
+/home/aoshen/.profile: line 30: /tmp/vllm-rustfmt-cargo/env: No such file or directory
 diff --git a/rust/src/engine-core-client/src/protocol/output.rs b/rust/src/engine-core-client/src/protocol/output.rs
 index cc7541eae1b..50eb218932e 100644
 --- a/rust/src/engine-core-client/src/protocol/output.rs
@@ -50,7 +51,7 @@ index d3705cc3918..2a438ca88bd 100755
  
  class EngineCoreOutputs(
 diff --git a/tests/entrypoints/scale_out/token_in_token_out/test_generate_stream.py b/tests/entrypoints/scale_out/token_in_token_out/test_generate_stream.py
-index 99cf457935f..6944e831cd0 100644
+index 99cf457935f..59453b0b0ac 100644
 --- a/tests/entrypoints/scale_out/token_in_token_out/test_generate_stream.py
 +++ b/tests/entrypoints/scale_out/token_in_token_out/test_generate_stream.py
 @@ -23,6 +23,7 @@ from vllm.renderers import renderer_from_config
@@ -86,7 +87,7 @@ index 99cf457935f..6944e831cd0 100644
      engine.errored = False
      engine.model_config = MockModelConfig()
      engine.vllm_config = MockVllmConfig(
-@@ -197,12 +200,79 @@ async def test_serve_tokens_skips_mm_cache_for_remote_engine_execution():
+@@ -197,12 +200,85 @@ async def test_serve_tokens_skips_mm_cache_for_remote_engine_execution():
      response = await serving.serve_tokens(request)
  
      assert isinstance(response, GenerateResponse)
@@ -110,6 +111,8 @@ index 99cf457935f..6944e831cd0 100644
 +        first_token_latency=6.0,
 +        remote_kv_wait_time=0.75,
 +        kv_transfer_metrics={
++            "kv_initial_queue_wait_time_ms": 7.0,
++            "kv_post_receive_queue_wait_time_ms": 2.0,
 +            "kv_transfer_worker_time_ms": 10.0,
 +            "kv_transfer_bytes": 1024,
 +        },
@@ -136,6 +139,7 @@ index 99cf457935f..6944e831cd0 100644
 +                "queue_time_ms": 12.0,
 +                "time_to_first_token_ms": 25.0,
 +                "kv_allocation_wait_time_ms": 3.0,
++                "kv_initial_queue_wait_time_ms": 4.0,
 +            }
 +        },
 +    )
@@ -161,23 +165,26 @@ index 99cf457935f..6944e831cd0 100644
 +    assert result["prefill_queue_time_ms"] == 12.0
 +    assert result["prefill_time_to_first_token_ms"] == 25.0
 +    assert result["prefill_kv_allocation_wait_time_ms"] == 3.0
++    assert result["prefill_kv_initial_queue_wait_time_ms"] == 4.0
++    assert result["kv_initial_queue_wait_time_ms"] == 7.0
++    assert result["kv_post_receive_queue_wait_time_ms"] == 2.0
 +
 +
  @pytest.mark.asyncio
  async def test_serve_tokens_threads_session_id_header_to_engine():
      engine = _mock_engine()
-@@ -359,7 +429,8 @@ async def test_stream_error_with_empty_delta():
+@@ -359,15 +435,19 @@ async def test_stream_error_with_empty_delta():
  
  
  @pytest.mark.asyncio
 -async def test_stream_skips_empty_token_output():
+-    """Outputs with empty token_ids are skipped (no chunk emitted)."""
 +@pytest.mark.parametrize("terminal_empty", [False, True])
 +async def test_stream_skips_empty_token_output(terminal_empty):
--    """Outputs with empty token_ids are skipped (no chunk emitted)."""
 +    """Skip empty nonterminal outputs, but retain the terminal finish reason."""
      engine = _mock_engine()
  
-@@ -367,7 +438,10 @@ async def test_stream_skips_empty_token_output():
+     async def mock_generate(*args, **kwargs):
          yield _make_request_output("req-1", token_ids=[10])
          yield _make_request_output("req-1", token_ids=[])
          yield _make_request_output(
@@ -189,7 +196,7 @@ index 99cf457935f..6944e831cd0 100644
          )
  
      engine.generate = MagicMock(side_effect=mock_generate)
-@@ -392,7 +466,8 @@ async def test_stream_skips_empty_token_output():
+@@ -392,7 +472,8 @@ async def test_stream_skips_empty_token_output():
      # Only 2 data chunks — the empty one is skipped
      assert len(data_chunks) == 2
      assert data_chunks[0]["choices"][0]["token_ids"] == [10]
@@ -199,7 +206,7 @@ index 99cf457935f..6944e831cd0 100644
  
  
  @pytest.mark.asyncio
-@@ -602,3 +677,47 @@ async def test_stream_prompt_tokens_details_zero_cached():
+@@ -602,3 +683,47 @@ async def test_stream_prompt_tokens_details_zero_cached():
      # Zero cached tokens must be present, not omitted
      assert usage_chunk["usage"]["prompt_tokens_details"] is not None
      assert usage_chunk["usage"]["prompt_tokens_details"]["cached_tokens"] == 0
@@ -248,10 +255,10 @@ index 99cf457935f..6944e831cd0 100644
 +        )
 +        assert choice["sampling_mask"] == expected
 diff --git a/tests/v1/core/test_scheduler.py b/tests/v1/core/test_scheduler.py
-index 2192401163d..0ae01391c1d 100644
+index 2192401163d..241acb1fc62 100644
 --- a/tests/v1/core/test_scheduler.py
 +++ b/tests/v1/core/test_scheduler.py
-@@ -2000,6 +2000,41 @@ def _step_until_kv_transfer_finished(scheduler: Scheduler, req_ids: list[str]):
+@@ -2000,6 +2000,50 @@ def _step_until_kv_transfer_finished(scheduler: Scheduler, req_ids: list[str]):
      return initial_ecos
  
  
@@ -270,12 +277,15 @@ index 2192401163d..0ae01391c1d 100644
 +    )
 +    request = create_requests(num_requests=1, num_tokens=32, block_size=16)[0]
 +    scheduler.add_request(request)
++    request.kv_queue_started_at["initial"] -= 1
 +    with monkeypatch.context() as context:
 +        context.setattr(
 +            scheduler.kv_cache_manager, "allocate_slots", Mock(return_value=None)
 +        )
 +        scheduler.schedule()
 +    assert request.kv_allocation_started_at is not None
++    assert request.kv_transfer_metrics["kv_initial_queue_wait_time_ms"] >= 1000
++    assert not request.kv_queue_started_at
 +    assert request.remote_kv_wait_started_at is None
 +    assert "kv_allocation_wait_time_ms" not in request.kv_transfer_metrics
 +    request.kv_allocation_started_at -= 1
@@ -285,6 +295,12 @@ index 2192401163d..0ae01391c1d 100644
 +    if remote_load:
 +        assert request.status == RequestStatus.WAITING_FOR_REMOTE_KVS
 +        assert request.remote_kv_wait_started_at is not None
++        scheduler.finished_recving_kv_req_ids.add(request.request_id)
++        assert scheduler._try_promote_blocked_waiting_request(request)
++        request.kv_queue_started_at["post_receive"] -= 1
++        scheduler.schedule()
++        assert request.kv_transfer_metrics["kv_post_receive_queue_wait_time_ms"] >= 1000
++        assert not request.kv_queue_started_at
 +    else:
 +        assert request.status == RequestStatus.RUNNING
 +        assert request.remote_kv_wait_started_at is None
@@ -293,7 +309,7 @@ index 2192401163d..0ae01391c1d 100644
  @pytest.mark.parametrize("is_async", [False, True])
  def test_kv_connector_basic(is_async: bool):
      """
-@@ -2051,6 +2086,12 @@ def test_kv_connector_basic(is_async: bool):
+@@ -2051,6 +2095,12 @@ def test_kv_connector_basic(is_async: bool):
  
      # Ensure ScheduleOutput is correct.
      output = scheduler.schedule()
@@ -730,7 +746,7 @@ index a09fd684e3b..717e0a135f0 100644
          # Update last activity from this remote. Mind that cleanup is done on main
          # thread (this one), so we don't race on this structure.
 diff --git a/vllm/entrypoints/generate/base/serving.py b/vllm/entrypoints/generate/base/serving.py
-index d6ae0a20906..b6e00afa0a5 100644
+index d6ae0a20906..807117196ea 100644
 --- a/vllm/entrypoints/generate/base/serving.py
 +++ b/vllm/entrypoints/generate/base/serving.py
 @@ -52,6 +52,7 @@ PRIORITY_HEADER = "X-Vllm-Priority"
@@ -741,7 +757,7 @@ index d6ae0a20906..b6e00afa0a5 100644
  ) -> PerRequestMetrics:
      """Build per-request timing metrics from ``RequestStateStats``.
  
-@@ -96,11 +97,26 @@ def build_per_request_timing_metrics(
+@@ -96,11 +97,29 @@ def build_per_request_timing_metrics(
              tokens_per_second = num_generation_tokens / inference_time_ms * 1000
  
      return PerRequestMetrics(
@@ -754,6 +770,9 @@ index d6ae0a20906..b6e00afa0a5 100644
 +        prefill_kv_allocation_wait_time_ms=(kv_transfer_params or {})
 +        .get("prefill_metrics", {})
 +        .get("kv_allocation_wait_time_ms"),
++        prefill_kv_initial_queue_wait_time_ms=(kv_transfer_params or {})
++        .get("prefill_metrics", {})
++        .get("kv_initial_queue_wait_time_ms"),
          time_to_first_token_ms=time_to_first_token_ms,
          generation_time_ms=generation_time_ms,
          queue_time_ms=queue_time_ms,
@@ -769,14 +788,27 @@ index d6ae0a20906..b6e00afa0a5 100644
  
  
 diff --git a/vllm/entrypoints/openai/engine/protocol.py b/vllm/entrypoints/openai/engine/protocol.py
-index 9635ece46b0..ef6948489c3 100644
+index 9635ece46b0..fd606a314d6 100644
 --- a/vllm/entrypoints/openai/engine/protocol.py
 +++ b/vllm/entrypoints/openai/engine/protocol.py
-@@ -159,6 +159,38 @@ class PerRequestMetrics(OpenAIBaseModel):
+@@ -159,6 +159,52 @@ class PerRequestMetrics(OpenAIBaseModel):
      tokens_per_second: float | None = None
      # Experimental, subject to change.
      speculative_decoding: SpeculativeDecodingMetrics | None = None
 +    remote_kv_wait_time_ms: float | None = None
++    kv_initial_queue_wait_time_ms: float | None = Field(
++        default=None,
++        description=(
++            "Scheduler admission to the first KV allocation attempt, in wall time."
++        ),
++    )
++    kv_post_receive_queue_wait_time_ms: float | None = Field(
++        default=None,
++        description=(
++            "Accumulated wall time from remote-KV request promotion to the next "
++            "allocation attempt; excludes worker transfer and allocation retries."
++        ),
++    )
 +    kv_allocation_wait_time_ms: float | None = Field(
 +        default=None,
 +        description=(
@@ -808,6 +840,7 @@ index 9635ece46b0..ef6948489c3 100644
 +    prefill_queue_time_ms: float | None = None
 +    prefill_time_to_first_token_ms: float | None = None
 +    prefill_kv_allocation_wait_time_ms: float | None = None
++    prefill_kv_initial_queue_wait_time_ms: float | None = None
  
  
  class RequestResponseMetadata(BaseModel):
@@ -860,7 +893,7 @@ index 71a17e9363d..88740e37f31 100644
  
  class DerenderChatRequest(BaseModel):
 diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
-index f24c306f9ec..68d23e294d2 100644
+index f24c306f9ec..dc02efe1d94 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/serving.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
 @@ -14,6 +14,7 @@ from vllm.engine.protocol import EngineClient
@@ -904,7 +937,7 @@ index f24c306f9ec..68d23e294d2 100644
          response = GenerateResponse(
              request_id=request_id,
              created=created_time,
-@@ -382,8 +395,18 @@ class ServingTokens(GenerateBaseServing):
+@@ -382,8 +395,21 @@ class ServingTokens(GenerateBaseServing):
              prompt_logprobs=clamp_prompt_logprobs(final_res.prompt_logprobs),
              kv_transfer_params=final_res.kv_transfer_params,
              ec_transfer_params=final_res.ec_transfer_params,
@@ -918,12 +951,15 @@ index f24c306f9ec..68d23e294d2 100644
 +                "kv_allocation_wait_time_ms": (
 +                    request_metrics.kv_allocation_wait_time_ms
 +                ),
++                "kv_initial_queue_wait_time_ms": (
++                    request_metrics.kv_initial_queue_wait_time_ms
++                ),
 +            }
 +
          # Log complete response if output logging is enabled
          if self.enable_log_outputs and self.request_logger:
              for choice in choices:
-@@ -468,6 +491,15 @@ class ServingTokens(GenerateBaseServing):
+@@ -468,6 +494,15 @@ class ServingTokens(GenerateBaseServing):
                      )
  
                      chunk = GenerateStreamResponse(
@@ -940,13 +976,20 @@ index f24c306f9ec..68d23e294d2 100644
                          weight_version=weight_version,
                          request_spec_decode_stats=request_spec_decode_stats,
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index 88c2ce289c4..8d3aa1d6007 100644
+index 88c2ce289c4..f4ee2f16ce2 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -1059,6 +1059,11 @@ class Scheduler(SchedulerInterface):
+@@ -1059,6 +1059,18 @@ class Scheduler(SchedulerInterface):
                      # avoid deadlock and predictable preemptions.
                      reserved_blocks = self._inflight_prefill_reserved_blocks()
  
++                for phase, started_at in request.kv_queue_started_at.items():
++                    key = f"kv_{phase}_queue_wait_time_ms"
++                    request.kv_transfer_metrics[key] = (
++                        request.kv_transfer_metrics.get(key, 0)
++                        + (time.monotonic() - started_at) * 1000
++                    )
++                request.kv_queue_started_at.clear()
 +                if (
 +                    self.connector is not None
 +                    and request.kv_allocation_started_at is None
@@ -955,7 +998,7 @@ index 88c2ce289c4..8d3aa1d6007 100644
                  new_blocks = self.kv_cache_manager.allocate_slots(
                      request,
                      num_new_tokens,
-@@ -1082,6 +1087,13 @@ class Scheduler(SchedulerInterface):
+@@ -1082,6 +1094,13 @@ class Scheduler(SchedulerInterface):
                          self.encoder_cache_manager.free(request)
                      break
  
@@ -969,7 +1012,7 @@ index 88c2ce289c4..8d3aa1d6007 100644
                  # KVTransfer: the connector uses this info to determine
                  # if a load is needed. Note that
                  # This information is used to determine if a load is
-@@ -1112,6 +1124,7 @@ class Scheduler(SchedulerInterface):
+@@ -1112,6 +1131,7 @@ class Scheduler(SchedulerInterface):
                  if load_kv_async:
                      # If loading async, allocate memory and put request
                      # into the WAITING_FOR_REMOTE_KV state.
@@ -977,7 +1020,7 @@ index 88c2ce289c4..8d3aa1d6007 100644
                      request.status = RequestStatus.WAITING_FOR_REMOTE_KVS
                      step_skipped_waiting.prepend_request(request)
                      # Set num_computed_tokens even though KVs are not yet loaded.
-@@ -1913,6 +1926,7 @@ class Scheduler(SchedulerInterface):
+@@ -1913,6 +1933,7 @@ class Scheduler(SchedulerInterface):
              pooler_output = pooler_outputs[req_index] if pooler_outputs else None
              kv_transfer_params = None
              ec_transfer_params = None
@@ -985,7 +1028,7 @@ index 88c2ce289c4..8d3aa1d6007 100644
              prefill_stats = None
              status_before_stop = request.status
              num_output_tokens_before = len(request._output_token_ids)
-@@ -2024,6 +2038,8 @@ class Scheduler(SchedulerInterface):
+@@ -2024,6 +2045,8 @@ class Scheduler(SchedulerInterface):
                  finished = self._handle_stopped_request(request)
                  if finished:
                      kv_transfer_params, ec_transfer_params = self._free_request(request)
@@ -994,7 +1037,7 @@ index 88c2ce289c4..8d3aa1d6007 100644
  
                  if status_before_stop == RequestStatus.RUNNING:
                      stopped_running_reqs.add(request)
-@@ -2071,6 +2087,8 @@ class Scheduler(SchedulerInterface):
+@@ -2071,6 +2094,8 @@ class Scheduler(SchedulerInterface):
                          ),
                          kv_transfer_params=kv_transfer_params,
                          ec_transfer_params=ec_transfer_params,
@@ -1003,7 +1046,15 @@ index 88c2ce289c4..8d3aa1d6007 100644
                          trace_headers=request.trace_headers,
                          routed_experts=routed_experts,
                          num_nans_in_logits=request.num_nans_in_logits,
-@@ -2481,6 +2499,8 @@ class Scheduler(SchedulerInterface):
+@@ -2409,6 +2434,7 @@ class Scheduler(SchedulerInterface):
+                     self.num_spec_tokens
+                 )
+             if self.connector is not None:
++                request.kv_queue_started_at["initial"] = time.monotonic()
+                 self.connector.on_new_request(request)
+             if self.log_stats:
+                 request.record_event(EngineCoreEventType.QUEUED)
+@@ -2481,6 +2507,8 @@ class Scheduler(SchedulerInterface):
      ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
          assert request.is_finished()
  
@@ -1012,15 +1063,16 @@ index 88c2ce289c4..8d3aa1d6007 100644
          self._inflight_prefills.discard(request)
          connector_delay_free_blocks, kv_xfer_params = self._connector_finished(request)
  
-@@ -2866,6 +2886,7 @@ class Scheduler(SchedulerInterface):
+@@ -2866,6 +2894,8 @@ class Scheduler(SchedulerInterface):
              if request.request_id not in self.finished_recving_kv_req_ids:
                  return False
              self._update_waiting_for_remote_kv(request)
 +            request.stop_remote_kv_wait()
++            request.kv_queue_started_at["post_receive"] = time.monotonic()
              if request.num_preemptions:
                  request.status = RequestStatus.PREEMPTED
              else:
-@@ -2905,6 +2926,16 @@ class Scheduler(SchedulerInterface):
+@@ -2905,6 +2935,16 @@ class Scheduler(SchedulerInterface):
          if self.connector is not None:
              self.connector.update_connector_output(kv_connector_output)
  
@@ -1092,10 +1144,10 @@ index 3dbc5206ca9..3aafee6935f 100644
      is_corrupted: bool = False
  
 diff --git a/vllm/v1/request.py b/vllm/v1/request.py
-index 8b453a09069..7c655c0b6cd 100644
+index 8b453a09069..c50850887b2 100644
 --- a/vllm/v1/request.py
 +++ b/vllm/v1/request.py
-@@ -101,6 +101,10 @@ class Request:
+@@ -101,6 +101,11 @@ class Request:
  
          # P/D: Connector-specific KV transfer parameters.
          self.kv_transfer_params: dict[str, Any] | None = None
@@ -1103,10 +1155,11 @@ index 8b453a09069..7c655c0b6cd 100644
 +        self.remote_kv_wait_time = 0.0
 +        self.kv_transfer_metrics: dict[str, float] = {}
 +        self.kv_allocation_started_at: float | None = None
++        self.kv_queue_started_at: dict[str, float] = {}
          # E/P/D: Connector-specific encoder-cache transfer parameters.
          self.ec_transfer_params: dict[str, Any] | None = None
  
-@@ -334,6 +338,16 @@ class Request:
+@@ -334,6 +339,16 @@ class Request:
      ) -> None:
          self.events.append(EngineCoreEvent.new_event(event_type, timestamp))
  
