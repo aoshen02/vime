@@ -173,7 +173,8 @@ index 99cf457935f..6944e831cd0 100644
 -async def test_stream_skips_empty_token_output():
 +@pytest.mark.parametrize("terminal_empty", [False, True])
 +async def test_stream_skips_empty_token_output(terminal_empty):
-     """Outputs with empty token_ids are skipped (no chunk emitted)."""
+-    """Outputs with empty token_ids are skipped (no chunk emitted)."""
++    """Skip empty nonterminal outputs, but retain the terminal finish reason."""
      engine = _mock_engine()
  
 @@ -367,7 +438,10 @@ async def test_stream_skips_empty_token_output():
