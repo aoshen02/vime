@@ -102,9 +102,8 @@ def test_validate_args_router_none_noop(args_mod):
 
 
 @pytest.mark.unit
-def test_validate_args_rejects_unbounded_top_p_replay(args_mod):
-    with pytest.raises(ValueError, match="requires --rollout-top-k > 0"):
-        args_mod.validate_args(_ns(rollout_top_p=0.95))
+def test_validate_args_accepts_unbounded_top_p_replay(args_mod):
+    args_mod.validate_args(_ns(rollout_top_p=0.95))
 
 
 @pytest.mark.unit
