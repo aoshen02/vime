@@ -368,6 +368,7 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
                 "generation_time_ms": 300,
                 "tokens_per_second": 20,
                 "remote_kv_wait_time_ms": 50,
+                "kv_transfer_worker_time_ms": 50,
             },
         )
     )
@@ -396,6 +397,7 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
         event for event in result.trace["events"] if event["type"] == "span_end" and event["name"] == "vllm_generate"
     )
     assert generate_span["attrs"] == {
+        "pd_decode_remote_kv_wait_duration": pytest.approx(0.05),
         "prompt_tokens": 3,
         "completion_tokens": 2,
         "cached_tokens": 0,

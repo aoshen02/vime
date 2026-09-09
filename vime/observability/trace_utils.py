@@ -22,6 +22,10 @@ VLLM_TRACE_META_KEYS = (
     "queue_time",
     "e2e_latency",
     "decode_throughput",
+    "pd_decode_remote_kv_wait_duration",
+    "pd_prefill_queue_duration",
+    "pd_prefill_ttft_duration",
+    "pd_transfer_post_worker_duration",
 )
 VLLM_PD_PREFILL_SEGMENTS = (
     ("pd_prefill_bootstrap_queue_duration", "vllm_pd_prefill_bootstrap_queue"),
@@ -155,7 +159,12 @@ def build_vllm_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
             for target, source, scale in (
                 ("queue_time", "queue_time_ms", 0.001),
                 ("decode_throughput", "tokens_per_second", 1.0),
-                ("pd_decode_transfer_duration", "remote_kv_wait_time_ms", 0.001),
+                ("pd_decode_remote_kv_wait_duration", "remote_kv_wait_time_ms", 0.001),
+                ("pd_decode_transfer_duration", "kv_transfer_worker_time_ms", 0.001),
+                ("pd_transfer_post_worker_duration", "kv_transfer_post_worker_time_ms", 0.001),
+                ("pd_prefill_queue_duration", "prefill_queue_time_ms", 0.001),
+                ("pd_prefill_ttft_duration", "prefill_time_to_first_token_ms", 0.001),
+                ("pd_transfer_total_mb", "kv_transfer_bytes", 1e-6),
             ):
                 if request_metrics.get(source) is not None:
                     meta[target] = request_metrics[source] * scale
