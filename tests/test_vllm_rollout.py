@@ -398,6 +398,7 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
     )
     assert generate_span["attrs"] == {
         "pd_decode_remote_kv_wait_duration": pytest.approx(0.05),
+        "pd_transfer_worker_duration": pytest.approx(0.05),
         "prompt_tokens": 3,
         "completion_tokens": 2,
         "cached_tokens": 0,
@@ -406,12 +407,9 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
         "e2e_latency": pytest.approx(0.6),
         "decode_throughput": pytest.approx(20),
     }
-    decode_transfer_span = next(
-        event
-        for event in result.trace["events"]
-        if event["type"] == "span_end" and event["name"] == "vllm_pd_decode_transfer"
+    assert not any(
+        event["type"] == "span_end" and event["name"] == "vllm_pd_decode_transfer" for event in result.trace["events"]
     )
-    assert decode_transfer_span["attrs"] == {"pd_decode_transfer_duration": pytest.approx(0.05)}
     body = post_mock.await_args_list[0].args[1]
     assert body["token_ids"] == [97, 98, 99]
     assert body["sampling_params"]["max_tokens"] == 8

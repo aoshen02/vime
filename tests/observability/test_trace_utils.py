@@ -69,32 +69,16 @@ def test_build_vllm_meta_trace_attrs_normalizes_request_metrics():
             }
         }
     )
-    trace_children = attrs.pop(TRACE_CHILDREN_KEY)
+    trace_children = attrs.pop(TRACE_CHILDREN_KEY, [])
 
     assert attrs == {
         "queue_time": pytest.approx(0.1),
         "pd_decode_remote_kv_wait_duration": pytest.approx(0.5),
+        "pd_transfer_worker_duration": pytest.approx(0.05),
         "e2e_latency": pytest.approx(0.6),
         "decode_throughput": pytest.approx(20),
     }
-    assert trace_children == [
-        {
-            "type": "span",
-            "name": "vllm_pd_decode",
-            "start_offset": 0.0,
-            "end_offset": pytest.approx(0.05),
-            "attrs": {"phase": "decode", "duration_s": pytest.approx(0.05)},
-            "children": [
-                {
-                    "type": "span",
-                    "name": "vllm_pd_decode_transfer",
-                    "start_offset": 0.0,
-                    "end_offset": pytest.approx(0.05),
-                    "attrs": {"pd_decode_transfer_duration": pytest.approx(0.05)},
-                }
-            ],
-        }
-    ]
+    assert trace_children == []
 
 
 @pytest.mark.unit
