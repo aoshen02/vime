@@ -10,7 +10,7 @@
 #   - dapo-math-17k.jsonl.
 #   - --update-weight-disk-dir on a filesystem both nodes share. On an object-store-backed volume
 #     that needs an explicit commit/refresh to surface writes across hosts, also pass
-#     --custom-update-weight-post-write-path / --vllm-custom-pull-weights-pre-read-hook (see the doc).
+#     --custom-update-weight-post-write-path / --custom-update-weight-pre-read-path (see the doc).
 
 set -ex
 export PYTHONUNBUFFERED=1
