@@ -242,10 +242,45 @@ index 99cf457935f..14ea3afa3c6 100644
 +        )
 +        assert choice["sampling_mask"] == expected
 diff --git a/tests/v1/core/test_scheduler.py b/tests/v1/core/test_scheduler.py
-index 2192401163d..bff929a3a6e 100644
+index 2192401163d..f17cdfa0f1c 100644
 --- a/tests/v1/core/test_scheduler.py
 +++ b/tests/v1/core/test_scheduler.py
-@@ -2051,6 +2051,12 @@ def test_kv_connector_basic(is_async: bool):
+@@ -2000,6 +2000,34 @@ def _step_until_kv_transfer_finished(scheduler: Scheduler, req_ids: list[str]):
+     return initial_ecos
+ 
+ 
++def test_remote_kv_allocation_wait_includes_capacity_retry(monkeypatch, tmp_path):
++    (tmp_path / "config.json").write_text(
++        '{"architectures": ["OPTForCausalLM"], "model_type": "opt"}'
++    )
++    scheduler = create_scheduler(
++        model=str(tmp_path),
++        skip_tokenizer_init=True,
++        use_kv_connector=mock_kv(matched_tokens=16, is_async=True),
++        block_size=16,
++    )
++    request = create_requests(num_requests=1, num_tokens=32, block_size=16)[0]
++    scheduler.add_request(request)
++    with monkeypatch.context() as context:
++        context.setattr(
++            scheduler.kv_cache_manager, "allocate_slots", Mock(return_value=None)
++        )
++        scheduler.schedule()
++    assert request.kv_allocation_started_at is not None
++    assert request.remote_kv_wait_started_at is None
++    assert "kv_allocation_wait_time_ms" not in request.kv_transfer_metrics
++    request.kv_allocation_started_at -= 1
++    scheduler.schedule()
++    assert request.kv_allocation_started_at is None
++    assert request.kv_transfer_metrics["kv_allocation_wait_time_ms"] >= 1000
++    assert request.status == RequestStatus.WAITING_FOR_REMOTE_KVS
++    assert request.remote_kv_wait_started_at is not None
++
++
+ @pytest.mark.parametrize("is_async", [False, True])
+ def test_kv_connector_basic(is_async: bool):
+     """
+@@ -2051,6 +2079,12 @@ def test_kv_connector_basic(is_async: bool):
  
      # Ensure ScheduleOutput is correct.
      output = scheduler.schedule()
@@ -406,10 +441,24 @@ index f578aae7f01..218e1ae81ce 100644
 +    terminal = state._new_completion_output([], FinishReason.LENGTH, None)
 +    assert terminal.sampling_mask is None
 diff --git a/tests/v1/kv_connector/unit/test_nixl_connector.py b/tests/v1/kv_connector/unit/test_nixl_connector.py
-index d4064d6f6fe..d2d4b52e181 100644
+index d4064d6f6fe..a9bfd08ba85 100644
 --- a/tests/v1/kv_connector/unit/test_nixl_connector.py
 +++ b/tests/v1/kv_connector/unit/test_nixl_connector.py
-@@ -44,6 +44,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.nixl import (
+@@ -4,11 +4,13 @@
+ import contextlib
+ import inspect
+ import os
++import queue
+ import tempfile
+ import textwrap
+ import time
+ import uuid
+ from collections import defaultdict
++from concurrent.futures import Future
+ from types import SimpleNamespace
+ from typing import Any, cast
+ from unittest.mock import MagicMock, patch
+@@ -44,6 +46,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.nixl import (
      NixlKVConnectorStats,
  )
  from vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata import (
@@ -417,7 +466,7 @@ index d4064d6f6fe..d2d4b52e181 100644
      compute_nixl_compatibility_hash,
  )
  from vllm.distributed.kv_transfer.kv_transfer_state import (
-@@ -77,6 +78,19 @@ from .utils import (
+@@ -77,6 +80,41 @@ from .utils import (
  )
  
  
@@ -432,6 +481,28 @@ index d4064d6f6fe..d2d4b52e181 100644
 +    assert merged == {
 +        "req": {"kv_transfer_bytes": 384, "kv_transfer_worker_time_ms": 5}
 +    }
++
++
++def test_request_handshake_timing_precedes_ready_publication():
++    worker = object.__new__(NixlConnectorWorker)
++    future: Future[None] = Future()
++    worker._ensure_handshake = MagicMock(return_value=future)
++    worker._ready_requests = queue.Queue()
++    meta = SimpleNamespace(
++        remote=SimpleNamespace(host="localhost", port=1234),
++        tp_size=1,
++        handshake_wait_time=0.0,
++    )
++    with patch(
++        "vllm.distributed.kv_transfer.kv_connector.v1.nixl.base_worker.time.perf_counter",
++        side_effect=[10.0, 12.5],
++    ):
++        worker._background_nixl_handshake("req", "engine", meta)
++        assert worker._ready_requests.empty()
++        future.set_result(None)
++    request_id, ready_meta = worker._ready_requests.get_nowait()
++    assert request_id == "req"
++    assert ready_meta.handshake_wait_time == 2.5
 +
 +
  @pytest.fixture(scope="module", autouse=True)
@@ -485,7 +556,7 @@ index b0d7cf23883..d03cba83bee 100644
      def aggregate(
          self, other: "KVConnectorWorkerMetadata"
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
-index c8166b2e6ae..56df46680da 100644
+index c8166b2e6ae..bb0f534fe79 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
 @@ -37,6 +37,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.nixl.metadata import (
@@ -505,7 +576,23 @@ index c8166b2e6ae..56df46680da 100644
  
          self._physical_blocks_per_logical_kv_block = 1
          self._sync_block_size_with_kernel()
-@@ -2207,6 +2210,13 @@ class NixlBaseConnectorWorker:
+@@ -955,6 +958,7 @@ class NixlBaseConnectorWorker:
+     ):
+         # Do NIXL handshake in background and add to _ready_requests when done.
+         assert meta.remote is not None
++        handshake_start = time.perf_counter()
+         fut = self._ensure_handshake(
+             remote_engine_id,
+             meta.remote.host,
+@@ -970,6 +974,7 @@ class NixlBaseConnectorWorker:
+         def request_ready(f: Future[Any], entry=(req_id, meta)):
+             try:
+                 f.result()
++                meta.handshake_wait_time = time.perf_counter() - handshake_start
+                 self._ready_requests.put(entry)
+             except Exception as e:
+                 self._log_failure(
+@@ -2207,6 +2212,13 @@ class NixlBaseConnectorWorker:
                          # Get telemetry from NIXL
                          res = self.nixl_wrapper.get_xfer_telemetry(handle)
                          self.xfer_stats.record_transfer(res)
@@ -519,7 +606,7 @@ index c8166b2e6ae..56df46680da 100644
                          self.nixl_wrapper.release_xfer_handle(handle)
                      elif xfer_state == "PROC":
                          in_progress.append(handle)
-@@ -2229,6 +2239,9 @@ class NixlBaseConnectorWorker:
+@@ -2229,6 +2241,9 @@ class NixlBaseConnectorWorker:
                      self._handle_failed_transfer(req_id, handle)
  
              if not in_progress:
@@ -529,7 +616,7 @@ index c8166b2e6ae..56df46680da 100644
                  # Only report request as completed when all transfers are done.
                  done_req_ids.add(req_id)
                  del transfers[req_id]
-@@ -2573,6 +2586,8 @@ class NixlBaseConnectorWorker:
+@@ -2573,6 +2588,8 @@ class NixlBaseConnectorWorker:
              for handle in handles:
                  self.nixl_wrapper.release_xfer_handle(handle)
          self._recving_transfers.clear()
@@ -564,7 +651,7 @@ index fa5537c3259..3e2a067e7f2 100644
          if self.connector_worker is None:
              return None
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py
-index 0fca03c93b0..f60cb9ce9e5 100644
+index 0fca03c93b0..bf983a85f02 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/metadata.py
 @@ -2,7 +2,7 @@
@@ -607,6 +694,28 @@ index 0fca03c93b0..f60cb9ce9e5 100644
  GET_META_MSG = b"get_meta_msg"
  
  # Push-mode (WRITE-based) registration notification.
+@@ -233,6 +250,7 @@ class ReqMeta:
+     remote_block_size: int | None = None
+     # Remote producer pipeline-parallel size (push mode, D side).
+     pp_size: int = 1
++    handshake_wait_time: float = 0.0
+ 
+ 
+ class NixlConnectorMetadata(KVConnectorMetadata):
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/pull_worker.py b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/pull_worker.py
+index a09fd684e3b..717e0a135f0 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/pull_worker.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/pull_worker.py
+@@ -128,6 +128,9 @@ class NixlPullConnectorWorker(NixlBaseConnectorWorker):
+ 
+     def _read_blocks_for_req(self, req_id: str, meta: ReqMeta):
+         assert meta.remote is not None and self.transfer_topo is not None
++        self.pending_request_metrics.setdefault(req_id, {})[
++            "kv_handshake_wait_worker_time_ms"
++        ] = meta.handshake_wait_time * 1000
+         engine_id = meta.remote.engine_id
+         # Update last activity from this remote. Mind that cleanup is done on main
+         # thread (this one), so we don't race on this structure.
 diff --git a/vllm/entrypoints/generate/base/serving.py b/vllm/entrypoints/generate/base/serving.py
 index d6ae0a20906..62d7aab83cb 100644
 --- a/vllm/entrypoints/generate/base/serving.py
@@ -644,14 +753,27 @@ index d6ae0a20906..62d7aab83cb 100644
  
  
 diff --git a/vllm/entrypoints/openai/engine/protocol.py b/vllm/entrypoints/openai/engine/protocol.py
-index 9635ece46b0..cc9ddd9cb0c 100644
+index 9635ece46b0..ec9e235953e 100644
 --- a/vllm/entrypoints/openai/engine/protocol.py
 +++ b/vllm/entrypoints/openai/engine/protocol.py
-@@ -159,6 +159,24 @@ class PerRequestMetrics(OpenAIBaseModel):
+@@ -159,6 +159,37 @@ class PerRequestMetrics(OpenAIBaseModel):
      tokens_per_second: float | None = None
      # Experimental, subject to change.
      speculative_decoding: SpeculativeDecodingMetrics | None = None
 +    remote_kv_wait_time_ms: float | None = None
++    kv_allocation_wait_time_ms: float | None = Field(
++        default=None,
++        description=(
++            "Wall time from the first remote-KV allocation attempt to success, "
++            "including capacity retries; excludes time before the first attempt."
++        ),
++    )
++    kv_handshake_wait_worker_time_ms: float | None = Field(
++        default=None,
++        description=(
++            "Summed worker waits for successful NIXL handshakes; zero when cached."
++        ),
++    )
 +    kv_transfer_worker_time_ms: float | None = Field(
 +        default=None,
 +        description=(
@@ -798,10 +920,33 @@ index f24c306f9ec..8549f83696b 100644
                          weight_version=weight_version,
                          request_spec_decode_stats=request_spec_decode_stats,
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index 88c2ce289c4..55ff4d78db0 100644
+index 88c2ce289c4..4cc22c366c5 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -1112,6 +1112,7 @@ class Scheduler(SchedulerInterface):
+@@ -1059,6 +1059,8 @@ class Scheduler(SchedulerInterface):
+                     # avoid deadlock and predictable preemptions.
+                     reserved_blocks = self._inflight_prefill_reserved_blocks()
+ 
++                if load_kv_async and request.kv_allocation_started_at is None:
++                    request.kv_allocation_started_at = time.monotonic()
+                 new_blocks = self.kv_cache_manager.allocate_slots(
+                     request,
+                     num_new_tokens,
+@@ -1082,6 +1084,13 @@ class Scheduler(SchedulerInterface):
+                         self.encoder_cache_manager.free(request)
+                     break
+ 
++                if request.kv_allocation_started_at is not None:
++                    request.kv_transfer_metrics["kv_allocation_wait_time_ms"] = (
++                        request.kv_transfer_metrics.get("kv_allocation_wait_time_ms", 0)
++                        + (time.monotonic() - request.kv_allocation_started_at) * 1000
++                    )
++                    request.kv_allocation_started_at = None
++
+                 # KVTransfer: the connector uses this info to determine
+                 # if a load is needed. Note that
+                 # This information is used to determine if a load is
+@@ -1112,6 +1121,7 @@ class Scheduler(SchedulerInterface):
                  if load_kv_async:
                      # If loading async, allocate memory and put request
                      # into the WAITING_FOR_REMOTE_KV state.
@@ -809,7 +954,7 @@ index 88c2ce289c4..55ff4d78db0 100644
                      request.status = RequestStatus.WAITING_FOR_REMOTE_KVS
                      step_skipped_waiting.prepend_request(request)
                      # Set num_computed_tokens even though KVs are not yet loaded.
-@@ -1913,6 +1914,7 @@ class Scheduler(SchedulerInterface):
+@@ -1913,6 +1923,7 @@ class Scheduler(SchedulerInterface):
              pooler_output = pooler_outputs[req_index] if pooler_outputs else None
              kv_transfer_params = None
              ec_transfer_params = None
@@ -817,7 +962,7 @@ index 88c2ce289c4..55ff4d78db0 100644
              prefill_stats = None
              status_before_stop = request.status
              num_output_tokens_before = len(request._output_token_ids)
-@@ -2024,6 +2026,8 @@ class Scheduler(SchedulerInterface):
+@@ -2024,6 +2035,8 @@ class Scheduler(SchedulerInterface):
                  finished = self._handle_stopped_request(request)
                  if finished:
                      kv_transfer_params, ec_transfer_params = self._free_request(request)
@@ -826,7 +971,7 @@ index 88c2ce289c4..55ff4d78db0 100644
  
                  if status_before_stop == RequestStatus.RUNNING:
                      stopped_running_reqs.add(request)
-@@ -2071,6 +2075,8 @@ class Scheduler(SchedulerInterface):
+@@ -2071,6 +2084,8 @@ class Scheduler(SchedulerInterface):
                          ),
                          kv_transfer_params=kv_transfer_params,
                          ec_transfer_params=ec_transfer_params,
@@ -835,7 +980,7 @@ index 88c2ce289c4..55ff4d78db0 100644
                          trace_headers=request.trace_headers,
                          routed_experts=routed_experts,
                          num_nans_in_logits=request.num_nans_in_logits,
-@@ -2481,6 +2487,8 @@ class Scheduler(SchedulerInterface):
+@@ -2481,6 +2496,8 @@ class Scheduler(SchedulerInterface):
      ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
          assert request.is_finished()
  
@@ -844,7 +989,7 @@ index 88c2ce289c4..55ff4d78db0 100644
          self._inflight_prefills.discard(request)
          connector_delay_free_blocks, kv_xfer_params = self._connector_finished(request)
  
-@@ -2866,6 +2874,7 @@ class Scheduler(SchedulerInterface):
+@@ -2866,6 +2883,7 @@ class Scheduler(SchedulerInterface):
              if request.request_id not in self.finished_recving_kv_req_ids:
                  return False
              self._update_waiting_for_remote_kv(request)
@@ -852,7 +997,7 @@ index 88c2ce289c4..55ff4d78db0 100644
              if request.num_preemptions:
                  request.status = RequestStatus.PREEMPTED
              else:
-@@ -2905,6 +2914,16 @@ class Scheduler(SchedulerInterface):
+@@ -2905,6 +2923,16 @@ class Scheduler(SchedulerInterface):
          if self.connector is not None:
              self.connector.update_connector_output(kv_connector_output)
  
@@ -924,20 +1069,21 @@ index 3dbc5206ca9..3aafee6935f 100644
      is_corrupted: bool = False
  
 diff --git a/vllm/v1/request.py b/vllm/v1/request.py
-index 8b453a09069..d4bcb1caa12 100644
+index 8b453a09069..7c655c0b6cd 100644
 --- a/vllm/v1/request.py
 +++ b/vllm/v1/request.py
-@@ -101,6 +101,9 @@ class Request:
+@@ -101,6 +101,10 @@ class Request:
  
          # P/D: Connector-specific KV transfer parameters.
          self.kv_transfer_params: dict[str, Any] | None = None
 +        self.remote_kv_wait_started_at: float | None = None
 +        self.remote_kv_wait_time = 0.0
 +        self.kv_transfer_metrics: dict[str, float] = {}
++        self.kv_allocation_started_at: float | None = None
          # E/P/D: Connector-specific encoder-cache transfer parameters.
          self.ec_transfer_params: dict[str, Any] | None = None
  
-@@ -334,6 +337,16 @@ class Request:
+@@ -334,6 +338,16 @@ class Request:
      ) -> None:
          self.events.append(EngineCoreEvent.new_event(event_type, timestamp))
  
