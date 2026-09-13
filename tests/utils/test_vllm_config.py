@@ -73,6 +73,8 @@ class TestVllmConfigUpdateWeights:
         # Parsed default is None; VllmConfig.resolve() later infers True/False from
         # whether model_path matches args.hf_checkpoint.
         assert config.models[0].update_weights is None
+        config.models[0].resolve(Namespace(hf_checkpoint="/tmp/hf", rollout_num_gpus_per_engine=1))
+        assert config.models[0].update_weights is True
 
     def test_update_weights_explicit_false(self):
         """Models with update_weights: false should be parsed correctly."""

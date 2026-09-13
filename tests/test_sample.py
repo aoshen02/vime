@@ -24,12 +24,12 @@ import pytest
 from vime.utils.types import Sample
 
 
+NUM_GPUS = 0
+
+
 # ---------------------------------------------------------------------------
 # to_dict / from_dict round-trip
 # ---------------------------------------------------------------------------
-
-
-NUM_GPUS = 0
 
 
 def _make_sample(**overrides) -> Sample:

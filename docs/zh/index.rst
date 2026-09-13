@@ -48,6 +48,7 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
    :maxdepth: 1
    :caption: MoE
 
+   examples/glm4.7-30B-A3B.md
    examples/qwen3-30B-A3B.md
    examples/glm5.2-744B-A40B.md
    examples/glm4.7-355B-A32B.md
@@ -59,6 +60,7 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
 
    advanced/on-policy-distillation.md
    advanced/speculative-decoding.md
+   advanced/low-precision.md
    advanced/reproducibility.md
    advanced/fault-tolerance.md
    advanced/observability.md
@@ -73,6 +75,7 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
    :maxdepth: 1
    :caption: 其他用法
 
+   examples/qwen3-4b-base-openhermes.md
    _examples_synced/fully_async/README.md
    _examples_synced/multi_agent/README.md
    _examples_synced/coding_agent_rl/README.md
