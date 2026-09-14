@@ -85,7 +85,7 @@ def execute():
         "--rollout-num-gpus-per-engine 1 "
         "--vllm-gpu-memory-utilization 0.7 "
         "--vllm-max-cudagraph-capture-size 32 "
-        "--vllm-server-concurrency 256"
+        "--vllm-server-concurrency 64"
     )
 
     ci_args = "--ci-test "
