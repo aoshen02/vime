@@ -37,5 +37,5 @@ at `--update-weight-disk-dir`):
 
 For object-store-backed volumes that need an explicit commit/refresh to make writes visible
 across hosts, supply `--custom-update-weight-post-write-path` (trainer side) /
-`--custom-update-weight-pre-read-path` (engine side) — no vendor-specific code lives in vime
+`--vllm-custom-pull-weights-pre-read-hook` (engine side) — no vendor-specific code lives in vime
 or vllm; see the doc.

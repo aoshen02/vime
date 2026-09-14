@@ -400,7 +400,6 @@ class VLLMEngine(RayActor):
                     "local_checkpoint_dir": self.args.update_weight_local_checkpoint_dir,
                     "source_dir": self.args.update_weight_disk_dir,
                     "target_version": target_version,
-                    "pre_read_hook": self.args.custom_update_weight_pre_read_path,
                 },
             },
         )

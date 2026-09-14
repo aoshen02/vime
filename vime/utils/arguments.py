@@ -219,16 +219,6 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--custom-update-weight-pre-read-path",
-                type=str,
-                default=None,
-                help=(
-                    "Path to a custom function called on each rollout host before it reads a "
-                    "published disk weight version. Signature: "
-                    "``def hook(source_dir: str, target_version: int) -> None``."
-                ),
-            )
-            parser.add_argument(
                 "--update-weight-local-checkpoint-dir",
                 type=str,
                 default=None,
@@ -240,7 +230,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                     "--update-weight-transport=disk; optional for full disk sync (engines then "
                     "pull to local disk instead of reading the shared dir directly). The "
                     "read-side counterpart of --custom-update-weight-post-write-path is "
-                    "--custom-update-weight-pre-read-path."
+                    "--vllm-custom-pull-weights-pre-read-hook."
                 ),
             )
             parser.add_argument(

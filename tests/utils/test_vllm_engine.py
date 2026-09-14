@@ -841,7 +841,6 @@ def test_update_weights_from_disk_posts_collective_rpc(vllm_engine, monkeypatch)
 def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
     vllm_engine.args.update_weight_local_checkpoint_dir = "/local/checkpoint"
     vllm_engine.args.update_weight_disk_dir = "/shared/checkpoints"
-    vllm_engine.args.custom_update_weight_pre_read_path = "hooks.refresh"
     vllm_engine._weight_version = "old"
     seen = []
 
@@ -861,7 +860,6 @@ def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
                     "local_checkpoint_dir": "/local/checkpoint",
                     "source_dir": "/shared/checkpoints",
                     "target_version": 8,
-                    "pre_read_hook": "hooks.refresh",
                 },
             },
         ),
@@ -874,7 +872,6 @@ def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
 def test_disk_update_does_not_advance_version_on_failure(vllm_engine, monkeypatch, operation):
     vllm_engine.args.update_weight_local_checkpoint_dir = "/local/checkpoint"
     vllm_engine.args.update_weight_disk_dir = "/shared/checkpoints"
-    vllm_engine.args.custom_update_weight_pre_read_path = None
     vllm_engine._weight_version = "old"
 
     def fake_post(url, *, json=None):
