@@ -90,7 +90,25 @@ def test_build_vllm_meta_trace_attrs_normalizes_request_metrics():
         "e2e_latency": pytest.approx(0.6),
         "decode_throughput": pytest.approx(20),
     }
-    assert trace_children == []
+    assert len(trace_children) == 1
+    assert trace_children[0]["name"] == "vllm_pd_decode"
+    assert [child["name"] for child in trace_children[0]["children"]] == [
+        "vllm_pd_decode_queue",
+        "vllm_pd_decode_ttft",
+        "vllm_pd_decode_generation",
+    ]
+    assert trace_children[0]["end_offset"] == pytest.approx(0.6)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("duration, speed", [(2.0, 0.5), (0.0, None), (None, None)])
+def test_transfer_speed_uses_measured_worker_duration(duration, speed):
+    attrs = build_vllm_meta_trace_attrs(
+        {"request_metrics": {"kv_transfer_bytes": 1_000_000, "kv_transfer_worker_time_ms": duration}}
+    )
+    summary = attrs[TRACE_CHILDREN_KEY][-1]["attrs"]
+    assert summary["pd_transfer_total_mb"] == 1
+    assert summary.get("pd_transfer_speed_gb_s") == speed
 
 
 @pytest.mark.unit

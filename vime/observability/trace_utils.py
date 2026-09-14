@@ -48,6 +48,15 @@ VLLM_PD_DECODE_SEGMENTS = (
     ("pd_decode_transfer_duration", "vllm_pd_decode_transfer"),
     ("pd_decode_forward_duration", "vllm_pd_decode_forward"),
 )
+VLLM_NATIVE_PREFILL_SEGMENTS = (
+    ("pd_prefill_queue_duration", "vllm_pd_prefill_queue"),
+    ("pd_prefill_ttft_duration", "vllm_pd_prefill_ttft"),
+)
+VLLM_NATIVE_DECODE_SEGMENTS = (
+    ("queue_time", "vllm_pd_decode_queue"),
+    ("pd_decode_ttft_duration", "vllm_pd_decode_ttft"),
+    ("pd_decode_generation_duration", "vllm_pd_decode_generation"),
+)
 VLLM_PD_SUMMARY_KEYS = (
     "pd_transfer_speed_gb_s",
     "pd_transfer_total_mb",
@@ -186,6 +195,17 @@ def build_vllm_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
             ]
             if all(value is not None for value in latency_parts):
                 meta["e2e_latency"] = sum(latency_parts) / 1000
+            if request_metrics.get("remote_kv_wait_time_ms") is not None:
+                for target, source in (
+                    ("pd_decode_ttft_duration", "time_to_first_token_ms"),
+                    ("pd_decode_generation_duration", "generation_time_ms"),
+                ):
+                    if request_metrics.get(source) is not None:
+                        meta[target] = request_metrics[source] / 1000
+            transfer_duration = request_metrics.get("kv_transfer_worker_time_ms")
+            transfer_bytes = request_metrics.get("kv_transfer_bytes")
+            if transfer_bytes is not None and transfer_duration is not None and transfer_duration > 0:
+                meta["pd_transfer_speed_gb_s"] = transfer_bytes / transfer_duration / 1e6
 
         attrs.update({key: meta[key] for key in VLLM_TRACE_META_KEYS if key in meta and meta[key] is not None})
         finish_reason = meta.get("finish_reason")
@@ -209,10 +229,12 @@ def build_vllm_meta_trace_attrs(meta: dict[str, Any]) -> dict[str, Any]:
 def _build_vllm_pd_trace_children(meta: dict[str, Any]) -> list[dict[str, Any]]:
     trace_children: list[dict[str, Any]] = []
     cursor = 0.0
-    for phase_name, phase_label, segments in (
-        ("vllm_pd_prefill", "prefill", VLLM_PD_PREFILL_SEGMENTS),
-        ("vllm_pd_decode", "decode", VLLM_PD_DECODE_SEGMENTS),
+    for phase_name, phase_label, segments, native_segments in (
+        ("vllm_pd_prefill", "prefill", VLLM_PD_PREFILL_SEGMENTS, VLLM_NATIVE_PREFILL_SEGMENTS),
+        ("vllm_pd_decode", "decode", VLLM_PD_DECODE_SEGMENTS, VLLM_NATIVE_DECODE_SEGMENTS),
     ):
+        if not any(meta.get(key) is not None for key, _ in segments):
+            segments = native_segments if any(meta.get(key) is not None for key, _ in native_segments[1:]) else ()
         phase_children: list[dict[str, Any]] = []
         phase_cursor = 0.0
         for key, child_name in segments:
