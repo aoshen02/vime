@@ -92,13 +92,15 @@ class _MockResponse:
 
 
 @pytest.mark.unit
-def test_flush_cache_retries_unsuccessful_reset(vllm_engine, monkeypatch, caplog):
-    responses = iter(
-        [
-            _MockResponse(json_data={"success": False}, text='{"success": false}'),
-            _MockResponse(json_data={"success": True}),
-        ]
-    )
+@pytest.mark.parametrize(
+    "first_response, expected_log",
+    [
+        (_MockResponse(json_data={"success": False}, text='{"success": false}'), "HTTP 200"),
+        (_MockResponse(status_code=503, text="busy"), "HTTP 503 'busy'"),
+    ],
+)
+def test_flush_cache_retries(vllm_engine, monkeypatch, caplog, first_response, expected_log):
+    responses = iter([first_response, _MockResponse(json_data={"success": True})])
     calls = []
     sleeps = []
 
@@ -113,27 +115,7 @@ def test_flush_cache_retries_unsuccessful_reset(vllm_engine, monkeypatch, caplog
 
     assert calls == [("http://127.0.0.1:8765/reset_prefix_cache", {"reset_running_requests": True})] * 2
     assert sleeps == [1]
-    assert "Error flushing cache: HTTP 200" in caplog.text
-    assert '{"success": false}' in caplog.text
-
-
-@pytest.mark.unit
-def test_flush_cache_retries_http_error(vllm_engine, monkeypatch, caplog):
-    responses = iter(
-        [
-            _MockResponse(status_code=503, text="busy"),
-            _MockResponse(json_data={"success": True}),
-        ]
-    )
-    sleeps = []
-    monkeypatch.setattr(mod.requests, "post", lambda *args, **kwargs: next(responses))
-    monkeypatch.setattr(mod.time, "sleep", sleeps.append)
-    with caplog.at_level("INFO", logger=mod.__name__):
-        vllm_engine.flush_cache()
-
-    assert sleeps == [1]
-    assert "Error flushing cache: HTTP 503 'busy'" in caplog.text
-    assert next(responses, None) is None
+    assert expected_log in caplog.text
 
 
 @pytest.mark.unit

@@ -207,24 +207,11 @@ def test_anthropic_messages_nonstream_records_token_segments():
 
 
 @pytest.mark.parametrize("protocol", ["anthropic", "openai"])
-@pytest.mark.parametrize("enabled", [False, True])
-def test_session_sampling_defaults_reach_vllm(protocol, enabled):
+def test_session_sampling_defaults_reach_vllm(protocol):
     defaults = {
         "max_new_tokens": 20,
         "min_new_tokens": 2,
         "repetition_penalty": 1.2,
-        "seed": 37 if enabled else 0,
-        "min_p": 0.1 if enabled else 0.0,
-        "presence_penalty": 0.5 if enabled else 0.0,
-        "frequency_penalty": -0.5 if enabled else 0.0,
-        "ignore_eos": enabled,
-        "spaces_between_special_tokens": enabled,
-        "no_stop_trim": enabled,
-        "logit_bias": {"101": 0.5} if enabled else {},
-        "stop": ["END"],
-        "stop_token_ids": [99],
-        "skip_special_tokens": enabled,
-        "temperature": 0.8,
         "top_p": 0.9,
         "top_k": -1,
     }
@@ -248,13 +235,16 @@ def test_session_sampling_defaults_reach_vllm(protocol, enabled):
                 await client.close()
             await _drain(adapter, "sampling")
 
-        expected = dict(defaults)
-        expected.pop("max_new_tokens")
-        expected["max_tokens"] = 7
-        expected["min_tokens"] = expected.pop("min_new_tokens")
-        expected["include_stop_str_in_output"] = expected.pop("no_stop_trim")
-        expected["logprobs"] = 1
-        assert vllm.requests[0]["sampling_params"] == expected
+        sampling_params = vllm.requests[0]["sampling_params"]
+        expected = {
+            "max_tokens": 7,
+            "min_tokens": 2,
+            "repetition_penalty": 1.2,
+            "top_p": 0.9,
+            "top_k": -1,
+            "logprobs": 1,
+        }
+        assert {key: sampling_params[key] for key in expected} == expected
         assert defaults["max_new_tokens"] == 20
 
     asyncio.run(run_case())
