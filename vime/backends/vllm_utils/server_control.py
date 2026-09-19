@@ -3,9 +3,12 @@
 import asyncio
 import logging
 
-from vime.utils.http_utils import post
+from vime.utils.http_utils import get, post
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_ABORT_TIMEOUT_SECONDS = 180.0
+DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 10.0
 
 
 async def abort_inflight_requests(urls: list[str]) -> None:
@@ -22,3 +25,18 @@ async def abort_inflight_requests(urls: list[str]) -> None:
             logger.warning(f"Failed to abort requests on {url}: {e}")
 
     await asyncio.gather(*(_abort_one(url) for url in urls))
+
+
+async def get_inflight_diagnostics(urls: list[str]) -> dict[str, object]:
+    """Return bounded vLLM queue snapshots for abort timeout errors."""
+
+    async def _get_one(url: str) -> object:
+        try:
+            return await get(
+                f"{url.rstrip('/')}/load?include_inflight=true&inflight_limit=100",
+                timeout=DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS,
+            )
+        except Exception as error:
+            return {"error": repr(error)}
+
+    return dict(zip(urls, await asyncio.gather(*(_get_one(url) for url in urls)), strict=True))

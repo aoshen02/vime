@@ -15,7 +15,11 @@ import numpy as np
 import vllm_router  # noqa: F401 — ensures vllm-router is importable on startup
 from tqdm import tqdm
 
-from vime.backends.vllm_utils.server_control import abort_inflight_requests
+from vime.backends.vllm_utils.server_control import (
+    DEFAULT_ABORT_TIMEOUT_SECONDS,
+    abort_inflight_requests,
+    get_inflight_diagnostics,
+)
 from vime.observability.trace_utils import build_vllm_meta_trace_attrs, trace_function, trace_span
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
@@ -644,13 +648,19 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
 
         # Delete-type abort: drop in-flight requests without pausing the scheduler.
         await abort_inflight_requests(urls)
-        last_sweep = loop.time()
+        abort_started = last_sweep = loop.time()
 
     await asyncio.gather(*cancellable_tasks, return_exceptions=True)
 
     # make sure all the pending tasks are finished
     count = 0
     while state.pendings:
+        if server_abort and loop.time() - abort_started >= DEFAULT_ABORT_TIMEOUT_SECONDS:
+            diagnostics = await get_inflight_diagnostics(urls)
+            raise TimeoutError(
+                f"Timed out draining vLLM requests after {DEFAULT_ABORT_TIMEOUT_SECONDS:.0f}s; "
+                f"in-flight queues={diagnostics!r}"
+            )
         done, state.pendings = await asyncio.wait(
             state.pendings,
             timeout=_ABORT_RESWEEP_INTERVAL_S,

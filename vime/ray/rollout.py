@@ -3,6 +3,7 @@ import logging
 import time
 from typing import Any
 
+import psutil
 import ray
 import torch
 
@@ -23,6 +24,7 @@ from vime.utils.data import get_source
 from vime.utils.dp_schedule import build_dp_schedule
 from vime.utils.health_monitor import RolloutHealthMonitor
 from vime.utils.http_utils import init_http_client
+from vime.utils.memory_utils import get_process_host_memory_gib
 from vime.utils.misc import Box, load_function
 from vime.utils.staleness import fully_async_metrics_enabled
 from vime.utils.tensor_store import DiskTensorRef
@@ -201,6 +203,25 @@ class RolloutManager:
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+        disk_routes = [
+            sample.rollout_routed_experts
+            for sample in data
+            if isinstance(sample.rollout_routed_experts, DiskTensorRef)
+        ]
+        if disk_routes:
+            self._active_routed_experts_rollouts.add(rollout_id)
+            rss_gib, hwm_gib = get_process_host_memory_gib()
+            logger.info(
+                "R3 manager spill profile: rollout_id=%d samples=%d files=%d disk_bytes=%.3f GiB "
+                "rss=%.3f GiB hwm=%.3f GiB host_available=%.3f GiB",
+                rollout_id,
+                len(data),
+                len(disk_routes),
+                sum(ref.nbytes for ref in disk_routes) / 1024**3,
+                rss_gib,
+                hwm_gib,
+                psutil.virtual_memory().available / 1024**3,
+            )
         save_debug_rollout_data(
             self.args.save_debug_rollout_data,
             data,
