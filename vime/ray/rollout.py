@@ -24,6 +24,8 @@ from vime.utils.dp_schedule import build_dp_schedule
 from vime.utils.health_monitor import RolloutHealthMonitor
 from vime.utils.http_utils import init_http_client
 from vime.utils.misc import Box, load_function
+from vime.utils.staleness import fully_async_metrics_enabled
+from vime.utils.tensor_store import DiskTensorRef
 from vime.utils.types import Sample
 
 from .utils import Lock, add_default_ray_env_vars
@@ -77,6 +79,7 @@ class RolloutManager:
             runtime_env={"env_vars": add_default_ray_env_vars()},
         ).remote()
         self.rollout_id = -1
+        self._active_routed_experts_rollouts: set[int] = set()
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
@@ -135,10 +138,18 @@ class RolloutManager:
     def dispose(self):
         for monitor in self._health_monitors:
             monitor.stop()
+        for rollout_id in list(self._active_routed_experts_rollouts):
+            self.cleanup_rollout_data(rollout_id)
         engines = [engine for server in self.servers.values() for engine in server.all_engines if engine is not None]
         if engines:
             ray.get([engine.shutdown.remote() for engine in engines])
         logging_utils.finish_tracking(self.args)
+
+    def cleanup_rollout_data(self, rollout_id: int) -> None:
+        from vime.utils.routed_experts import cleanup_routed_experts_rollout
+
+        cleanup_routed_experts_rollout(self.args, rollout_id)
+        self._active_routed_experts_rollouts.discard(rollout_id)
 
     @property
     def server(self) -> Any | None:
@@ -282,6 +293,14 @@ class RolloutManager:
             )
             metrics = None
         else:
+            if fully_async_metrics_enabled(self.args):
+                server = self._get_updatable_server()
+                engines = [engine for engine in server.engines if engine is not None] if server else []
+                versions = ray.get([engine.get_weight_version.remote() for engine in engines])
+                valid = bool(versions) and all(
+                    str(version).isascii() and str(version).isdigit() for version in versions
+                )
+                self.args._rollout_weight_version = max(map(int, versions)) if valid else None
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             metrics = data.metrics
             data = data.samples
@@ -424,10 +443,46 @@ class RolloutManager:
             train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
             train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
 
-        if samples[0].rollout_routed_experts is not None:
-            routed_experts = [torch.as_tensor(sample.rollout_routed_experts) for sample in samples]
-            if getattr(self.args, "use_rollout_routing_replay", False):
-                validate_rollout_routed_experts_for_replay(routed_experts, self.args)
+        routed_experts_present = [sample.rollout_routed_experts is not None for sample in samples]
+        dead_sample_indices = {
+            idx
+            for idx, (present, sample) in enumerate(zip(routed_experts_present, samples, strict=True))
+            if not present and sample.loss_mask is not None and not any(sample.loss_mask)
+        }
+        live_missing = [
+            idx for idx, present in enumerate(routed_experts_present) if not present and idx not in dead_sample_indices
+        ]
+        routing_replay_enabled = getattr(self.args, "use_rollout_routing_replay", False)
+        if live_missing and (routing_replay_enabled or any(routed_experts_present)):
+            raise ValueError(f"Rollout routed experts are missing for live sample indices {live_missing[:32]}.")
+
+        if any(routed_experts_present) or (routing_replay_enabled and dead_sample_indices):
+            dtype = torch.uint8 if self.args.num_experts <= 256 else torch.int32
+            routed_experts = [
+                (
+                    (
+                        sample.rollout_routed_experts
+                        if isinstance(sample.rollout_routed_experts, DiskTensorRef)
+                        else sample.materialize_rollout_routed_experts()
+                    )
+                    if present
+                    else torch.zeros(
+                        (max(0, len(sample.tokens) - 1), self.args.num_layers, self.args.moe_router_topk), dtype=dtype
+                    )
+                )
+                for sample, present in zip(samples, routed_experts_present, strict=True)
+            ]
+            if routing_replay_enabled and any(routed_experts_present):
+                captured_pairs = [
+                    (experts, max(0, len(sample.tokens) - 1))
+                    for sample, experts, present in zip(samples, routed_experts, routed_experts_present, strict=True)
+                    if present
+                ]
+                validate_rollout_routed_experts_for_replay(
+                    [experts for experts, _ in captured_pairs],
+                    self.args,
+                    expected_rows=[rows for _, rows in captured_pairs],
+                )
             train_data["rollout_routed_experts"] = routed_experts
 
         if samples[0].train_metadata is not None:

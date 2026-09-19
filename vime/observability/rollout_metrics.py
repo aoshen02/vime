@@ -13,6 +13,7 @@ from vime.observability.metric_utils import (
     has_repetition,
 )
 from vime.utils.misc import group_by, load_function
+from vime.utils.staleness import compute_staleness_metrics, fully_async_metrics_enabled
 from vime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -270,6 +271,11 @@ def log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_t
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
+    if fully_async_metrics_enabled(args):
+        log_dict.pop("_dropped_samples", None)
+    log_dict |= dict_add_prefix(
+        compute_staleness_metrics(samples, getattr(args, "_rollout_weight_version", None)), "rollout/"
+    )
     log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
     log_dict |= dict_add_prefix(compute_perf_metrics_from_samples(args, samples, rollout_time), "perf/")
     logger.info(f"perf {rollout_id}: {log_dict}")
