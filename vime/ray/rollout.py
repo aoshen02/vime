@@ -315,6 +315,8 @@ class RolloutManager:
             metrics = None
         else:
             if fully_async_metrics_enabled(self.args):
+                # The training loop keeps serving weights fixed while collecting
+                # this batch. Query only the updatable model.
                 server = self._get_updatable_server()
                 engines = [engine for engine in server.engines if engine is not None] if server else []
                 versions = ray.get([engine.get_weight_version.remote() for engine in engines])
@@ -503,6 +505,12 @@ class RolloutManager:
                     [experts for experts, _ in captured_pairs],
                     self.args,
                     expected_rows=[rows for _, rows in captured_pairs],
+                )
+            if dead_sample_indices:
+                logger.warning(
+                    "Using all-zero routed experts for %d fully loss-masked samples (indices %s).",
+                    len(dead_sample_indices),
+                    sorted(dead_sample_indices)[:16],
                 )
             train_data["rollout_routed_experts"] = routed_experts
 

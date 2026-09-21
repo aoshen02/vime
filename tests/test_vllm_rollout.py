@@ -1000,27 +1000,22 @@ def test_eval_rollout_passk_requests_do_not_share_session_ids(patch_generate_sta
 
 @pytest.mark.unit
 def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monkeypatch):
-    from vime.backends.vllm_utils import server_control
-
     state = _PatchedGenerateState(_rollout_args())
     state.active_server_generations = 1
     monkeypatch.setattr(mod, "GenerateState", lambda args: state)
 
     aborted = asyncio.Event()
-    posted_paths: list[str] = []
+    aborted_urls: list[str] = []
 
     async def fake_get(url):
         return {"workers": [{"url": "http://w0:9000"}]}
 
-    async def fake_post(url, payload, max_retries=60, headers=None):
-        posted_paths.append(url)
-        if url.endswith("/abort_requests"):
-            aborted.set()
-        return {}
+    async def abort_servers(urls):
+        aborted_urls.extend(urls)
+        aborted.set()
 
     monkeypatch.setattr(mod, "get", fake_get)
-    # abort() drives the delete-type sweep through the server_control helper.
-    monkeypatch.setattr(server_control, "post", fake_post)
+    monkeypatch.setattr(mod, "abort_servers_until_idle", abort_servers)
 
     sample = Sample(index=0, prompt="p")
 
@@ -1036,8 +1031,7 @@ def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monke
 
     aborted_samples = asyncio.run(run_abort())
 
-    # Only /abort_requests is posted -- never /pause or /resume.
-    assert posted_paths and all(u.endswith("/abort_requests") for u in posted_paths)
+    assert aborted_urls == ["http://w0:9000"]
     assert state.pendings == set()
     # partial_rollout is off by default, so drained groups are discarded, not returned.
     assert aborted_samples == []
@@ -1045,8 +1039,6 @@ def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monke
 
 @pytest.mark.unit
 def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_state, monkeypatch):
-    from vime.backends.vllm_utils import server_control
-
     args = _rollout_args(partial_rollout=True)
     state = _PatchedGenerateState(args)
     state.active_server_generations = 1
@@ -1057,13 +1049,11 @@ def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_stat
     async def fake_get(url):
         return {"workers": [{"url": "http://w0:9000"}]}
 
-    async def fake_post(url, payload, max_retries=60, headers=None):
-        if url.endswith("/abort_requests"):
-            aborted.set()
-        return {}
+    async def abort_servers(urls):
+        aborted.set()
 
     monkeypatch.setattr(mod, "get", fake_get)
-    monkeypatch.setattr(server_control, "post", fake_post)
+    monkeypatch.setattr(mod, "abort_servers_until_idle", abort_servers)
 
     sample = Sample(index=0, prompt="p")
     sample.response = "partial"
@@ -1166,7 +1156,7 @@ def test_stream_cancellation_closes_http_and_preserves_prefix(patch_generate_sta
     monkeypatch.setattr(mod, "generate", server_generate)
     get_mock = AsyncMock(return_value={"workers": [{"url": "http://worker:9000"}]})
     monkeypatch.setattr(mod, "get", get_mock)
-    monkeypatch.setattr(mod, "abort_inflight_requests", abort_servers)
+    monkeypatch.setattr(mod, "abort_servers_until_idle", abort_servers)
     sample = Sample(prompt="abc", generate_function_path="streaming")
 
     async def exercise():

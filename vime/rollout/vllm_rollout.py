@@ -15,11 +15,7 @@ import numpy as np
 import vllm_router  # noqa: F401 — ensures vllm-router is importable on startup
 from tqdm import tqdm
 
-from vime.backends.vllm_utils.server_control import (
-    DEFAULT_ABORT_TIMEOUT_SECONDS,
-    abort_inflight_requests,
-    get_inflight_diagnostics,
-)
+from vime.backends.vllm_utils.server_control import abort_servers_until_idle
 from vime.observability.trace_utils import build_vllm_meta_trace_attrs, trace_function, trace_span
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
@@ -44,9 +40,6 @@ __all__ = ["generate_rollout", "get_model_url", "prime_encoder"]
 logger = logging.getLogger(__name__)
 
 _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
-
-# Re-sweep interval while draining; bounds how long a late straggler can run.
-_ABORT_RESWEEP_INTERVAL_S = 3.0
 
 
 def _coerce_flat_int_token_ids(ids: Any) -> list[int]:
@@ -639,39 +632,18 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     for task in cancellable_tasks:
         task.cancel()
 
-    loop = asyncio.get_running_loop()
-    server_abort = state.active_server_generations > 0
-    if server_abort:
+    if state.active_server_generations > 0:
         base = f"http://{args.vllm_router_ip}:{args.vllm_router_port}"
         response = await get(f"{base}/workers")
         urls = [worker["url"] for worker in response["workers"]]
-
-        # Delete-type abort: drop in-flight requests without pausing the scheduler.
-        await abort_inflight_requests(urls)
-        abort_started = last_sweep = loop.time()
+        await abort_servers_until_idle(urls)
 
     await asyncio.gather(*cancellable_tasks, return_exceptions=True)
 
     # make sure all the pending tasks are finished
     count = 0
     while state.pendings:
-        if server_abort and loop.time() - abort_started >= DEFAULT_ABORT_TIMEOUT_SECONDS:
-            diagnostics = await get_inflight_diagnostics(urls)
-            raise TimeoutError(
-                f"Timed out draining vLLM requests after {DEFAULT_ABORT_TIMEOUT_SECONDS:.0f}s; "
-                f"in-flight queues={diagnostics!r}"
-            )
-        done, state.pendings = await asyncio.wait(
-            state.pendings,
-            timeout=_ABORT_RESWEEP_INTERVAL_S,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        # Re-sweep on a fixed interval to truncate late stragglers (e.g. a
-        # multi-turn turn-2 fired after the initial abort), regardless of drain.
-        if server_abort and loop.time() - last_sweep >= _ABORT_RESWEEP_INTERVAL_S:
-            await abort_inflight_requests(urls)
-            last_sweep = loop.time()
+        done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
 
         if not args.partial_rollout:
             continue
