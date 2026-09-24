@@ -66,6 +66,9 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     Writes the cumulative state from each SSE chunk onto ``sample`` so an
     abort that cuts the stream still leaves a coherent partial sample behind.
     """
+    if getattr(args, "use_score_centering", False):
+        raise ValueError("Score centering does not support streaming rollout.")
+
     if args.ci_test:
         assert isinstance(sample.prompt, str)
 

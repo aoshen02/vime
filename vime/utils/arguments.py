@@ -631,18 +631,6 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
-                "--disable-rollout-global-dataset",
-                action="store_false",
-                dest="rollout_global_dataset",
-                help=(
-                    "Whether to use a global dataset for rollout. "
-                    "If set, the rollout will use the `--prompt-data` as the prompt dataset, "
-                    "and the prompts for rollout will be sampled from the dataset. "
-                    "If not set, you need to manage the data by your self."
-                ),
-            )
-
-            parser.add_argument(
                 "--data-source-path",
                 type=str,
                 default="vime.rollout.data_source.RolloutDataSourceWithBuffer",
@@ -846,6 +834,31 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         def add_algo_arguments(parser):
+            parser.add_argument(
+                "--pg-loss-type",
+                choices=["ppo", "reinforce"],
+                default=None,
+                help=(
+                    "Policy gradient objective. Defaults to REINFORCE with score centering, "
+                    "otherwise preserves the existing PPO/CISPO objective."
+                ),
+            )
+            parser.add_argument(
+                "--use-score-centering",
+                action="store_true",
+                help=(
+                    "Use the REINFORCE score-centering objective from "
+                    "Score Centering Stabilizes Off-policy Reinforcement Learning "
+                    "(https://arxiv.org/abs/2609.20807). Uses exact centering on the complete replay support "
+                    "when rollout-top-p < 1, otherwise uses the paper's top-k tail approximation."
+                ),
+            )
+            parser.add_argument(
+                "--score-centering-top-k",
+                type=int,
+                default=128,
+                help="Number of sampler top logprobs retained when rollout-top-p=1; ignored for exact top-p centering.",
+            )
             parser.add_argument(
                 "--ref-load",
                 type=str,
@@ -1069,7 +1082,10 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 "--use-tis",
                 action="store_true",
                 default=False,
-                help="Enable TIS from https://fengyao.notion.site/off-policy-rl for off-policy importance sampling.",
+                help=(
+                    "Enable TIS for off-policy importance sampling. With --use-score-centering, "
+                    "center the weighted scores using the same --tis-clip/--tis-clip-low bounds."
+                ),
             )
             parser.add_argument(
                 "--tis-clip",
@@ -1905,6 +1921,11 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 
 def vime_validate_args(args):
+    from vime.utils.ppo_utils import get_pg_loss_type
+    from vime.utils.score_centering import validate_score_centering_args
+
+    get_pg_loss_type(args)
+    validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)
     args.dspark_enabled = (getattr(args, "vllm_speculative_config", None) or {}).get("method") == "dspark"
 
@@ -1992,7 +2013,7 @@ def vime_validate_args(args):
             "require advantage normalization. Please add `--normalize-advantages` to your command."
         )
 
-    if args.use_rollout_logprobs:
+    if args.use_rollout_logprobs and get_pg_loss_type(args) != "reinforce":
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.get_mismatch_metrics:
@@ -2147,11 +2168,6 @@ def vime_validate_args(args):
     if args.num_epoch is not None:
         if args.num_rollout is not None:
             logger.info("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
-        else:
-            assert args.rollout_global_dataset, (
-                "num_epoch is set, but rollout_global_dataset is not set, "
-                "please remove --disable-rollout-global-dataset to use num_epoch"
-            )
     else:
         # if num_epoch is not set, we should set num_rollout
         assert args.num_rollout is not None, (

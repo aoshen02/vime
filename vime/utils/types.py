@@ -1,7 +1,9 @@
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+import numpy as np
 import torch
 
 from vime.utils.misc import decode_int32_meta_array
@@ -120,10 +122,13 @@ class Sample:
     loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
+    rollout_topk_token_ids: np.ndarray | torch.Tensor | list[list[int]] | DiskTensorRef | None = None
+    rollout_topk_log_probs: np.ndarray | torch.Tensor | list[list[float]] | DiskTensorRef | None = None
     # Ragged top-p nucleus token ids replayed from rollout sampling. For response
     # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
     rollout_top_p_token_ids: list[int] | torch.Tensor | None = None
     rollout_top_p_token_offsets: list[int] | torch.Tensor | None = None
+    rollout_top_p_log_probs: np.ndarray | torch.Tensor | list[float] | None = None
     rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | DiskTensorRef | None = (
         None  # Routed experts from rollout engine
     )
@@ -283,10 +288,66 @@ class Sample:
                 raise ValueError("non-trainable response tokens should not pass rollout log probabilities.")
             log_probs = [0.0] * len(tokens)
 
+        previous_response_length = self.response_length
+        if tokens and getattr(args, "use_score_centering", False) and getattr(args, "rollout_top_p", 1.0) == 1.0:
+            from .score_centering import extract_sampler_topk
+
+            k = args.score_centering_top_k
+            for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                value = getattr(self, key)
+                if isinstance(value, DiskTensorRef):
+                    setattr(self, key, value.load().numpy())
+            if trainable:
+                ids, logps = extract_sampler_topk(meta_info or {}, len(tokens), k)
+            else:
+                # Dummy distributions for masked tool/environment tokens. Distinct
+                # ids and finite logprobs keep the loss finite before masking.
+                ids = np.broadcast_to(np.arange(k, dtype=np.int32), (len(tokens), k)).copy()
+                logps = np.full((len(tokens), k), -math.log(k), dtype=np.float32)
+            if self.rollout_topk_token_ids is None:
+                if previous_response_length and any(self.loss_mask or [1] * previous_response_length):
+                    raise ValueError("Existing trainable response tokens have no sampler top-k data.")
+                self.rollout_topk_token_ids = np.broadcast_to(
+                    np.arange(k, dtype=np.int32), (previous_response_length, k)
+                ).copy()
+                self.rollout_topk_log_probs = np.full((previous_response_length, k), -math.log(k), dtype=np.float32)
+            self.rollout_topk_token_ids = (
+                np.concatenate((np.asarray(self.rollout_topk_token_ids, dtype=np.int32), ids))
+                if previous_response_length
+                else ids
+            )
+            self.rollout_topk_log_probs = (
+                np.concatenate((np.asarray(self.rollout_topk_log_probs, dtype=np.float32), logps))
+                if previous_response_length
+                else logps
+            )
+        if tokens and getattr(args, "use_score_centering", False) and getattr(args, "rollout_top_p", 1.0) < 1:
+            from .score_centering import extract_sampler_top_p, validate_sampler_top_p
+
+            if self.rollout_top_p_token_ids is None:
+                if previous_response_length and any(self.loss_mask or [1] * previous_response_length):
+                    raise ValueError("Existing trainable response tokens have no sampler top-p data.")
+                self.rollout_top_p_token_ids = torch.empty(0, dtype=torch.int32)
+                self.rollout_top_p_token_offsets = torch.zeros(previous_response_length + 1, dtype=torch.int32)
+                self.rollout_top_p_log_probs = np.empty(0, dtype=np.float32)
+            if trainable:
+                ids, offsets, logps = extract_sampler_top_p(meta_info or {}, len(tokens))
+                validate_sampler_top_p(ids, offsets, logps, len(tokens), tokens=tokens, sampled_logps=log_probs)
+                self.rollout_top_p_token_ids, self.rollout_top_p_token_offsets = _merge_rollout_top_p_token_data(
+                    self.rollout_top_p_token_ids,
+                    self.rollout_top_p_token_offsets,
+                    torch.as_tensor(ids),
+                    torch.as_tensor(offsets),
+                )
+                self.rollout_top_p_log_probs = np.concatenate((np.asarray(self.rollout_top_p_log_probs), logps))
+                # Already appended the validated replay data above.
+                meta_info = {
+                    key: value
+                    for key, value in (meta_info or {}).items()
+                    if key not in (*_TOP_P_TOKEN_ID_META_KEYS, *_TOP_P_TOKEN_OFFSET_META_KEYS)
+                }
         if text is not None:
             self.response += text
-
-        previous_response_length = self.response_length
         if tokens:
             self.tokens += tokens
             self.response_length += len(tokens)
@@ -466,6 +527,10 @@ class Sample:
         return tensor
 
     def _validate_response_metadata_lengths(self):
+        for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+            value = getattr(self, key)
+            if value is not None and len(value) != self.response_length:
+                raise ValueError(f"{key} length {len(value)} != response_length {self.response_length}")
         if self.loss_mask is not None and len(self.loss_mask) != self.response_length:
             raise ValueError(f"loss_mask length {len(self.loss_mask)} != response_length {self.response_length}")
 
@@ -486,6 +551,8 @@ class Sample:
                 f"len(offsets)={offsets.numel()}, response_length={self.response_length}."
             )
         token_id_count = _numel(self.rollout_top_p_token_ids)
+        if self.rollout_top_p_log_probs is not None and len(self.rollout_top_p_log_probs) != token_id_count:
+            raise ValueError("Top-p logprobs must align with the replay token ids.")
         if int(offsets[-1]) != token_id_count:
             raise ValueError(
                 "rollout top-p token ids/offsets mismatch: "

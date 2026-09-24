@@ -23,7 +23,7 @@ import os
 import subprocess
 
 GPU_QUEUE = "mithril-h100-pool"
-CI_IMAGE = "vllm/vime:latest"
+CI_IMAGE = os.environ.get("VIME_CI_IMAGE", "vllm/vime:latest")
 HF_CACHE_HOST_PATH = "/mnt/hf-cache"
 HF_HOME = "/root/.cache/huggingface"
 NODE_INSTANCE_TYPE = "gpu-h100-sxm"
@@ -66,6 +66,7 @@ SUITES = {
         ("test_qwen2.5_0.5B_debug_rollout_then_train.py", 8, "", {}),
         ("test_qwen2.5_0.5B_opd_vllm.py", 8, "", {}),
         ("test_qwen2.5_0.5B_fanout_short.py", 4, "", {}),
+        ("test_qwen2.5_0.5B_score_centering.py", 2, "", {}),
         ("test_qwen2.5_0.5B_debug_train_dump_e2e.py", 8, "", {}),
         ("test_qwen3_4B_external_pd.py", 6, "", {"VIME_TEST_UPDATE_MODE": "delta"}),
     ],

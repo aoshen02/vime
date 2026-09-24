@@ -140,7 +140,7 @@ steps:
         -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
         -e GLOO_SOCKET_IFNAME=lo -e TP_SOCKET_IFNAME=lo \
         -v "$$PWD:/workspace" -w /workspace \
-        vllm/vime:latest bash -lc '
+        "$${VIME_CI_IMAGE:-vllm/vime:latest}" bash -lc '
           set -euo pipefail
           pip install -q -e . --no-deps --break-system-packages
           for test_file in \
@@ -161,6 +161,8 @@ steps:
             tests/test_model_provider_freeze.py \
             tests/test_policy_loss.py \
             tests/test_ppo_kl_metric.py \
+            tests/test_score_centering.py \
+            tests/test_score_centering_transport.py \
             tests/test_process_rollout_data.py \
             tests/test_qwen3_5_vl_native.py \
             tests/test_qwen3_linear_attention_cu_seqlens.py \

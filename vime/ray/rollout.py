@@ -192,7 +192,6 @@ class RolloutManager:
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, parallel_configs
 
     def get_num_rollout_per_epoch(self):
-        assert self.args.rollout_global_dataset
         return len(self.data_source) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
@@ -204,9 +203,10 @@ class RolloutManager:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
         disk_routes = [
-            sample.rollout_routed_experts
+            value
             for sample in data
-            if isinstance(sample.rollout_routed_experts, DiskTensorRef)
+            for value in (sample.rollout_routed_experts, sample.rollout_topk_token_ids, sample.rollout_topk_log_probs)
+            if isinstance(value, DiskTensorRef)
         ]
         if disk_routes:
             self._active_routed_experts_rollouts.add(rollout_id)
@@ -450,6 +450,34 @@ class RolloutManager:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
+        if getattr(self.args, "use_score_centering", False):
+            from vime.utils.score_centering import validate_sampler_top_p, validate_sampler_topk
+
+            for sample in samples:
+                if sample.rollout_log_probs is None or len(sample.rollout_log_probs) != sample.response_length:
+                    raise ValueError("Score centering requires sampler logprobs for every response token.")
+                if self.args.rollout_top_p < 1:
+                    if sample.response_length == 0 and sample.rollout_top_p_token_ids is None:
+                        sample.rollout_top_p_token_ids = torch.empty(0, dtype=torch.int32)
+                        sample.rollout_top_p_token_offsets = torch.zeros(1, dtype=torch.int32)
+                        sample.rollout_top_p_log_probs = torch.empty(0, dtype=torch.float32)
+                    validate_sampler_top_p(
+                        sample.rollout_top_p_token_ids,
+                        sample.rollout_top_p_token_offsets,
+                        sample.rollout_top_p_log_probs,
+                        sample.response_length,
+                        sample.loss_mask,
+                        sample.tokens[-sample.response_length :] if sample.response_length else [],
+                        sample.rollout_log_probs,
+                    )
+                else:
+                    validate_sampler_topk(sample, self.args.score_centering_top_k)
+            if self.args.rollout_top_p < 1:
+                train_data["rollout_top_p_log_probs"] = [sample.rollout_top_p_log_probs for sample in samples]
+            else:
+                train_data["rollout_topk_token_ids"] = [sample.rollout_topk_token_ids for sample in samples]
+                train_data["rollout_topk_log_probs"] = [sample.rollout_topk_log_probs for sample in samples]
+
         if getattr(self.args, "rollout_top_p", 1.0) != 1.0:
             for sample in samples:
                 assert sample.rollout_top_p_token_ids is not None
@@ -459,10 +487,9 @@ class RolloutManager:
                     f"!= response length + 1 {sample.response_length + 1}"
                 )
                 offset_end = int(sample.rollout_top_p_token_offsets[-1])
-                assert offset_end == len(sample.rollout_top_p_token_ids), (
-                    f"top-p token offsets[-1] {offset_end} "
-                    f"!= token ids length {len(sample.rollout_top_p_token_ids)}"
-                )
+                assert offset_end == len(
+                    sample.rollout_top_p_token_ids
+                ), f"top-p token offsets[-1] {offset_end} != token ids length {len(sample.rollout_top_p_token_ids)}"
             train_data["rollout_top_p_token_ids"] = [sample.rollout_top_p_token_ids for sample in samples]
             train_data["rollout_top_p_token_offsets"] = [sample.rollout_top_p_token_offsets for sample in samples]
 
@@ -572,8 +599,11 @@ class RolloutManager:
                 "rollout_ids",
                 "rollout_mask_sums",
                 "rollout_log_probs",
+                "rollout_topk_token_ids",
+                "rollout_topk_log_probs",
                 "rollout_top_p_token_ids",
                 "rollout_top_p_token_offsets",
+                "rollout_top_p_log_probs",
                 "rollout_routed_experts",
                 "source_names",
                 "prompt",

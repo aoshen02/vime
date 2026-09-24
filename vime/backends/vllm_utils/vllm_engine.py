@@ -686,6 +686,8 @@ def _compute_server_args(
         kwargs["per_request_spec_decode_metrics"] = "summary"
     if getattr(args, "rollout_top_p", 1.0) != 1.0:
         kwargs["return_sampling_mask"] = True
+    if getattr(args, "use_score_centering", False) and getattr(args, "rollout_top_p", 1.0) == 1.0:
+        kwargs["max_logprobs"] = args.score_centering_top_k + 1
     if args.fp16:
         kwargs["dtype"] = "float16"
 

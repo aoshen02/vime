@@ -207,13 +207,13 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-def _build_inference_sampling_params(sampling_params: dict[str, Any]) -> dict[str, Any]:
+def _build_inference_sampling_params(sampling_params: dict[str, Any], logprobs: int = 1) -> dict[str, Any]:
     """Map rollout ``sampling_params`` to vLLM ``/inference/v1/generate`` body."""
     sp: dict[str, Any] = {
         "max_tokens": sampling_params["max_new_tokens"],
         "temperature": sampling_params["temperature"],
         "top_p": sampling_params["top_p"],
-        "logprobs": 1,
+        "logprobs": logprobs,
     }
     tk = sampling_params.get("top_k")
     if tk is not None and (tk > 0 or tk == -1):
@@ -251,6 +251,53 @@ def _inference_generate_tokens_and_logprobs(choice: dict[str, Any]) -> tuple[lis
         for index in range(len(token_ids))
     ]
     return token_ids, log_probs
+
+
+def _score_centering_metadata(
+    choice: dict[str, Any], token_ids: list[int], *, top_p: float, top_k: int
+) -> tuple[dict[str, Any], list[float] | None]:
+    content = (choice.get("logprobs") or {}).get("content") or []
+    if len(content) != len(token_ids):
+        raise ValueError("Score centering requires top logprobs for every generated token.")
+
+    rows = []
+    for item in content:
+        row = {}
+        for entry in item.get("top_logprobs") or []:
+            token = entry.get("token", "")
+            if token.startswith("token_id:"):
+                row[int(token.removeprefix("token_id:"))] = float(entry["logprob"])
+        rows.append(row)
+
+    if top_p == 1.0:
+        heads = [sorted(row.items(), key=lambda item: item[1], reverse=True)[:top_k] for row in rows]
+        if any(len(head) != top_k for head in heads):
+            raise ValueError(f"Score centering requires {top_k} sampler top logprobs per token.")
+        return {
+            "score_centering_topk": (
+                np.asarray([[token_id for token_id, _ in head] for head in heads], dtype=np.int32),
+                np.asarray([[logprob for _, logprob in head] for head in heads], dtype=np.float32),
+            )
+        }, None
+
+    support = choice.get("sampling_mask")
+    if not isinstance(support, list) or len(support) != len(token_ids):
+        raise ValueError("Top-p score centering requires a sampling mask for every generated token.")
+    ids = np.asarray([token_id for row in support for token_id in row], dtype=np.int32)
+    offsets = np.cumsum([0, *(len(row) for row in support)], dtype=np.int32)
+    normalized_logprobs = []
+    sampled_logprobs = []
+    for sampled_token, support_ids, row in zip(token_ids, support, rows, strict=True):
+        try:
+            values = np.asarray([row[token_id] for token_id in support_ids], dtype=np.float64)
+        except KeyError as error:
+            raise ValueError("Top-p score centering requires logprobs for the complete sampling mask.") from error
+        values -= np.logaddexp.reduce(values)
+        normalized_logprobs.extend(values)
+        sampled_logprobs.append(float(values[support_ids.index(sampled_token)]))
+    return {
+        "score_centering_top_p": (ids, offsets, np.asarray(normalized_logprobs, dtype=np.float32))
+    }, sampled_logprobs
 
 
 def _mm_render_response_to_generate_body(render_data: Any, model: str) -> dict[str, Any]:
@@ -364,7 +411,13 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status = Sample.Status.TRUNCATED
         return sample
 
-    inference_sampling_params = _build_inference_sampling_params(sampling_params)
+    score_centering = getattr(args, "use_score_centering", False)
+    if score_centering:
+        from vime.utils.score_centering import score_centering_request
+
+        score_centering_request(args, sampling_params)
+    logprobs = (-1 if args.rollout_top_p < 1 else args.score_centering_top_k + 1) if score_centering else 1
+    inference_sampling_params = _build_inference_sampling_params(sampling_params, logprobs)
 
     messages = build_multimodal_messages(sample.prompt, sample.multimodal_inputs)
 
@@ -412,6 +465,17 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     # Parse token_ids and logprobs from vLLM response
     new_response_tokens, new_response_log_probs = _inference_generate_tokens_and_logprobs(choice)
+    meta_info = _inference_generate_meta_info(output)
+    if score_centering:
+        score_metadata, normalized_logprobs = _score_centering_metadata(
+            choice,
+            new_response_tokens,
+            top_p=args.rollout_top_p,
+            top_k=args.score_centering_top_k,
+        )
+        meta_info.update(score_metadata)
+        if normalized_logprobs is not None:
+            new_response_log_probs = normalized_logprobs
 
     # Decode text from token_ids
     skip_sp = sampling_params.get("skip_special_tokens")
@@ -423,7 +487,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         tokens=new_response_tokens,
         log_probs=new_response_log_probs,
         trainable=True,
-        meta_info=_inference_generate_meta_info(output),
+        meta_info=meta_info,
         text=text,
     )
 
@@ -524,6 +588,10 @@ async def generate_and_rm(
         return sample
 
     state = GenerateState(args)
+
+    if evaluation and getattr(args, "use_score_centering", False):
+        args = copy.copy(args)
+        args.use_score_centering = False
 
     # generate
     async with state.semaphore:
@@ -680,7 +748,6 @@ async def generate_rollout_async(
             - data: a list of groups of samples generated by the rollout, length equals `rollout_batch_size`
             - aborted_samples: any partial groups collected during abort when partial_rollout is enabled
     """
-    assert args.rollout_global_dataset
 
     state = GenerateState(args)
 
@@ -931,7 +998,6 @@ def generate_rollout(
     Returns:
         RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout
     """
-    assert args.rollout_global_dataset
     if evaluation:
         output, _ = run(eval_rollout(args, rollout_id))
         return output
