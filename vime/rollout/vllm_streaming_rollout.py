@@ -47,6 +47,7 @@ from vime.rollout.vllm_rollout import (
     _build_inference_sampling_params,
     _coerce_flat_int_token_ids,
     _inference_generate_meta_info,
+    _inference_generate_metrics,
     _mm_render_response_to_generate_body,
     _prepare_prompt_ids,
     prime_encoder,
@@ -146,7 +147,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     last_choice: dict[str, Any] | None = None
     last_usage: dict[str, Any] | None = None
     weight_version: str | None = None
-    request_spec_decode_stats: dict[str, int] | None = None
+    response_metrics: dict[str, Any] = {}
     trace_metadata: dict[str, Any] = {}
     finish_reason: Any = None
 
@@ -172,9 +173,11 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
 
                 if chunk.get("weight_version") is not None:
                     weight_version = str(chunk["weight_version"])
-                if chunk.get("request_spec_decode_stats") is not None:
-                    request_spec_decode_stats = chunk["request_spec_decode_stats"]
-                for key in ("request_id", "request_metrics"):
+                chunk_metrics = _inference_generate_metrics(chunk)
+                if chunk_metrics:
+                    response_metrics.update(chunk_metrics)
+                    trace_metadata["metrics"] = response_metrics
+                for key in ("request_id",):
                     if chunk.get(key) is not None:
                         trace_metadata[key] = chunk[key]
 
@@ -257,14 +260,13 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
             meta["prompt_tokens"] = last_usage.get("prompt_tokens", 0)
             meta["completion_tokens"] = last_usage.get("completion_tokens", 0)
             meta["cached_tokens"] = (last_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-        if request_spec_decode_stats:
-            meta["spec_accept_token_num"] = request_spec_decode_stats.get(
-                "num_accepted_draft_tokens", request_spec_decode_stats.get("num_accepted_tokens", 0)
+        spec_stats = response_metrics.get("speculative_decoding")
+        if spec_stats:
+            meta["spec_accept_token_num"] = spec_stats.get(
+                "num_accepted_draft_tokens", spec_stats.get("num_accepted_tokens", 0)
             )
-            meta["spec_draft_token_num"] = request_spec_decode_stats.get("num_draft_tokens", 0)
-            meta["spec_verify_ct"] = request_spec_decode_stats.get(
-                "num_spec_steps", request_spec_decode_stats.get("num_verify_steps", 0)
-            )
+            meta["spec_draft_token_num"] = spec_stats.get("num_draft_tokens", 0)
+            meta["spec_verify_ct"] = spec_stats.get("num_spec_steps", spec_stats.get("num_verify_steps", 0))
         if new_response_tokens:
             meta["output_token_logprobs"] = [
                 [float(lp), int(tid)] for lp, tid in zip(new_response_log_probs, new_response_tokens, strict=True)

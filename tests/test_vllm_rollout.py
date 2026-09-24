@@ -152,12 +152,13 @@ def _generate_response(
     }
     if weight_version is not None:
         response["weight_version"] = weight_version
+    metrics = dict(request_metrics or {})
     if request_spec_decode_stats is not None:
-        response["request_spec_decode_stats"] = request_spec_decode_stats
+        metrics["speculative_decoding"] = request_spec_decode_stats
     if sampling_mask is not None:
         response["choices"][0]["sampling_mask"] = sampling_mask
-    if request_metrics is not None:
-        response["request_metrics"] = request_metrics
+    if metrics:
+        response["metrics"] = metrics
     return response
 
 
@@ -474,10 +475,12 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
                 {
                     "request_id": "stream-7",
                     "weight_version": "step-7",
-                    "request_spec_decode_stats": {
-                        "num_accepted_tokens": 6,
-                        "num_draft_tokens": 8,
-                        "num_verify_steps": 2,
+                    "metrics": {
+                        "speculative_decoding": {
+                            "num_accepted_tokens": 6,
+                            "num_draft_tokens": 8,
+                            "num_verify_steps": 2,
+                        }
                     },
                     "choices": [
                         {
@@ -504,7 +507,7 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
                     "request_id": "stream-7",
                     "choices": [],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 2},
-                    "request_metrics": {"queue_time_ms": 100},
+                    "metrics": {"queue_time_ms": 100},
                 },
             ]
             if terminal_only:

@@ -494,6 +494,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     return sample
 
 
+def _inference_generate_metrics(output: dict[str, Any]) -> dict[str, Any]:
+    metrics = output.get("metrics", output.get("request_metrics"))
+    return metrics if isinstance(metrics, dict) else {}
+
+
 def _inference_generate_meta_info(output: dict[str, Any]) -> dict[str, Any]:
     choice = output["choices"][0]
     # Build meta_info from the vLLM `choices` response format.
@@ -514,7 +519,8 @@ def _inference_generate_meta_info(output: dict[str, Any]) -> dict[str, Any]:
         meta["prompt_tokens"] = usage.get("prompt_tokens", 0)
         meta["completion_tokens"] = usage.get("completion_tokens", 0)
         meta["cached_tokens"] = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-    spec_stats = output.get("request_spec_decode_stats")
+    metrics = _inference_generate_metrics(output)
+    spec_stats = metrics.get("speculative_decoding", output.get("request_spec_decode_stats"))
     if spec_stats:
         meta["spec_accept_token_num"] = spec_stats.get(
             "num_accepted_draft_tokens", spec_stats.get("num_accepted_tokens", 0)
