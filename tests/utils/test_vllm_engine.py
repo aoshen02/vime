@@ -283,6 +283,15 @@ def test_compute_server_args_applies_rollout_and_dtype_flags(vllm_args):
 
 
 @pytest.mark.unit
+def test_compute_server_args_enables_sampling_mask_logprobs_for_score_centering(vllm_args):
+    vllm_args.rollout_top_p = 0.9
+    vllm_args.use_score_centering = True
+    sa, _ = mod._compute_server_args(vllm_args, rank=0, dist_init_addr=None, host="127.0.0.1", port=8000)
+    assert sa["return_sampling_mask"] is True
+    assert sa["return_sampling_mask_logprobs"] is True
+
+
+@pytest.mark.unit
 def test_compute_server_args_applies_max_model_len_from_rollout_context(vllm_args):
     vllm_args.rollout_max_context_len = 8192
     vllm_args.vllm_max_model_len = None

@@ -260,16 +260,15 @@ def _score_centering_metadata(
     if len(content) != len(token_ids):
         raise ValueError("Score centering requires top logprobs for every generated token.")
 
-    rows = []
-    for item in content:
-        row = {}
-        for entry in item.get("top_logprobs") or []:
-            token = entry.get("token", "")
-            if token.startswith("token_id:"):
-                row[int(token.removeprefix("token_id:"))] = float(entry["logprob"])
-        rows.append(row)
-
     if top_p == 1.0:
+        rows = []
+        for item in content:
+            row = {}
+            for entry in item.get("top_logprobs") or []:
+                token = entry.get("token", "")
+                if token.startswith("token_id:"):
+                    row[int(token.removeprefix("token_id:"))] = float(entry["logprob"])
+            rows.append(row)
         heads = [sorted(row.items(), key=lambda item: item[1], reverse=True)[:top_k] for row in rows]
         if any(len(head) != top_k for head in heads):
             raise ValueError(f"Score centering requires {top_k} sampler top logprobs per token.")
@@ -283,18 +282,21 @@ def _score_centering_metadata(
     support = choice.get("sampling_mask")
     if not isinstance(support, list) or len(support) != len(token_ids):
         raise ValueError("Top-p score centering requires a sampling mask for every generated token.")
+    support_logprobs = choice.get("sampling_mask_logprobs")
+    if not isinstance(support_logprobs, list) or len(support_logprobs) != len(support):
+        raise ValueError("Top-p score centering requires logprobs aligned with the sampling mask.")
     ids = np.asarray([token_id for row in support for token_id in row], dtype=np.int32)
     offsets = np.cumsum([0, *(len(row) for row in support)], dtype=np.int32)
     normalized_logprobs = []
     sampled_logprobs = []
-    for sampled_token, support_ids, row in zip(token_ids, support, rows, strict=True):
+    for sampled_token, support_ids, logprobs in zip(token_ids, support, support_logprobs, strict=True):
+        if len(support_ids) != len(logprobs):
+            raise ValueError("Top-p score centering requires logprobs aligned with the sampling mask.")
         try:
-            values = np.asarray([row[token_id] for token_id in support_ids], dtype=np.float64)
-        except KeyError as error:
-            raise ValueError("Top-p score centering requires logprobs for the complete sampling mask.") from error
-        values -= np.logaddexp.reduce(values)
-        normalized_logprobs.extend(values)
-        sampled_logprobs.append(float(values[support_ids.index(sampled_token)]))
+            sampled_logprobs.append(float(logprobs[support_ids.index(sampled_token)]))
+        except ValueError as error:
+            raise ValueError("Sampled token is missing from the top-p sampling mask.") from error
+        normalized_logprobs.extend(logprobs)
     return {
         "score_centering_top_p": (ids, offsets, np.asarray(normalized_logprobs, dtype=np.float32))
     }, sampled_logprobs
@@ -416,7 +418,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         from vime.utils.score_centering import score_centering_request
 
         score_centering_request(args, sampling_params)
-    logprobs = (-1 if args.rollout_top_p < 1 else args.score_centering_top_k + 1) if score_centering else 1
+    logprobs = args.score_centering_top_k + 1 if score_centering and args.rollout_top_p == 1 else 1
     inference_sampling_params = _build_inference_sampling_params(sampling_params, logprobs)
 
     messages = build_multimodal_messages(sample.prompt, sample.multimodal_inputs)

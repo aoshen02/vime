@@ -303,7 +303,7 @@ def test_generate_requests_complete_top_p_probabilities(monkeypatch):
     monkeypatch.setattr(rollout, "_prepare_prompt_ids", lambda *_: [9])
 
     async def post(url, payload, **kwargs):
-        assert payload["sampling_params"]["logprobs"] == -1
+        assert payload["sampling_params"]["logprobs"] == 1
         assert kwargs == {"headers": None}
         return {
             "choices": [
@@ -311,21 +311,16 @@ def test_generate_requests_complete_top_p_probabilities(monkeypatch):
                     "token_ids": [4, 2],
                     "finish_reason": "stop",
                     "sampling_mask": [[1, 4], [2]],
+                    "sampling_mask_logprobs": [[float(np.log(0.3)), float(np.log(0.7))], [0.0]],
                     "logprobs": {
                         "content": [
                             {
                                 "logprob": float(np.log(0.7)),
-                                "top_logprobs": [
-                                    {"token": "token_id:1", "logprob": float(np.log(0.3))},
-                                    {"token": "token_id:4", "logprob": float(np.log(0.7))},
-                                ],
+                                "top_logprobs": [{"token": "token_id:4", "logprob": float(np.log(0.7))}],
                             },
                             {
                                 "logprob": -2.0,
-                                "top_logprobs": [
-                                    {"token": "token_id:2", "logprob": -2.0},
-                                    {"token": "token_id:7", "logprob": -3.0},
-                                ],
+                                "top_logprobs": [{"token": "token_id:2", "logprob": -2.0}],
                             },
                         ]
                     },
