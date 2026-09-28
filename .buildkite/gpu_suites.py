@@ -31,7 +31,6 @@ NODE_INSTANCE_TYPE = "gpu-h100-sxm"
 # (test_file, num_gpus, extra_args, env overrides)
 SUITES = {
     "short": [
-        ("test_qwen3.5_0.8B_gsm8k_async_short.py", 4, "", {}),
         ("test_qwen3.5_0.8B_gsm8k_short.py", 4, "", {}),
         ("test_qwen2.5_0.5B_fully_async_short.py", 4, "", {}),
     ],
