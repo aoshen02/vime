@@ -495,7 +495,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
 
 def _inference_generate_metrics(output: dict[str, Any]) -> dict[str, Any]:
-    metrics = output.get("metrics", output.get("request_metrics"))
+    metrics = output.get("metrics")
     return metrics if isinstance(metrics, dict) else {}
 
 
@@ -520,7 +520,7 @@ def _inference_generate_meta_info(output: dict[str, Any]) -> dict[str, Any]:
         meta["completion_tokens"] = usage.get("completion_tokens", 0)
         meta["cached_tokens"] = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
     metrics = _inference_generate_metrics(output)
-    spec_stats = metrics.get("speculative_decoding", output.get("request_spec_decode_stats"))
+    spec_stats = metrics.get("speculative_decoding")
     if spec_stats:
         meta["spec_accept_token_num"] = spec_stats.get(
             "num_accepted_draft_tokens", spec_stats.get("num_accepted_tokens", 0)
