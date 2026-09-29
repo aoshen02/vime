@@ -21,7 +21,12 @@ from vime.utils.health_monitor import RolloutHealthMonitor
 from vime.utils.http_utils import init_http_client
 from vime.utils.memory_utils import get_process_host_memory_gib
 from vime.utils.misc import load_function
-from vime.utils.rollout_transport import accept_raw_rollout, check_rollout_storage, load_rollout_samples, seal_rollout_store
+from vime.utils.rollout_transport import (
+    accept_raw_rollout,
+    check_rollout_storage,
+    load_rollout_samples,
+    seal_rollout_store,
+)
 from vime.utils.staleness import fully_async_metrics_enabled
 from vime.utils.tensor_store import DiskTensorRef
 

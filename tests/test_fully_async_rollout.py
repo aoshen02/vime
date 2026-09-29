@@ -92,7 +92,9 @@ def test_rollout_takes_target_groups_and_leaves_surplus_queued(monkeypatch):
         worker.output_queue.put((gid, _make_group(gid)))
     monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
 
-    args = SimpleNamespace(rollout_batch_size=4, rollout_data_transport="object-store", rollout_sample_filter_path=None)
+    args = SimpleNamespace(
+        rollout_batch_size=4, rollout_data_transport="object-store", rollout_sample_filter_path=None
+    )
     out = asyncio.run(fa._generate_rollout_async(args, rollout_id=0, data_buffer=None))
 
     assert len(out) == 4

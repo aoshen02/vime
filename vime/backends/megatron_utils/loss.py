@@ -383,7 +383,11 @@ def _build_topp_keep_mask(
 
     # Only offsets are needed in full; ids stay lazy until selecting CP rows.
     top_p_token_offsets = [
-        t.load().tolist() if isinstance(t, (TensorRef, DiskTensorRef)) else t.tolist() if torch.is_tensor(t) else list(t)
+        (
+            t.load().tolist()
+            if isinstance(t, (TensorRef, DiskTensorRef))
+            else t.tolist() if torch.is_tensor(t) else list(t)
+        )
         for t in top_p_token_offsets
     ]
 

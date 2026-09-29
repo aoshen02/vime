@@ -318,6 +318,7 @@ def test_queue_options_require_straw_transport(monkeypatch, overrides):
     with pytest.raises(ValueError, match="requires --rollout-data-transport straw"):
         module.vime_validate_args(make_vime_validate_args(**overrides))
 
+
 def test_global_dataset_flag_is_removed(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
     parser = module.get_vime_extra_args_provider()(argparse.ArgumentParser())

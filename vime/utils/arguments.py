@@ -591,7 +591,11 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-storage-declaration",
                 help="JSON file declaring JuiceFS mount and backing-store durability settings; see the straw project README.",
             )
-            parser.add_argument("--rollout-queue-run-id", default="rollout", help="Persistent queue run identity within rollout-data-dir.")
+            parser.add_argument(
+                "--rollout-queue-run-id",
+                default="rollout",
+                help="Persistent queue run identity within rollout-data-dir.",
+            )
             parser.add_argument(
                 "--rollout-queue-resume",
                 action="store_true",
