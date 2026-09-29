@@ -25,8 +25,8 @@ _unit_stubs.install_rollout_optional_stubs()
 from vime.rollout import vllm_rollout as mod
 
 NUM_GPUS = 0
-from vime.utils.eval_config import EvalDatasetConfig
 from vime.utils.async_utils import AsyncPacer
+from vime.utils.eval_config import EvalDatasetConfig
 from vime.utils.types import Sample
 
 
@@ -738,6 +738,46 @@ def test_generate_applies_routed_experts(patch_generate_state, monkeypatch):
     np.testing.assert_array_equal(sample.rollout_routed_experts, routed_rows)
     assert len(sample.tokens) == 5
     assert sample.rollout_routed_experts.shape[0] == len(sample.tokens) - 1
+
+
+@pytest.mark.unit
+def test_generate_continuation_appends_only_new_routed_experts(patch_generate_state, monkeypatch):
+    prefix = np.array([[[1], [2]]], dtype=np.int32)
+    suffix = np.array([[[3], [4]]], dtype=np.int32)
+    sample = Sample(
+        index=0,
+        prompt="x",
+        tokens=[9, 3],
+        response_length=1,
+        rollout_log_probs=[-0.2],
+        status=Sample.Status.ABORTED,
+    )
+    sample.rollout_routed_experts = prefix.copy()
+    post_mock = AsyncMock(
+        return_value={
+            "choices": [
+                {
+                    "token_ids": [4],
+                    "finish_reason": "stop",
+                    "routed_experts": _encode_routed(suffix),
+                    "logprobs": {"content": [{"logprob": -0.5}]},
+                }
+            ],
+            "usage": {},
+        }
+    )
+    monkeypatch.setattr(mod, "post", post_mock)
+
+    result = asyncio.run(
+        mod.generate(
+            _rollout_args(use_rollout_routing_replay=True, num_layers=2, moe_router_topk=1),
+            sample,
+            _default_sampling_params(),
+        )
+    )
+
+    assert post_mock.await_args.args[1]["sampling_params"]["routed_experts_prompt_start"] == 1
+    np.testing.assert_array_equal(result.materialize_rollout_routed_experts(), np.concatenate((prefix, suffix)))
 
 
 @pytest.mark.unit

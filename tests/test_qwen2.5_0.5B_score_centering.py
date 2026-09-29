@@ -3,6 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
+from shlex import quote
 
 import torch
 
@@ -30,6 +31,8 @@ def execute(top_p=1.0):
             "--num-rollout 2 --rollout-batch-size 2 --n-samples-per-prompt 4 "
             f"--rollout-max-response-len 256 --rollout-temperature 0.8 --rollout-top-p {top_p} --rollout-top-k -1 "
             "--global-batch-size 8 --use-score-centering --score-centering-top-k 128 "
+            "--rollout-data-transport straw --rollout-queue-online-gc "
+            f"--rollout-data-dir {quote(str(Path(directory) / 'queue'))} "
             "--pg-loss-type reinforce --advantage-estimator grpo --disable-grpo-std-normalization "
             "--calculate-per-token-loss --entropy-coef 0 --kl-coef 0 "
             "--optimizer adam --lr 1e-6 --lr-decay-style constant --weight-decay 0 "

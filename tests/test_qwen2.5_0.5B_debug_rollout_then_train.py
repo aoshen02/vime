@@ -10,6 +10,7 @@ Uses Qwen2.5-0.5B-Instruct (smallest supported model) with 2 GPUs.
 
 import os
 import tempfile
+from shlex import quote
 
 import vime.utils.external_utils.command_utils as U
 
@@ -32,6 +33,7 @@ def _common_args(debug_data_dir: str):
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
+        "--rollout-data-transport straw "
         "--prompt-data /root/datasets/gsm8k/train.parquet "
         "--input-key messages "
         "--label-key label "
@@ -93,6 +95,7 @@ def execute_rollout_only(debug_data_dir: str):
         f"{_common_args(debug_data_dir)} "
         f"{vllm_args} "
         "--debug-rollout-only "
+        f"--rollout-data-dir {quote(os.path.join(debug_data_dir, 'rollout_queue'))} "
         f"--save-debug-rollout-data {debug_data_dir}/rollout_{{rollout_id}}.pt "
     )
 
@@ -112,6 +115,7 @@ def execute_train_only(debug_data_dir: str):
 
     phase2_args = (
         f"{_common_args(debug_data_dir)} "
+        f"--rollout-data-dir {quote(os.path.join(debug_data_dir, 'train_queue'))} "
         f"--load-debug-rollout-data {debug_data_dir}/rollout_{{rollout_id}}.pt "
         "--ci-test "
     )
@@ -128,11 +132,10 @@ def execute_train_only(debug_data_dir: str):
 
 
 def execute():
-    debug_data_dir = tempfile.mkdtemp(prefix="vime_debug_rollout_")
-    print(f"Using temp dir for rollout data: {debug_data_dir}")
-
-    execute_rollout_only(debug_data_dir)
-    execute_train_only(debug_data_dir)
+    with tempfile.TemporaryDirectory(prefix="vime_debug_rollout_") as debug_data_dir:
+        print(f"Using temp dir for rollout data: {debug_data_dir}")
+        execute_rollout_only(debug_data_dir)
+        execute_train_only(debug_data_dir)
 
     print("=" * 60)
     print("Both phases completed successfully!")
