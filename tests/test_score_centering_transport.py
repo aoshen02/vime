@@ -12,6 +12,7 @@ import torch
 from test_score_centering import args, meta
 
 from vime.observability.rollout_data_utils import tensorize_rollout_data_for_training
+from vime.utils.async_utils import AsyncPacer
 from vime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -27,9 +28,9 @@ def no_gpu_server_imports(monkeypatch):
 
 
 def manager(**overrides):
-    from vime.ray.rollout import RolloutManager
+    from vime.rollout.batch_builder import BatchBuilder
 
-    cls = RolloutManager.__ray_metadata__.modified_class
+    cls = BatchBuilder
     result = cls.__new__(cls)
     result.args = args(**overrides)
     result.custom_convert_samples_to_train_data_func = None
@@ -57,7 +58,7 @@ def test_topk_training_transport_and_microbatch_order(monkeypatch):
 
     data = samples()
     data[1].rollout_topk_token_ids[0] = [5, 6, 7]
-    batch = manager()._convert_samples_to_train_data(data)
+    batch = manager().convert(data)
     tensorize_rollout_data_for_training(batch)
     assert batch["rollout_topk_token_ids"][0].dtype == torch.int32
     assert batch["rollout_topk_log_probs"][0].dtype == torch.float32
@@ -72,7 +73,7 @@ def test_missing_sampler_metadata_rejected_by_manager(field):
     data = samples()
     setattr(data[1], field, None)
     with pytest.raises(ValueError, match="Score centering"):
-        manager()._convert_samples_to_train_data(data)
+        manager().convert(data)
 
 
 def test_generate_requests_sampler_topk(monkeypatch):
@@ -135,7 +136,7 @@ def test_streaming_score_centering_rejected():
 
 @pytest.mark.parametrize("transport", ["object-store", "nixl"])
 def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
-    from vime.ray import rollout
+    from vime.rollout import batch_builder as rollout
 
     mgr = manager(rollout_data_transport=transport, global_batch_size=2)
     mgr.train_parallel_config = {"dp_size": 2}
@@ -149,7 +150,7 @@ def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
     monkeypatch.setattr(rollout.ray, "put", put)
     data = samples()
     data[1].rollout_topk_token_ids[0] = [5, 6, 7]
-    refs = mgr._split_train_data_by_dp(mgr._convert_samples_to_train_data(data))
+    refs = mgr.split_by_dp(mgr.convert(data))
     assert refs[0].inner["rollout_topk_token_ids"][0].tolist() == [[5, 6, 7]]
     assert refs[1].inner["rollout_topk_token_ids"][0].tolist() == [[3, 1, 4]]
     assert captured == ([{"_tensor_transport": "nixl"}] * 2 if transport == "nixl" else [{}, {}])
@@ -162,6 +163,7 @@ def test_evaluation_preserves_training_score_centering(monkeypatch):
     a = args(partial_rollout=False, group_rm=True, custom_generate_function_path=None)
     state = SimpleNamespace(
         semaphore=asyncio.Semaphore(1),
+        generation_pacer=AsyncPacer(),
         aborted=False,
         active_server_generations=0,
         dp_rank_context=lambda: nullcontext(),
@@ -231,7 +233,7 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
         monkeypatch.setattr(mpu, name, lambda *a, _value=value, **kw: _value, raising=False)
     reported = []
     monkeypatch.setattr(metrics, "gather_log_data", lambda name, args, rollout_id, data: reported.append(data))
-    batch = manager()._convert_samples_to_train_data(samples())
+    batch = manager().convert(samples())
     tensorize_rollout_data_for_training(batch)
     batch.update(total_lengths=[2, 2], global_batch_sizes=[2])
     if disk:
@@ -249,7 +251,7 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
 def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
     import numpy as np
     from test_score_centering import top_p_meta
-    from vime.ray import rollout
+    from vime.rollout import batch_builder as rollout
 
     packed = types.ModuleType("megatron.core.packed_seq_params")
     packed.PackedSeqParams = object
@@ -272,8 +274,8 @@ def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
         if i == 1:
             sample.append_response_tokens(mgr.args, tokens=[8], trainable=False)
         samples.append(sample)
-    batch = mgr._convert_samples_to_train_data(samples)
-    refs = mgr._split_train_data_by_dp(batch)
+    batch = mgr.convert(samples)
+    refs = mgr.split_by_dp(batch)
     assert refs[0].inner["rollout_top_p_token_offsets"][0].tolist() == [0, 2, 3, 3]
     for ref in refs:
         tensorize_rollout_data_for_training(ref.inner)

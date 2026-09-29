@@ -26,6 +26,7 @@ from vime.rollout import vllm_rollout as mod
 
 NUM_GPUS = 0
 from vime.utils.eval_config import EvalDatasetConfig
+from vime.utils.async_utils import AsyncPacer
 from vime.utils.types import Sample
 
 
@@ -64,6 +65,7 @@ class _PatchedGenerateState:
         self.tokenizer = _FakeTokenizer()
         self.processor = None
         self.semaphore = _DummySemaphore()
+        self.generation_pacer = AsyncPacer()
         self.aborted = False
         self.remaining_batch_size = 0
         self.pendings: set = set()

@@ -18,6 +18,7 @@ pyyaml
 qwen_vl_utils # for VLM
 ray[default]
 safetensors
+straw-queue
 tensorboard
 transformers
 vllm-router>=0.1.15

@@ -12,15 +12,14 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-import vllm_router  # noqa: F401 — ensures vllm-router is importable on startup
 from tqdm import tqdm
 
 from vime.backends.vllm_utils.server_control import abort_servers_until_idle
 from vime.observability.trace_utils import build_vllm_meta_trace_attrs, trace_function, trace_span
-from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
+from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, finalize_rollout_groups
 from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
 from vime.rollout.sample_hooks import apply_rollout_sample_hooks
-from vime.utils.async_utils import run
+from vime.utils.async_utils import AsyncPacer, run
 from vime.utils.data import Dataset
 from vime.utils.eval_config import EvalDatasetConfig
 from vime.utils.http_utils import get, get_rollout_num_engines, post
@@ -31,6 +30,7 @@ from vime.utils.processing_utils import (
     load_processor,
     load_tokenizer,
 )
+from vime.utils.rollout_transport import discard_rollout_group, inherit_queue_context, publish_rollout_async
 from vime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
@@ -144,13 +144,16 @@ class GenerateState(metaclass=SingletonMeta):
     The global state for the generation process.
     """
 
-    def __init__(self, args: Namespace) -> None:
+    def __init__(self, args: Namespace, *, concurrency: int | None = None) -> None:
         # persistent state for the generation process
         self.args = args
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-        self.semaphore = asyncio.Semaphore(args.vllm_server_concurrency * get_rollout_num_engines(args))
+        self.semaphore = asyncio.Semaphore(
+            concurrency if concurrency is not None else args.vllm_server_concurrency * get_rollout_num_engines(args)
+        )
+        self.generation_pacer = AsyncPacer()
         self.sampling_params: dict[str, Any] = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -420,6 +423,15 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         score_centering_request(args, sampling_params)
     logprobs = args.score_centering_top_k + 1 if score_centering and args.rollout_top_p == 1 else 1
     inference_sampling_params = _build_inference_sampling_params(sampling_params, logprobs)
+    routed_experts_start = 0
+    if args.use_rollout_routing_replay and sample.response_length:
+        routed_experts_start = sample.get_rollout_routed_experts_length()
+        if routed_experts_start != len(sample.tokens) - 1:
+            raise ValueError(
+                f"R3 continuation {sample.index} has {routed_experts_start} routes, "
+                f"expected {len(sample.tokens) - 1}"
+            )
+        inference_sampling_params["routed_experts_prompt_start"] = routed_experts_start
 
     messages = build_multimodal_messages(sample.prompt, sample.multimodal_inputs)
 
@@ -468,6 +480,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     # Parse token_ids and logprobs from vLLM response
     new_response_tokens, new_response_log_probs = _inference_generate_tokens_and_logprobs(choice)
     meta_info = _inference_generate_meta_info(output)
+    if routed_experts_start:
+        meta_info["routed_experts_start_len"] = routed_experts_start
     if score_centering:
         score_metadata, normalized_logprobs = _score_centering_metadata(
             choice,
@@ -601,8 +615,21 @@ async def generate_and_rm(
         args = copy.copy(args)
         args.use_score_centering = False
 
+    queue_input = copy.copy(sample)
+    if hasattr(sample, "_queue_lease") or hasattr(sample, "_queue_receipt"):
+        queue_input.queue_generation_requests = list(getattr(sample, "queue_generation_requests", [])) + [
+            {
+                "sampling_params": copy.deepcopy(sampling_params),
+                "generate_function": sample.generate_function_path or args.custom_generate_function_path,
+                "input_index": sample.index,
+                "input_group_index": sample.group_index,
+                "branch": getattr(args, "_rollout_queue_branch", None),
+            }
+        ]
+
     # generate
     async with state.semaphore:
+        await state.generation_pacer.wait()
         if state.aborted:
             sample.status = Sample.Status.ABORTED
             return sample
@@ -621,7 +648,9 @@ async def generate_and_rm(
             else:
                 sample = await _run_server_abort_generate(state, generate_call)
 
+    sample = inherit_queue_context(queue_input, sample)
     sample = await apply_rollout_sample_hooks(args, sample, evaluation=evaluation)
+    sample = inherit_queue_context(queue_input, sample)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
@@ -771,12 +800,17 @@ async def generate_rollout_async(
 
     data = []
     all_data = []
+    keep_all_samples = args.rollout_all_samples_process_path is not None
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
-            samples = data_source(args.over_sampling_batch_size)
+            reader = getattr(data_source, "__self__", None)
+            if hasattr(reader, "get_samples_async"):
+                samples = await reader.get_samples_async(args.over_sampling_batch_size)
+            else:
+                samples = data_source(args.over_sampling_batch_size)
             state.submit_generate_tasks(samples)
 
         # wait for the generation to finish
@@ -792,7 +826,8 @@ async def generate_rollout_async(
                 do_print = False
 
             assert len(group) == args.n_samples_per_prompt
-            all_data.append(group)
+            if keep_all_samples:
+                all_data.append(group)
 
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
             if should_drop_dynamic_filter_output(
@@ -800,6 +835,10 @@ async def generate_rollout_async(
                 remaining_batch_size=state.remaining_batch_size,
                 target_data_size=target_data_size,
             ):
+                if not keep_all_samples:
+                    await asyncio.to_thread(
+                        discard_rollout_group, group, args, dynamic_filter_output.reason or "dynamic_filter"
+                    )
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
                 continue
@@ -807,11 +846,13 @@ async def generate_rollout_async(
             # add the samples to the data
             # NOTE: here we have not stored all the unused samples back to the data buffer.
             if len(data) < target_data_size:
+                sample = group[0][0] if isinstance(group[0], list) else group[0]
+                if args.rollout_data_transport == "straw" and not keep_all_samples:
+                    group = await publish_rollout_async(group, args, rollout_id, group=True)
                 data.append(group)
                 pbar.update(args.n_samples_per_prompt)
 
     pbar.close()
-    sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
     logger.info(
         f"Finish rollout: {[str(sample.prompt) + sample.response]}, label: {str(sample.label)[:100]}, reward: {sample.reward}",
     )
@@ -820,23 +861,24 @@ async def generate_rollout_async(
     aborted_samples = await abort(args, rollout_id)
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
-    data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
-    all_samples = sorted(
-        all_data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index
-    )
-
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
-    if args.rollout_sample_filter_path is not None:
-        filter_func = load_function(args.rollout_sample_filter_path)
-        filter_func(args, data)
-
-    # There can be circumstances where users want to process all samples including filtered ones.
-    if args.rollout_all_samples_process_path is not None:
+    if keep_all_samples:
+        data.sort(key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
+        all_data.sort(key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
+        if args.rollout_sample_filter_path is not None:
+            load_function(args.rollout_sample_filter_path)(args, data)
         process_func = load_function(args.rollout_all_samples_process_path)
-        process_func(args, all_samples, data_source)
-
-    return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
+        process_func(args, all_data, data_source)
+        if args.rollout_data_transport == "straw":
+            data = [await publish_rollout_async(group, args, rollout_id, group=True) for group in data]
+            data = await publish_rollout_async(data, args, rollout_id)
+        output = RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect())
+    elif args.rollout_sample_filter_path is not None:
+        output = finalize_rollout_groups(args, rollout_id, data, metric_gatherer.collect())
+    else:
+        output = await asyncio.to_thread(finalize_rollout_groups, args, rollout_id, data, metric_gatherer.collect())
+    return output, aborted_samples
 
 
 EVAL_PROMPT_DATASET = {}

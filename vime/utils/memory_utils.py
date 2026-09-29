@@ -47,7 +47,6 @@ def get_process_host_memory_gib(process: psutil.Process | None = None) -> tuple[
     process = process or psutil.Process()
     rss_gib = process.memory_info().rss / 1024**3
     max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # Linux reports KiB; macOS reports bytes.
     hwm_gib = max_rss / (1024**2 if sys.platform != "darwin" else 1024**3)
     return rss_gib, hwm_gib
 

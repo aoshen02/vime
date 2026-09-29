@@ -30,7 +30,7 @@ from vime.utils.reloadable_process_group import (
 )
 from vime.utils.routed_experts import RoutedExpertsLayerRef, RoutedExpertsMicrobatch, RoutedExpertsMicrobatchPrefetcher
 from vime.utils.routing_replay import RoutingReplay
-from vime.utils.tensor_store import DiskTensorRef
+from vime.utils.tensor_store import DiskTensorRef, TensorRef
 from vime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
@@ -268,7 +268,7 @@ class MegatronTrainRayActor(TrainRayActor):
             rollout_data[key] = [
                 (
                     value
-                    if isinstance(value, DiskTensorRef)
+                    if isinstance(value, (TensorRef, DiskTensorRef))
                     else (value if self.args.allgather_cp else slice_log_prob_with_cp(value, total, response)).to(
                         device="cpu", dtype=dtype
                     )
@@ -329,7 +329,7 @@ class MegatronTrainRayActor(TrainRayActor):
             batch = iterator.get_next(["rollout_routed_experts", "tokens"])
             values = batch["rollout_routed_experts"]
 
-            disk_backed = [isinstance(value, DiskTensorRef) for value in values]
+            disk_backed = [isinstance(value, (TensorRef, DiskTensorRef)) for value in values]
             if any(disk_backed) and not all(disk_backed):
                 raise ValueError("A routing replay microbatch cannot mix disk-backed and resident route tensors.")
 

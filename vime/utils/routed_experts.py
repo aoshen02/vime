@@ -11,8 +11,7 @@ from typing import Any
 import torch
 
 from vime.utils import accelerator
-from vime.utils.memory_utils import get_process_host_memory_gib
-from vime.utils.tensor_store import DiskTensorRef
+from vime.utils.tensor_store import DiskTensorRef, TensorRef
 from vime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ def validate_routed_experts_tensor(
     sample_index: int | None = None,
     expected_rows: int | None = None,
 ) -> None:
-    """Validate one rollout route tensor before R3 consumes or spills it."""
+    """Validate one rollout route tensor before publication or R3 consumption."""
 
     num_layers = int(args.num_layers)
     topk = int(args.moe_router_topk)
@@ -57,7 +56,7 @@ def validate_routed_experts_tensor(
         if missing_layers:
             raise ValueError(
                 "R3 routed-experts capture is all zero for MoE layers "
-                f"{missing_layers} in sample {sample_index}. This usually means SGLang pipeline stages "
+                f"{missing_layers} in sample {sample_index}. This usually means vLLM pipeline stages "
                 "did not aggregate their disjoint routing captures; refusing to replay expert 0 everywhere."
             )
         missing_token_layers = ~token_layer_present
@@ -107,13 +106,13 @@ def validate_routed_experts_tensor(
 
 
 def validate_routed_experts_value(
-    value: torch.Tensor | DiskTensorRef,
+    value: torch.Tensor | TensorRef | DiskTensorRef,
     args,
     *,
     sample_index: int | None,
     expected_rows: int | None = None,
 ) -> None:
-    if isinstance(value, DiskTensorRef) and value.validated:
+    if isinstance(value, TensorRef) and value.validated:
         expected_tail = (int(args.num_layers), int(args.moe_router_topk))
         if len(value.shape) != 3 or tuple(value.shape[1:]) != expected_tail or value.shape[0] <= 0:
             raise ValueError(
@@ -127,7 +126,7 @@ def validate_routed_experts_value(
             )
         return
 
-    tensor = value.load() if isinstance(value, DiskTensorRef) else value
+    tensor = value.load() if isinstance(value, (TensorRef, DiskTensorRef)) else value
     validate_routed_experts_tensor(tensor, args, sample_index=sample_index, expected_rows=expected_rows)
 
 
@@ -224,7 +223,7 @@ def cleanup_routed_experts_rollout(args, rollout_id: int) -> None:
 
 
 def materialize_routed_experts(value: Any, *, pin_memory: bool = False) -> torch.Tensor:
-    if isinstance(value, DiskTensorRef):
+    if isinstance(value, (TensorRef, DiskTensorRef)):
         return value.load(pin_memory=pin_memory)
     if torch.is_tensor(value):
         return value
@@ -243,22 +242,19 @@ class RoutedExpertsMicrobatchPrefetcher:
         # every microbatch from disk between forward and backward.
         self.release_stage = "forward"
         self._executor = (
-            ThreadPoolExecutor(max_workers=min(2, self.prefetch_microbatches + 1), thread_name_prefix="r3-prefetch")
+            ThreadPoolExecutor(
+                max_workers=min(2, self.prefetch_microbatches + 1),
+                thread_name_prefix="r3-prefetch",
+            )
             if self.prefetch_microbatches > 0
             else None
         )
         self._closed = False
-        self._stats_lock = threading.Lock()
-        self._resident_bytes = 0
-        self._peak_resident_bytes = 0
-        self._load_count = 0
-        self._disk_bytes = 0
 
     def add(self, source: RoutedExpertsMicrobatch) -> None:
         source.index = len(self.sources)
         source.prefetcher = self
         self.sources.append(source)
-        self._disk_bytes += sum(value.nbytes for value in source.values)
 
     def start(self) -> None:
         for index in range(min(len(self.sources), self.prefetch_microbatches)):
@@ -281,16 +277,6 @@ class RoutedExpertsMicrobatchPrefetcher:
     def executor(self) -> ThreadPoolExecutor | None:
         return None if self._closed else self._executor
 
-    def on_loaded(self, nbytes: int) -> None:
-        with self._stats_lock:
-            self._load_count += 1
-            self._resident_bytes += nbytes
-            self._peak_resident_bytes = max(self._peak_resident_bytes, self._resident_bytes)
-
-    def on_released(self, nbytes: int) -> None:
-        with self._stats_lock:
-            self._resident_bytes -= nbytes
-
     def close(self) -> None:
         if self._closed:
             return
@@ -299,18 +285,6 @@ class RoutedExpertsMicrobatchPrefetcher:
             self._executor.shutdown(wait=True, cancel_futures=True)
         for source in self.sources:
             source.release()
-        rss_gib, hwm_gib = get_process_host_memory_gib()
-        logger.info(
-            "R3 disk prefetch profile: microbatches=%d prefetch=%d source_bytes=%.3f GiB "
-            "loads=%d peak_prepared_cpu=%.3f GiB rss=%.3f GiB hwm=%.3f GiB",
-            len(self.sources),
-            self.prefetch_microbatches,
-            self._disk_bytes / 1024**3,
-            self._load_count,
-            self._peak_resident_bytes / 1024**3,
-            rss_gib,
-            hwm_gib,
-        )
 
 
 class RoutedExpertsMicrobatch:
@@ -318,7 +292,7 @@ class RoutedExpertsMicrobatch:
 
     def __init__(
         self,
-        values: list[DiskTensorRef],
+        values: list[TensorRef | DiskTensorRef],
         tokens: list[torch.Tensor],
         *,
         consumer_count: int,
@@ -332,25 +306,22 @@ class RoutedExpertsMicrobatch:
         self.prefetcher: RoutedExpertsMicrobatchPrefetcher | None = None
         self._future: Future | None = None
         self._cpu_tensor: torch.Tensor | None = None
-        self._loaded_nbytes = 0
         self._lock = threading.Lock()
         self._consumed = {"forward": 0, "backward": 0}
 
     def _load_and_prepare(self) -> torch.Tensor:
         from vime.backends.megatron_utils.cp_utils import prepare_routed_experts_for_routing_replay
 
-        tensors = [value.load() for value in self.values]
-        tensor = prepare_routed_experts_for_routing_replay(
+        # Read only the CP/TP rows owned by this rank in the layout helper.
+        tensors = [
+            (value if isinstance(value, (TensorRef, DiskTensorRef)) else materialize_routed_experts(value))
+            for value in self.values
+        ]
+        return prepare_routed_experts_for_routing_replay(
             tensors,
             self.tokens,
             **self.prepare_kwargs,
         )
-        nbytes = tensor.numel() * tensor.element_size()
-        with self._lock:
-            self._loaded_nbytes = nbytes
-        if self.prefetcher is not None:
-            self.prefetcher.on_loaded(nbytes)
-        return tensor
 
     def prefetch(self) -> None:
         with self._lock:
@@ -393,12 +364,8 @@ class RoutedExpertsMicrobatch:
             future = self._future
             self._future = None
             self._cpu_tensor = None
-            loaded_nbytes = self._loaded_nbytes
-            self._loaded_nbytes = 0
         if future is not None and not future.done():
             future.cancel()
-        if loaded_nbytes and self.prefetcher is not None:
-            self.prefetcher.on_released(loaded_nbytes)
 
 
 class RoutedExpertsLayerRef:

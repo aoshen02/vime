@@ -111,9 +111,6 @@ def test_lazy_prefetch_reloads_between_forward_and_backward(monkeypatch, tmp_pat
 
     def load_and_prepare():
         tensor = ref.load()
-        nbytes = tensor.numel() * tensor.element_size()
-        source._loaded_nbytes = nbytes
-        prefetcher.on_loaded(nbytes)
         loads.append(1)
         return tensor
 
@@ -123,12 +120,12 @@ def test_lazy_prefetch_reloads_between_forward_and_backward(monkeypatch, tmp_pat
     prefetcher.begin_pass("forward")
     source.layer_to_cuda(3, "forward")
     source.layer_to_cuda(4, "forward")
-    assert prefetcher._resident_bytes == 0
+    assert source._cpu_tensor is None
 
     prefetcher.begin_pass("backward")
     source.layer_to_cuda(3, "backward")
     source.layer_to_cuda(4, "backward")
-    assert prefetcher._resident_bytes == 0
+    assert source._cpu_tensor is None
     prefetcher.close()
     assert len(loads) == 2
 

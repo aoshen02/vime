@@ -1,5 +1,6 @@
 import argparse
 import copy
+import importlib.util
 import json
 import logging
 import os
@@ -345,7 +346,9 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                     "and then set this to the path of your custom rollout function. "
                     "The signature of the function should be "
                     "`def generate_rollout(args, rollout_id, data_source, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput`"
-                    "and within the output sample, you should at least set `tokens`, `response_length`, `reward` "
+                    ". With straw transport, training output.samples may be a stored batch reference; "
+                    "legacy Sample lists are stored automatically by the manager."
+                    " Each sample must at least set `tokens`, `response_length`, `reward` "
                     "and `status`."
                 ),
             )
@@ -529,7 +532,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Path to the buffer filter function. "
+                    "Path to the in-memory buffer filter function (not supported by straw). "
                     "It should be able to select the samples in the buffer. "
                     "The function should take list[list[Sample]] and return list[list[Sample]]."
                 ),
@@ -539,7 +542,8 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 help=(
                     "Resume buffered groups with the oldest generated-token weight version first. "
-                    "Disabled by default; an explicit --buffer-filter-path takes precedence."
+                    "For in-memory buffers this is disabled by default and --buffer-filter-path takes precedence. "
+                    "The straw queue always uses this order within ready and partial groups."
                 ),
             )
             # update weight
@@ -564,13 +568,54 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-data-transport",
                 type=str,
-                choices=["object-store", "nixl"],
+                choices=["straw", "object-store", "nixl"],
                 default="object-store",
                 help=(
-                    "Transport for rollout data refs sent from rollout manager to trainer. Large rollout "
-                    "fields are tensorized on CPU before the refs are stored. Set to nixl to transfer "
-                    "those torch tensors via Ray NIXL."
+                    "Rollout payload transport. Defaults to Ray object-store. straw uses packed storage "
+                    "under --rollout-data-dir for rollout and training payloads, sending only references through "
+                    "Ray. nixl uses Ray's NIXL tensor transport. Ray still manages actors and RPCs in every mode."
                 ),
+            )
+            parser.add_argument(
+                "--rollout-data-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Shared directory for straw rollout payloads, mounted at the same absolute path on all nodes. "
+                    "Defaults to <save>/rollout_data. Required for straw transport when --save is unset. "
+                    "Files are retained for buffered samples, checkpoints and debug dumps."
+                ),
+            )
+            parser.add_argument("--rollout-storage-profile", choices=["local", "juicefs"], default="local")
+            parser.add_argument(
+                "--rollout-storage-declaration",
+                help="JSON file declaring JuiceFS mount and backing-store durability settings; see the straw project README.",
+            )
+            parser.add_argument("--rollout-queue-run-id", default="rollout", help="Persistent queue run identity within rollout-data-dir.")
+            parser.add_argument(
+                "--rollout-queue-resume",
+                action="store_true",
+                help="Recover an existing run; requires the prior coordinator and its job to be stopped.",
+            )
+            parser.add_argument(
+                "--rollout-queue-online-gc",
+                action="store_true",
+                help="Reclaim sealed straw packs after acknowledged use; retain checkpoints explicitly.",
+            )
+            parser.add_argument("--rollout-queue-lease-seconds", type=float, default=300)
+            parser.add_argument("--rollout-queue-max-pending", type=int, default=65536)
+            parser.add_argument("--rollout-queue-max-inflight", type=int, default=65536)
+            parser.add_argument(
+                "--rollout-queue-segment-mib",
+                type=int,
+                default=256,
+                help="Append queue publications to a pack file until this target size; a single larger publication is kept intact.",
+            )
+            parser.add_argument(
+                "--rollout-io-concurrency",
+                type=int,
+                default=4,
+                help="Bounded off-event-loop rollout serialization and filesystem I/O.",
             )
             parser.add_argument(
                 "--rollout-external-engine-addrs",
@@ -633,8 +678,12 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--data-source-path",
                 type=str,
-                default="vime.rollout.data_source.RolloutDataSourceWithBuffer",
-                help="The data source class for rollout data.",
+                default=None,
+                help=(
+                    "The data source class. straw transport defaults to "
+                    "vime.rollout.queue_data_source.QueueDataSource; other transports use "
+                    "vime.rollout.data_source.RolloutDataSourceWithBuffer. Custom classes remain supported."
+                ),
             )
             parser.add_argument(
                 "--prompt-data",
@@ -2001,6 +2050,51 @@ def vime_validate_args(args):
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
+
+    if importlib.util.find_spec("straw") is None:
+        if args.rollout_data_transport == "straw":
+            raise ModuleNotFoundError(
+                "--rollout-data-transport straw requires straw-queue. "
+                "Install it on every rollout/training node: pip install straw-queue",
+                name="straw",
+            )
+        logger.warning(
+            "straw-queue is not installed; continuing with %s rollout transport. "
+            "To enable --rollout-data-transport straw, run on every rollout/training node: pip install straw-queue",
+            args.rollout_data_transport,
+        )
+
+    if args.data_source_path is None:
+        args.data_source_path = (
+            "vime.rollout.queue_data_source.QueueDataSource"
+            if args.rollout_data_transport == "straw"
+            else "vime.rollout.data_source.RolloutDataSourceWithBuffer"
+        )
+    if args.rollout_data_transport != "straw":
+        if args.data_source_path == "vime.rollout.queue_data_source.QueueDataSource":
+            raise ValueError("QueueDataSource requires --rollout-data-transport straw")
+        for name in ("rollout_queue_resume", "rollout_queue_online_gc"):
+            if getattr(args, name, False):
+                raise ValueError(f"--{name.replace('_', '-')} requires --rollout-data-transport straw")
+    for name in (
+        "rollout_queue_lease_seconds",
+        "rollout_queue_max_pending",
+        "rollout_queue_max_inflight",
+        "rollout_queue_segment_mib",
+        "rollout_io_concurrency",
+    ):
+        if getattr(args, name) <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive")
+
+    if args.rollout_data_transport == "straw":
+        from vime.utils.rollout_transport import resolve_rollout_data_dir
+
+        if getattr(args, "buffer_filter_path", None) is not None:
+            raise ValueError(
+                "--buffer-filter-path is not supported by straw; scheduling is persisted in the queue "
+                "and prioritizes older weight versions within ready and partial groups"
+            )
+        resolve_rollout_data_dir(args)
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."

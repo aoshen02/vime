@@ -68,6 +68,8 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
+        ray.get(rollout_manager.training_completed.remote(rollout_id))
+
         if release_train or should_run_periodic_action(
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
         ):
@@ -78,12 +80,13 @@ def train(args):
                 critic_model.save_model(rollout_id, force_sync=force_sync)
             ray.get(rollout_manager.save.remote(rollout_id))
 
-        ray.get(rollout_manager.cleanup_rollout_data.remote(rollout_id))
-
         offload_train(actor_trains)
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
+        was_paused = ray.get(rollout_manager.pause_rollout_admission.remote())
         actor_model.update_weights()
+        if rollout_id + 1 < args.num_rollout:
+            ray.get(rollout_manager.resume_rollout_admission.remote(was_paused))
 
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
