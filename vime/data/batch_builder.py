@@ -12,7 +12,7 @@ import ray
 import torch
 
 from vime.data.tensor import DiskTensorRef, TensorRef
-from vime.data.transport import DiskPayloadRef, RolloutGroupRef, TrainBatchRef, pack_rollout_payload
+from vime.data.transport import DiskPayloadRef, TrainBatchRef, pack_rollout_payload
 from vime.observability.rollout_data_utils import (
     tensorize_rollout_data_for_training,
     validate_rollout_routed_experts_for_replay,
@@ -102,12 +102,7 @@ class BatchBuilder:
                     receipt = ray.get(controller.result.remote(Lease(**lease)))
                     if receipt is not None:
                         positions.add(receipt.position)
-            value = self.raw_ref
-            while isinstance(value, DiskPayloadRef):
-                value = value.load()
-            for group in value:
-                if isinstance(group, RolloutGroupRef) and group.receipt:
-                    positions.add(group.receipt.position)
+            # Samples already carry group receipts/positions; do not reread raw.
             plan = {
                 **identity,
                 "digest": self.plan_digest,

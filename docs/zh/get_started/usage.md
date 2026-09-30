@@ -402,7 +402,9 @@ vime 支持不同程度的自定义数据生成（rollout）。
 --rollout-data-dir /shared/run/rollout_data
 ```
 
-straw 传输下，开启 `--use-rollout-routing-replay` 后会将已完成 sample 的 R3 routes 随所属 group 一起写入 straw；开启 `--use-score-centering` 时也会在同一次发布中保存 SC 张量，包括只使用 SC 的情况。默认 object-store 传输将这些张量保存在内存中，但仍保留原有的可选磁盘 spill hook。自定义 sample hook 先执行，R3、SC 与 sample 元数据一起发布到共享 pack，后续队列发布复用引用。大批 group 按底层写入预算拆分。Aborted prefix 由队列 continuation 路径持久化。`--rollout-queue-online-gc` 是独立开关，默认关闭：训练确认使用完成后，straw 可回收所有 owner 都已释放的 sealed pack。
+所有节点必须以相同绝对路径挂载该目录，并安装 `straw-queue>=0.1.2`。
+
+straw 传输下，开启 `--use-rollout-routing-replay` 后会将已完成 sample 的 R3 routes 随所属 group 一起写入 straw；开启 `--use-score-centering` 时也会在同一次发布中保存 SC 张量，包括只使用 SC 的情况。默认 object-store 传输将这些张量保存在内存中，但仍保留原有的可选磁盘 spill hook。自定义 sample hook 先执行，R3、SC 与 sample 元数据一起发布到共享 pack，后续队列发布复用引用。大批 group 按 native record 数量上限拆分。Aborted prefix 由队列 continuation 路径持久化。`--rollout-queue-online-gc` 是独立开关，默认关闭：训练确认使用完成后，straw 可回收所有 owner 都已释放的 sealed pack。
 
 作业内一个禁止自动重启的 Ray actor 管理任务 lease 和串行 dataset producer。Dataset 游标与任务提交在同一日志事务中保存，worker 通过小引用直接读取共享存储中的 prompt group，替代原来的内存索引分配器。Shuffle、group/sample 编号沿用原有数据源逻辑，故障不会丢弃 reader 预留的索引区间。
 
@@ -414,7 +416,7 @@ Fully async 在每个有 CPU 资源的 Ray 节点启动一个常驻生成进程�
 
 内置 producer 返回 collection manifest。旧 custom rollout 仍可返回 Sample 列表，由 Manager 兜底持久化并接受一个兼容 collection；新 producer 可以直接返回关联有效 receipt 的 `RawRolloutRef`。两者进入同一个 BatchBuilder，保留 reward/conversion hook 和 DP 调度。Builder 先保存选择计划，全部 rank shard 持久化后才返回同一 batch ID/plan 的 `TrainBatchRef`。
 
-Vime adapter 当前要求各节点使用同一个绝对挂载路径，并双向检查可见性；底层引用支持重新绑定 root。r3/sc 的临时文件依赖会先复制进队列，旧 spill 清理不会使已提交数据失效。默认保留队列文件；读取、batch-ready 都不删除数据。离线清理要求停止 coordinator、writer 和 reader。Debug dump 仍按需用 `torch.save` 写入，可能引用保留的队列张量；evaluation 路径保持原有行为。
+Vime adapter 当前要求各节点使用同一个绝对挂载路径，并双向检查可见性；底层引用支持重新绑定 root。r3/sc 的临时文件依赖会先复制进队列，旧 spill 清理不会使已提交数据失效。默认保留队列文件；读取、batch-ready 都不删除数据。离线清理要求停止 coordinator、writer 和 reader。Debug 归档可以复用 Straw 的不可变记录，也可导出 `.pt` 文件；evaluation 路径保持原有行为。
 
 Straw checkpoint 会将模型、optimizer/RNG、队列、builder 和 dataset 游标作为一个整体提交。默认 `--load` 恢复最近的有效联合 checkpoint；`--ckpt-step` 可选择当前分支历史中的步骤。恢复会从快照创建隔离分支，不改动源运行，也不会带入快照之后产生的样本。多次回退沿当前分支查找，不能越过分叉点。若模型 checkpoint 没有 straw 队列快照，则从空队列恢复，并在可用时恢复保存的 dataset 游标；联合快照损坏或不完整时直接报错，不会静默降级。这会持久化队列和数据状态，但不会恢复 GPU KV cache 或生成 RNG。
 

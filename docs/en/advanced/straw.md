@@ -112,9 +112,8 @@ window, with its own checkpoint state and durable accepted-result references.
 Source snapshots now store the shared pending tasks, their exact immutable input
 references and scheduling metadata once; worker snapshots store reader metadata.
 The reader snapshot format is version 3; old reader-local v1/v2 buffer snapshots
-require migration and are rejected explicitly. This requires an updated
-`straw-queue` build with `yield_tasks()` and persistent scheduling keys; the
-original PyPI 0.1.0 wheel does not provide these APIs.
+require migration and are rejected explicitly. This requires `straw-queue>=0.1.2`
+with `yield_tasks()` and persistent scheduling keys.
 
 ## Shared tensors, R3 and SC
 
@@ -162,12 +161,12 @@ segment. Tensor descriptors are restored in batches to reuse shared pack indices
 
 ## Enable it
 
-`requirements.txt` includes `straw-queue`, so the standard Docker build and
+`requirements.txt` includes `straw-queue>=0.1.2`, so the standard Docker build and
 normal vime installation install it automatically. For an existing environment,
 install it on every generation and training node, using the same version throughout the job:
 
 ```bash
-pip install straw-queue
+pip install 'straw-queue>=0.1.2'
 ```
 
 Without straw installed, the default Ray `object-store` transport still works
@@ -205,8 +204,6 @@ If `--rollout-data-dir` is omitted, straw mode uses `<save>/rollout_data`; witho
 `--save`, an explicit shared directory is required. `--rollout-io-concurrency`
 bounds off-event-loop serialization and I/O (default 4). The adapter uses worker
 processes and bounded threads; straw does not create an I/O process pool.
-`--rollout-queue-max-pending` and `--rollout-queue-max-inflight` bound task
-admission (both default 65,536); they do not cap retained bytes or file count.
 
 During weight synchronization, distributed producers pause new admissions and
 allow in-flight work to finish and persist. They resume if another training
@@ -226,14 +223,12 @@ writers, retained checkpoints and WAL history still consume space.
 GC failures stop the background loop, propagate the original cause through
 later coordinator operations and surface at shutdown. They do not stop work
 already running on remote workers. Retained data stays available for inspection.
-Capacity exhaustion must be handled with
-backpressure or an explicit operator decision; do not reset a live queue or
+Disk exhaustion requires freeing unneeded retention or expanding storage; do not reset a live queue or
 unlink pack files to make room. Offline removal requires all participants to
 stop. Storage quotas and application retention policies remain necessary.
 
 Processed positions and filter decisions are recorded explicitly, so gaps in
-acceptance order do not hold already-consumed capacity. A separate bounded
-control-task allowance lets the manager commit a collection under backpressure.
+acceptance order do not retain already-consumed data.
 
 ## Recovery and checkpoints
 
@@ -310,7 +305,11 @@ An archive retains its data independently of queue consumption and GC. With
 straw transport it reuses existing tensors; otherwise it creates a `straw-data`
 pool beside the index. Each rollout has one immutable index, with samples
 stored in chunks. Evaluation uses `eval_<id>`. Copying only the JSON index does
-not copy payloads; train-only replay with straw needs a separate writable queue.
+not copy payloads. Train-only straw replay uses the archive's writable storage
+pool and run, overriding `--rollout-data-dir` and `--rollout-queue-run-id`.
+Each replay creates an isolated queue without changing the source queue. Full
+replay without subsampling reuses the archived Sample and tensor records; all
+archives in one replay must belong to the same pool and run.
 `--load-debug-rollout-data-subsample` also applies to archives.
 
 ```python

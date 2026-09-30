@@ -64,7 +64,7 @@ steps:
         python:3.11 bash -c '
           set -euo pipefail
           pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil wandb straw-queue
+          pip install -q pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil wandb 'straw-queue>=0.1.2'
           pip install -q -e . --no-deps
           python tests/test_megatron_argument_validation.py
           python tests/test_optional_straw.py
@@ -143,7 +143,7 @@ steps:
         -v "$$PWD:/workspace" -w /workspace \
         "$${VIME_CI_IMAGE:-vllm/vime:latest}" bash -lc '
           set -euo pipefail
-          pip install -q straw-queue --break-system-packages
+          pip install -q 'straw-queue>=0.1.2' --break-system-packages
           pip install -q -e . --no-deps --break-system-packages
           for test_file in \
             tests/test_advantage_whiten_cp.py \
@@ -169,6 +169,8 @@ steps:
             tests/test_model_provider_freeze.py \
             tests/test_policy_loss.py \
             tests/test_ppo_kl_metric.py \
+            tests/test_published_payload_retry.py \
+            tests/test_rollout_metadata_index.py \
             tests/test_score_centering.py \
             tests/test_score_centering_transport.py \
             tests/test_process_rollout_data.py \
