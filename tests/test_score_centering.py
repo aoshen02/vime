@@ -224,7 +224,7 @@ def distributed_worker(rank, world_size, port, layout, mode, disk=False):
         original = dict(batch)
         import tempfile
         from pathlib import Path
-        from vime.utils.tensor_store import DiskTensorRef
+        from vime.data.tensor import DiskTensorRef
 
         with tempfile.TemporaryDirectory() as directory:
             if disk:

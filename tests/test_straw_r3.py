@@ -8,9 +8,9 @@ import torch
 from straw import SharedFilesystemStore
 from straw.tensor import publish_tensors
 
+from vime.data.tensor import TensorRef
 from vime.rollout.sample_hooks import apply_rollout_sample_hooks
 from vime.utils.routed_experts import RoutedExpertsMicrobatch, RoutedExpertsMicrobatchPrefetcher
-from vime.utils.tensor_store import TensorRef
 from vime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -61,7 +61,7 @@ def test_straw_publishes_replay_tensors_with_the_group_without_hook_or_spill_dir
     result = asyncio.run(apply_rollout_sample_hooks(args, nested, rollout_id=3))
     assert result == nested
     assert not list(tmp_path.iterdir())
-    from vime.utils.rollout_transport import pack_rollout_payload
+    from vime.data.transport import pack_rollout_payload
 
     durable = pack_rollout_payload(result, args, 3)
     samples = [sample for group in durable.load() for sample in group]
@@ -121,7 +121,7 @@ def test_straw_adopts_r3_from_another_pool(tmp_path):
         rollout_routed_experts=ref,
         status=Sample.Status.COMPLETED,
     )
-    from vime.utils.rollout_transport import pack_rollout_payload
+    from vime.data.transport import pack_rollout_payload
 
     sample = pack_rollout_payload(sample, args, 0).load()
     path.unlink()
@@ -129,7 +129,7 @@ def test_straw_adopts_r3_from_another_pool(tmp_path):
 
 
 def test_cancelled_straw_publication_drains_before_releasing_capacity(tmp_path, monkeypatch):
-    from vime.utils import rollout_transport
+    from vime.data import transport as rollout_transport
 
     args = _args(tmp_path)
     args.rollout_data_transport = "straw"

@@ -63,6 +63,7 @@ SUITES = {
         ("test_moonlight_16B_A3B_r3.py", 8, "", {"ENABLE_EVAL": "0"}),
         ("test_mimo_7B_mtp_only_grad.py", 8, "", {}),
         ("test_qwen2.5_0.5B_debug_rollout_then_train.py", 8, "", {}),
+        ("test_straw_checkpoint_fork.py", 4, "", {}),
         ("test_qwen2.5_0.5B_opd_vllm.py", 8, "", {}),
         ("test_qwen2.5_0.5B_fanout_short.py", 4, "", {}),
         ("test_qwen2.5_0.5B_score_centering.py", 2, "", {}),

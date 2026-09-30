@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from vime.data.tensor import DiskTensorRef
 from vime.observability.rollout_data_utils import tensorize_rollout_data_for_training
 from vime.utils.routed_experts import (
     RoutedExpertsMicrobatch,
@@ -12,7 +13,6 @@ from vime.utils.routed_experts import (
     cleanup_routed_experts_rollout,
     spill_routed_experts,
 )
-from vime.utils.tensor_store import DiskTensorRef
 from vime.utils.types import Sample
 
 NUM_GPUS = 0

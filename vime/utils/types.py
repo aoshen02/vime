@@ -6,8 +6,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from vime.data.tensor import DiskTensorRef, TensorRef
 from vime.utils.misc import decode_int32_meta_array
-from vime.utils.tensor_store import DiskTensorRef, TensorRef
 
 _TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
 _TOP_P_TOKEN_OFFSET_META_KEYS = ("top_p_token_offsets", "top_p_kept_token_offsets")

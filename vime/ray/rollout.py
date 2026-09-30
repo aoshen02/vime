@@ -6,6 +6,9 @@ from typing import Any
 import psutil
 import ray
 
+from vime.data.batch_builder import BatchBuilder
+from vime.data.tensor import DiskTensorRef
+from vime.data.transport import accept_raw_rollout, check_rollout_storage, load_rollout_samples, seal_rollout_store
 from vime.observability import logging_utils
 from vime.observability.logging_utils import configure_logger, init_tracking
 from vime.observability.rollout_data_utils import (
@@ -15,20 +18,12 @@ from vime.observability.rollout_data_utils import (
 )
 from vime.observability.rollout_metrics import log_eval_rollout_data, log_rollout_data
 from vime.rollout.base_types import call_rollout_fn
-from vime.rollout.batch_builder import BatchBuilder
 from vime.rollout.sample_hooks import set_current_rollout_id
 from vime.utils.health_monitor import RolloutHealthMonitor
 from vime.utils.http_utils import init_http_client
 from vime.utils.memory_utils import get_process_host_memory_gib
 from vime.utils.misc import load_function
-from vime.utils.rollout_transport import (
-    accept_raw_rollout,
-    check_rollout_storage,
-    load_rollout_samples,
-    seal_rollout_store,
-)
 from vime.utils.staleness import fully_async_metrics_enabled
-from vime.utils.tensor_store import DiskTensorRef
 
 from .utils import Lock, add_default_ray_env_vars
 
@@ -42,16 +37,16 @@ logger = logging.getLogger(__name__)
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
 
-    def __init__(self, args, pg):
+    def __init__(self, args, pg, *, restore_plan=None):
         configure_logger()
 
         self.pg = pg
         self.args = args
+        self.controller = None
+        self._owns_controller = False
+        self.weight_version = None
         if args.rollout_data_transport == "straw":
             check_rollout_storage(args)
-            from vime.rollout.queue_data_source import create_queue_controller
-
-            create_queue_controller(args)
 
         rollout_init_handles: list[Any] = []
         if self.args.debug_train_only:
@@ -63,11 +58,26 @@ class RolloutManager:
             self.servers, rollout_init_handles = start_rollout_servers(args, pg)
 
         data_source_cls = load_function(self.args.data_source_path)
-        self.data_source = data_source_cls(args)
+        if args.rollout_data_transport == "straw":
+            from vime.data.queue_data_source import QueueDataSource, QueueReader, create_queue_controller
+
+            if data_source_cls is QueueDataSource:
+                self.controller = create_queue_controller(args, restore_plan=restore_plan)
+                self._owns_controller = True
+                self.data_source = data_source_cls(args, controller=self.controller, restore_plan=restore_plan)
+            else:
+                self.data_source = data_source_cls(args)
+                if isinstance(self.data_source, QueueReader):
+                    self.controller = self.data_source.controller
+                else:
+                    self.controller = create_queue_controller(args, restore_plan=restore_plan)
+                    self._owns_controller = True
+        else:
+            self.data_source = data_source_cls(args)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
-        self.batch_builder = BatchBuilder(args)
+        self.batch_builder = BatchBuilder(args, controller=self.controller)
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
@@ -153,10 +163,12 @@ class RolloutManager:
             self.cleanup_rollout_data(rollout_id)
         if close := getattr(self.data_source, "close", None):
             close()
-        if controller := getattr(self.args, "_rollout_queue_controller", None):
+        if self._owns_controller:
+            controller = self.controller
             ray.get(controller.close.remote())
             ray.kill(controller, no_restart=True)
-            self.args._rollout_queue_controller = None
+            self.controller = None
+            self._owns_controller = False
         seal_rollout_store(self.args)
         engines = [engine for server in self.servers.values() for engine in server.all_engines if engine is not None]
         if engines:
@@ -245,8 +257,11 @@ class RolloutManager:
             data,
             rollout_id=rollout_id,
             evaluation=False,
+            args=self.args,
         )
-        log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+        log_rollout_data(
+            rollout_id, self.args, data, metrics, time.time() - start_time, weight_version=self.weight_version
+        )
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
@@ -270,20 +285,33 @@ class RolloutManager:
             data,
             rollout_id=rollout_id,
             evaluation=True,
+            args=self.args,
         )
         log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
-        self.data_source.save(rollout_id)
-        self.batch_builder.save(rollout_id)
+        paused = []
+        try:
+            for consumer in getattr(self.data_source, "consumers", {}).values():
+                paused.append((consumer, consumer.pause()))
+            self.data_source.save(rollout_id)
+            self.batch_builder.save(rollout_id)
+        finally:
+            for consumer, was_paused in paused:
+                if not was_paused:
+                    consumer.resume()
 
     def training_completed(self, rollout_id):
         self.batch_builder.training_completed(rollout_id)
         self.cleanup_rollout_data(rollout_id)
 
     def load(self, rollout_id=None):
-        self.data_source.load(rollout_id)
-        self.batch_builder.load(rollout_id)
+        from vime.data.checkpoint import SourceRestore
+
+        source_restore = self.data_source.load(rollout_id)
+        self.batch_builder.load(
+            rollout_id, source_restore=source_restore if isinstance(source_restore, SourceRestore) else None
+        )
 
     def offload(self):
         self.health_monitoring_pause()
@@ -350,10 +378,10 @@ class RolloutManager:
                 valid = bool(versions) and all(
                     str(version).isascii() and str(version).isdigit() for version in versions
                 )
-                self.args._rollout_weight_version = max(map(int, versions)) if valid else None
+                self.weight_version = max(map(int, versions)) if valid else None
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
             if self.args.rollout_data_transport == "straw":
-                data = accept_raw_rollout(data, self.args, rollout_id)
+                data = accept_raw_rollout(data, self.args, rollout_id, controller=self.controller)
                 self.batch_builder.raw_ref = data
                 metrics = data.metrics
                 data = load_rollout_samples(data)

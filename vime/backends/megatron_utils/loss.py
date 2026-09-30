@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
+from vime.data.tensor import DiskTensorRef, TensorRef
 from vime.utils.distributed_utils import distributed_masked_whiten
 from vime.utils.misc import load_function
 from vime.utils.ppo_utils import (
@@ -27,7 +28,6 @@ from vime.utils.ppo_utils import (
     importance_weights,
 )
 from vime.utils.score_centering import get_score_centering_is_config, score_centering_correction
-from vime.utils.tensor_store import DiskTensorRef, TensorRef
 from vime.utils.types import RolloutBatch
 
 from .cp_utils import (

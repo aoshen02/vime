@@ -46,7 +46,7 @@ Ray 继续负责调度、RPC 和执行进程故障；vime 负责 Sample schema�
 
 ## 队列调度
 
-`QueueReader` 是 worker 的队列客户端，负责领取、归还 group 和为正在执行的 lease 续租。`QueueDataSource` 增加整个作业的 reader 创建、consumer 生命周期和 source checkpoint 管理；它继承同一套取样方法，没有另实现一层 buffer。`--rollout-data-transport straw` 会自动选择此数据源；显式指定 `--data-source-path` 时使用 `vime.rollout.queue_data_source.QueueDataSource`。
+`QueueReader` 是 worker 的队列客户端，负责领取、归还 group 和为正在执行的 lease 续租。`QueueDataSource` 增加整个作业的 reader 创建、consumer 生命周期和 source checkpoint 管理；它继承同一套取样方法，没有另实现一层 buffer。`--rollout-data-transport straw` 会自动选择此数据源；显式指定 `--data-source-path` 时使用 `vime.data.queue_data_source.QueueDataSource`。
 
 `QueueReader` 不再有本地 continuation buffer。`add_samples()` 先发布可用的续跑前缀，再通过 `yield_tasks()` 在每个有界批次的一次 WAL 事务中替换输入并归还任务。旧 lease 随之结束，任意 worker 都能用新 lease 领取这些输入。reader 本地只保留正在执行的样本和 lease，关闭时无需重写已归还的 group。
 
@@ -118,22 +118,63 @@ GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，�
 
 ## 恢复与 checkpoint
 
-| 故障或重启场景 | 支持行为与边界 |
+正常训练 checkpoint 会同时保存模型与 rollout 状态，包括 dataset 游标、sample/group 计数、pending/partial 输入、ready group 和训练进度。已经在 straw 中的载荷通过引用保存，不会重复复制；保留 checkpoint 就会保留其依赖数据。
+
+重启前应停止整个旧任务，包括远端 worker。Save 目录锁会拒绝并发 coordinator，但不会停止孤立 reader；当前没有自动 coordinator 故障接管。
+
+### 续跑或选择 step
+
+使用相同逻辑目录恢复最近一次完整 checkpoint：
+
+```bash
+--rollout-data-transport straw \
+--load /shared/checkpoints/run \
+--save /shared/checkpoints/run \
+--save-interval 1
+```
+
+设置 `--save` 时，Megatron 要求 `--save-interval` 为正数。要恢复 rollout 7 结束后的状态，添加 `--ckpt-step 7`，下一轮从 rollout 8 开始。Dataset、模型/tokenizer 配置、straw run ID、storage profile 和 fully async worker 拓扑应与 checkpoint 一致；训练恢复需要已保存 optimizer 和 RNG 状态。
+
+恢复时会创建独立队列，共享 checkpoint 中的不可变载荷。Pending/partial 输入、ready group 顺序和 dataset 游标均来自该 checkpoint；不会混入源任务之后产生的样本。后续写入不会修改源 checkpoint。若 `--save` 已包含一次运行，输出会写入唯一的 `branches/<id>` 目录，并由 `rollout/current.json` 记录当前分支。之后可继续使用相同逻辑 `--load` 和 `--save`；省略 `--load` 时自动续跑活动分支。每次运行的不可变 `.straw.json` debug 归档应使用新路径。
+
+| 选择方式 | 参数 |
 |---|---|
-| Worker 在结果接收前丢失 | 恢复最近一次持久化 continuation，以新 attempt 重新分配 |
-| 已提交结果但回复丢失 | 恢复已有 receipt，不重复进行逻辑接收 |
-| 第一个 batch 计划生成前整个任务停止 | `--rollout-queue-resume` 使用相同初始模型和 rollout 配置恢复已接收 group 与持久化前缀 |
-| 已生成 batch 计划后重启 | 需要匹配的模型/优化器及 rollout checkpoint，单独恢复队列会明确报错 |
+| 当前分支历史中的某一步 | `--load /shared/checkpoints/run --ckpt-step 7` |
+| 指定分支 | `--load /shared/checkpoints/run/branches/<id> --ckpt-step 7` |
+| 指定完整 checkpoint | `--load /shared/checkpoints/run/rollout/committed_7.json` |
+| 独立输出目录 | `--save /shared/checkpoints/another-run` |
 
-Resume 要求整个旧任务（包括 coordinator 和 reader）已停止，并使用同一个 root 与 run ID。该参数是操作者声明，不是自动 fencing。尚未发布的推理可能重新执行；vLLM GPU KV cache 不会恢复。
+也可以修改逻辑 save 目录或活动分支中的 `latest_checkpointed_iteration.txt`，选择更早的 step。显式 `--ckpt-step` 或具体提交文件优先。自动选择只使用完整的模型与队列 checkpoint，沿分支祖先查找时不会越过分叉点，也不会跟随更晚但未完成的模型保存。
 
-Checkpoint 的 `<save>/rollout/queue_state_<rollout_id>.json` 保存 source 和已注册 scheduler consumer；`builder_state_<rollout_id>.json` 保存训练 consumer 视图。它们的引用保留相应存储依赖图。Continuation 增量持久化，checkpoint 引用已有数据，不会再次重写全部归还样本的 token。恢复旧 checkpoint 不会抹去 WAL 中后来已接收的历史。
+模型 checkpoint 没有队列快照时，会从空队列恢复；若存在 `rollout/global_dataset_state_dict_<step>.pt`，则恢复其中的 dataset 游标，否则从 offset 0 开始并打印警告。模型缺失、快照不完整或损坏、载荷缺失时会报错，不会静默退化。第一个模型 checkpoint 尚未产生时，原任务只能在第一个训练 batch 规划前恢复已持久化工作。恢复依赖原 straw 存储池，单独复制 checkpoint 目录不会复制载荷。恢复边界是完成的 rollout batch，而不是 optimizer microstep；GPU KV cache 和生成 RNG 不会恢复。增大 `--num-rollout` 时，如需沿用保存的 optimizer schedule，可使用 `--use-checkpoint-opt-param-scheduler`。
 
-部分 R3/SC 张量在 continuation 快照中保持 lazy 引用，生成追加新行时才加载。恢复 source 和 builder 状态会保留已保存的 warm groups 和行为策略版本，并记录哪些后续输出不属于恢复分支。恢复后的 pending task 独立于过滤决策保留存储引用。包含尚未重启 consumer 的完整 source 快照，必须先保留并持久记录，才能释放旧引用；保存失败保留旧引用，后台 GC 在恢复后的 consumer 状态提交后才启动。
+## Debug 归档与按 key 查询
 
-Adapter 目前尚未建立模型、优化器、RNG 与队列状态的联合最终提交 manifest。因此，持久化 rollout 不代表任意崩溃后的 optimizer 精确恢复，也不承诺训练结果逐位一致。
+现有 debug 保存/加载参数同时支持 `.pt` 和带索引的 `.straw.json`：
 
-dataset producer 游标尚未随 source checkpoint 保存，恢复 pending 快照也尚未排除所有后来新增的任务。因此，任意旧训练步的完整回退仍属于待实现能力。
+```bash
+--save-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+# 在独立的只训练任务中加载，不启动 vLLM：
+--load-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+```
+
+归档独立于队列消费和 GC 保留数据。使用 straw 传输保存时复用已有张量；否则在索引旁创建 `straw-data` 存储池。每个 rollout 一个不可变索引，样本按块打包；Evaluation 使用 `eval_<id>`。单独复制 JSON 索引不会复制载荷；使用 straw 做只训练回放时，应选择独立的可写训练队列。`--load-debug-rollout-data-subsample` 也适用于归档。
+
+```python
+from vime.data.archive import RolloutArchive
+from vime.observability.rollout_data_utils import load_debug_rollout_data
+
+with RolloutArchive('/shared/debug/rollout_7.straw.json') as archive:
+    print(archive.keys())
+    samples = archive.load_samples(sample_key='sample:42')
+    group = archive.load_samples(task_key='prompt:21')
+    archive.export_pt('/shared/debug/rollout_7.pt')
+
+samples = load_debug_rollout_data('/shared/debug/rollout_7.pt', rollout_id=7)
+RolloutArchive.save('/shared/debug/imported_7.straw.json', samples, rollout_id=7)
+```
+
+查询返回列表，因为 compact trajectory 可能共享 sample index。没有 index 的样本使用其归档位置；没有队列来源信息的样本没有 task key。关闭归档只会关闭 reader，数据继续保留。所有 reader 使用完后调用 `archive.release()` 释放归档保留；其他 checkpoint、队列和归档仍保留各自引用。导出的 `.pt` 在 straw 回收归档载荷后仍可读取。
 
 ## 验证与当前限制
 

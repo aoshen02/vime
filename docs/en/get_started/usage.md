@@ -151,7 +151,7 @@ For details on some of vLLM's customizations and the principles behind how vime 
 
 ### Data Format
 
-Raw data is always managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management. The former `--disable-rollout-global-dataset` flag has been removed; remove it from older launch scripts.
+Raw data is managed by the DataSource. The built-in DataSource loads `--prompt-data` when provided; use `--data-source-path` for custom data management.
 
 vime supports `.jsonl` and `.parquet` files; reading Parquet requires `pyarrow`. Each record in either format should contain the fields selected by `--input-key` and `--label-key`. An expanded JSONL record looks like this:
 
@@ -391,11 +391,12 @@ vime supports customizing data generation (rollout) to various degrees.
 
 ### Persistent rollout queue and distributed fully async
 
-See [straw architecture and recovery](../advanced/straw.md) for the data flow, shared tensor ownership and checkpoint boundaries.
+The default rollout transport is Ray `object-store`, which does not require a
+shared directory. `--rollout-data-transport nixl` selects Ray's NIXL tensor transport.
+For persistent queues and packed tensor storage across machines, use
+[straw](../advanced/straw.md) with a shared JuiceFS directory.
 
-Rollout payloads use Ray `object-store` by default, with `vime.rollout.data_source.RolloutDataSourceWithBuffer`. This mode needs neither straw nor a shared rollout directory. `--rollout-data-transport nixl` selects Ray's NIXL tensor transport.
-
-Install [straw](../advanced/straw.md), then select `--rollout-data-transport straw` to use its persistent queue and packed tensor storage. straw transport defaults to `vime.rollout.queue_data_source.QueueDataSource`. It uses `--rollout-data-dir`, or `<save>/rollout_data` when `--save` is set; otherwise an explicit shared directory is required. Ray still runs actors and RPCs and carries small references. The synchronous rollout entrypoint remains the default. To use distributed fully async explicitly:
+To enable distributed fully async rollout with straw, add:
 
 ```bash
 --rollout-function-path vime.rollout.fully_async_rollout.generate_rollout_fully_async \
@@ -407,7 +408,7 @@ With straw transport, `--use-rollout-routing-replay` stores completed samples' R
 
 One job-owned, non-restarting Ray actor coordinates task leases and a serialized dataset producer. Dataset cursor advancement and task submission are committed together. Workers receive small task references and read prompt groups directly from shared storage. This replaces the former in-memory distributed index allocator; no per-reader index ranges are abandoned on failure. Seeded shuffle and sample/group identities remain those of the existing data source.
 
-`get_samples(n)` and `add_samples(groups)` retain their interfaces. Custom producers can pass `source.reader_config("unique_reader_id")` to a remote process and call `config.open()` there. IDs must be unique; `owner` is reserved. Returned partial groups are persisted and become available to every reader; there is no reader-local sample buffer. Readers renew leases; a stopped reader returns unfinished tasks, while lost workers' tasks become available after lease expiry. Newly generated retries have new attempts. The coordinator does not automatically fail over: stop the old job before using `--rollout-queue-resume` with the same root and `--rollout-queue-run-id`.
+`get_samples(n)` and `add_samples(groups)` retain their interfaces. Custom producers can pass `source.reader_config("unique_reader_id")` to a remote process and call `config.open()` there. IDs must be unique; `owner` is reserved. Returned partial groups are persisted and become available to every reader; there is no reader-local sample buffer. Readers renew leases; a stopped reader returns unfinished tasks, while lost workers' tasks become available after lease expiry. Newly generated retries have new attempts. Recovery uses the normal `--load`/`--save` checkpoint flow, with optional `--ckpt-step`; the selected checkpoint restores the queue branch and dataset cursor, so no separate queue-resume flag is needed.
 
 Fully async starts one generation process per Ray node with CPU resources. Each reserves one CPU and receives a share of the configured concurrency in complete prompt groups. Faster workers may fill a global batch without waiting for slower ones. Local generation queues and collector prefetch remain bounded. Complete groups pass through the existing dynamic filter before publication; rejected groups contribute filter metrics. Distributed fully async still rejects `--rollout-all-samples-process-path`. The synchronous all-samples hook retains its existing Samples and calling order.
 
@@ -417,7 +418,7 @@ Built-in producers return a collection manifest. Legacy custom rollouts can stil
 
 The vime adapter currently binds the shared root at the same absolute path on all nodes and checks visibility in both directions. The underlying store's references are relocatable. r3/sc dependencies are adopted into queue storage before references escape the producer; old rollout spill cleanup cannot remove them. Queue files are retained by default. Offline inspection/cleanup requires stopped writers, coordinator and readers; ordinary reads or batch-ready events never delete data. Debug dumps remain opt-in `torch.save` files and may contain retained queue tensor references. Evaluation follows the existing path.
 
-Data-source checkpoints pause registered consumers, drain in-flight requests and save reader buffers and completed groups through `queue_state_<rollout_id>.json` under `<save>/rollout`. Buffer snapshots reference already persisted groups and retain current leases separately, avoiding a second encoding of every buffered token during checkpoint or shutdown; older inline snapshots remain readable. Restore checks dataset size, samples per prompt, seed, shuffle, run identity and fully-async worker topology. Global producer history remains in the journal and is not rewound when loading an earlier checkpoint. Custom execution state participates via `register_consumer(name, consumer)` with `pause`, `resume`, `state_dict`, `load_state_dict` and `close` methods. Disabled worker slots remain disabled after restore. This is durable queue/data state; it does not by itself guarantee exact distributed optimizer recovery or bitwise training equivalence.
+Straw checkpoints commit model, optimizer/RNG, queue, builder and dataset-cursor state together. `--load` restores the latest valid joint checkpoint by default; `--ckpt-step` selects a step in the active branch history. Restore creates an isolated branch from that snapshot, leaving the source run unchanged and excluding later-produced samples. Repeated rollback follows the active branch and cannot cross a fork point. If a model checkpoint predates a straw queue snapshot, recovery starts with an empty queue and restores the saved dataset cursor when available; a damaged or incomplete joint snapshot fails rather than silently falling back. This is durable queue/data state; it does not restore GPU KV cache or generation RNG.
 
 R3 training reads only the CP/TP rows assigned to the current rank. Batched continuation publication, loading and state persistence reuse authenticated indices within a bounded read session; receipt lookups use batch RPCs. These optimizations preserve checksums, WAL durability and GC ownership. Read sessions do not replace ownership pins.
 

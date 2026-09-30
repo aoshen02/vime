@@ -15,6 +15,7 @@ import numpy as np
 from tqdm import tqdm
 
 from vime.backends.vllm_utils.server_control import abort_servers_until_idle
+from vime.data.transport import discard_rollout_group, inherit_queue_context, publish_rollout_async
 from vime.observability.trace_utils import build_vllm_meta_trace_attrs, trace_function, trace_span
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, finalize_rollout_groups
 from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
@@ -30,7 +31,6 @@ from vime.utils.processing_utils import (
     load_processor,
     load_tokenizer,
 )
-from vime.utils.rollout_transport import discard_rollout_group, inherit_queue_context, publish_rollout_async
 from vime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm

@@ -583,7 +583,7 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Shared directory for straw rollout payloads, mounted at the same absolute path on all nodes. "
                     "Defaults to <save>/rollout_data. Required for straw transport when --save is unset. "
-                    "Files are retained for buffered samples, checkpoints and debug dumps."
+                    "Files are retained for pending samples, checkpoints and debug archives."
                 ),
             )
             parser.add_argument("--rollout-storage-profile", choices=["local", "juicefs"], default="local")
@@ -595,11 +595,6 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-queue-run-id",
                 default="rollout",
                 help="Persistent queue run identity within rollout-data-dir.",
-            )
-            parser.add_argument(
-                "--rollout-queue-resume",
-                action="store_true",
-                help="Recover an existing run; requires the prior coordinator and its job to be stopped.",
             )
             parser.add_argument(
                 "--rollout-queue-online-gc",
@@ -685,8 +680,8 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "The data source class. straw transport defaults to "
-                    "vime.rollout.queue_data_source.QueueDataSource; other transports use "
-                    "vime.rollout.data_source.RolloutDataSourceWithBuffer. Custom classes remain supported."
+                    "vime.data.queue_data_source.QueueDataSource; other transports use "
+                    "vime.data.data_source.RolloutDataSourceWithBuffer. Custom classes remain supported."
                 ),
             )
             parser.add_argument(
@@ -1360,7 +1355,8 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Save the rollout data to this path for debugging. "
-                    "The file will be saved to `save_debug_rollout_data.format(rollout_id)`."
+                    "Use a {rollout_id} template; .straw.json retains an indexed straw archive with lazy tensors, "
+                    "other suffixes write the self-contained legacy .pt format."
                 ),
             )
             # --load-debug-rollout-data, --debug-rollout-only, --debug-train-only
@@ -1806,7 +1802,12 @@ def _pre_parse_mode():
     return temp_args
 
 
-def parse_args(add_custom_arguments=None):
+def parse_args(add_custom_arguments=None, *, return_restore_plan=False):
+    """Return configuration, optionally paired with the driver's restore plan.
+
+    Custom argument providers and existing callers keep the Namespace contract;
+    queue connections and recovery progress are never attached to args.
+    """
     # Users may call `parse_args` very early, thus we ensure logger is configured here
     configure_logger()
 
@@ -1841,7 +1842,7 @@ def parse_args(add_custom_arguments=None):
         for key, value in vars(vllm_ns).items():
             setattr(args, key, value)
 
-    vime_validate_args(args)
+    restore_plan = vime_validate_args(args)
 
     if not args.debug_rollout_only:
         megatron_validate_args(args)
@@ -1849,7 +1850,7 @@ def parse_args(add_custom_arguments=None):
     if not args.debug_train_only:
         vllm_validate_args(args)
 
-    return args
+    return (args, restore_plan) if return_restore_plan else args
 
 
 def _apply_megatron_role_overrides(base_args, overrides, role):
@@ -2029,6 +2030,11 @@ def vime_validate_args(args):
         if args.opd_teacher_load is not None:
             raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
 
+    # Resolve the logical checkpoint directory before the model loader's
+    # HuggingFace/finetune fallback can replace --load or disable optimizer load.
+    from vime.data.checkpoint import resolve_checkpoint
+
+    restore_plan = resolve_checkpoint(args)
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -2070,16 +2076,15 @@ def vime_validate_args(args):
 
     if args.data_source_path is None:
         args.data_source_path = (
-            "vime.rollout.queue_data_source.QueueDataSource"
+            "vime.data.queue_data_source.QueueDataSource"
             if args.rollout_data_transport == "straw"
-            else "vime.rollout.data_source.RolloutDataSourceWithBuffer"
+            else "vime.data.data_source.RolloutDataSourceWithBuffer"
         )
     if args.rollout_data_transport != "straw":
-        if args.data_source_path == "vime.rollout.queue_data_source.QueueDataSource":
+        if args.data_source_path == "vime.data.queue_data_source.QueueDataSource":
             raise ValueError("QueueDataSource requires --rollout-data-transport straw")
-        for name in ("rollout_queue_resume", "rollout_queue_online_gc"):
-            if getattr(args, name, False):
-                raise ValueError(f"--{name.replace('_', '-')} requires --rollout-data-transport straw")
+        if getattr(args, "rollout_queue_online_gc", False):
+            raise ValueError("--rollout-queue-online-gc requires --rollout-data-transport straw")
     for name in (
         "rollout_queue_lease_seconds",
         "rollout_queue_max_pending",
@@ -2091,7 +2096,7 @@ def vime_validate_args(args):
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
 
     if args.rollout_data_transport == "straw":
-        from vime.utils.rollout_transport import resolve_rollout_data_dir
+        from vime.data.transport import resolve_rollout_data_dir
 
         if getattr(args, "buffer_filter_path", None) is not None:
             raise ValueError(
@@ -2356,3 +2361,5 @@ def vime_validate_args(args):
                 "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
                 "(a rollout-host-local NVMe directory)."
             )
+
+    return restore_plan

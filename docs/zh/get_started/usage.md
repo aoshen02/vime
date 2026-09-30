@@ -154,7 +154,7 @@ vLLM 的加载非常简单，只需要：
 
 ### 数据格式
 
-原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。原来的 `--disable-rollout-global-dataset` 已移除，旧启动脚本需要删除该参数。
+原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。
 
 vime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要安装 `pyarrow`。两种格式中的每条记录都应包含 `--input-key` 和 `--label-key` 指定的字段。下面是一条 JSONL 数据展开后的示例：
 
@@ -392,11 +392,9 @@ vime 支持不同程度的自定义数据生成（rollout）。
 
 ### 持久化 rollout 队列和分布式 fully async
 
-数据流、共享张量所有权和 checkpoint 边界详见 [straw 架构与恢复](../advanced/straw.md)。
+默认 rollout 传输为 Ray `object-store`，不需要共享目录。`--rollout-data-transport nixl` 选择 Ray 的 NIXL 张量传输。需要跨机持久化队列和打包张量存储时，使用 [straw](../advanced/straw.md) 和共享 JuiceFS 目录。
 
-Rollout payload 默认使用 Ray `object-store`，数据源为 `vime.rollout.data_source.RolloutDataSourceWithBuffer`；此模式不需要 straw 或共享 rollout 目录。`--rollout-data-transport nixl` 则选择 Ray 的 NIXL 张量传输。
-
-安装 [straw](../advanced/straw.md) 后，通过 `--rollout-data-transport straw` 启用持久化队列和打包张量存储。straw 传输默认使用 `vime.rollout.queue_data_source.QueueDataSource`，数据与协调日志存放在 `--rollout-data-dir`；设置了 `--save` 时可省略目录，使用 `<save>/rollout_data`，否则必须显式提供共享目录。Ray 仍负责 actor、RPC 和小引用传递。默认仍是同步 rollout；分布式 fully async 需要显式选择：
+启用使用 straw 的分布式 fully async rollout：
 
 ```bash
 --rollout-function-path vime.rollout.fully_async_rollout.generate_rollout_fully_async \
@@ -408,7 +406,7 @@ straw 传输下，开启 `--use-rollout-routing-replay` 后会将已完成 sampl
 
 作业内一个禁止自动重启的 Ray actor 管理任务 lease 和串行 dataset producer。Dataset 游标与任务提交在同一日志事务中保存，worker 通过小引用直接读取共享存储中的 prompt group，替代原来的内存索引分配器。Shuffle、group/sample 编号沿用原有数据源逻辑，故障不会丢弃 reader 预留的索引区间。
 
-保留 `get_samples(n)`、`add_samples(groups)` 接口。Custom producer 可以传递 `source.reader_config("unique_reader_id")`，在远端调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称。归还的 partial group 持久化后可由任意 reader 领取，不再保留 reader 本地 sample buffer。Reader 定期续租，正常关闭归还未完成任务，故障 worker 的任务在 lease 到期后重试。恢复协调器前必须停止旧作业，再以相同 root/run ID 显式传入 `--rollout-queue-resume`，不自动抢占旧实例。
+保留 `get_samples(n)`、`add_samples(groups)` 接口。Custom producer 可以传递 `source.reader_config("unique_reader_id")`，在远端调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称。归还的 partial group 持久化后可由任意 reader 领取，不再保留 reader 本地 sample buffer。Reader 定期续租，正常关闭归还未完成任务，故障 worker 的任务在 lease 到期后重试。恢复使用常规的 `--load`/`--save` checkpoint 流程，并可用 `--ckpt-step` 选择步骤；队列分支和 dataset 游标从所选 checkpoint 恢复，不再需要单独的 queue-resume 参数。
 
 Fully async 在每个有 CPU 资源的 Ray 节点启动一个常驻生成进程，每个占用一个 CPU，并按完整 prompt group 分配总并发。快速 worker 可以独立补足全局 batch，保留原有有界生成队列和 collector 预取。完整 group 通过现有 dynamic filter 后才提交；丢弃结果计入过滤指标。分布式 fully async 仍不支持 `--rollout-all-samples-process-path`；同步入口保留其 Samples 和调用顺序。
 
@@ -418,7 +416,7 @@ Fully async 在每个有 CPU 资源的 Ray 节点启动一个常驻生成进程�
 
 Vime adapter 当前要求各节点使用同一个绝对挂载路径，并双向检查可见性；底层引用支持重新绑定 root。r3/sc 的临时文件依赖会先复制进队列，旧 spill 清理不会使已提交数据失效。默认保留队列文件；读取、batch-ready 都不删除数据。离线清理要求停止 coordinator、writer 和 reader。Debug dump 仍按需用 `torch.save` 写入，可能引用保留的队列张量；evaluation 路径保持原有行为。
 
-数据源 checkpoint 暂停注册 consumer、等待在途请求，将 buffer 和已完成 group 通过 `<save>/rollout/queue_state_<rollout_id>.json` 保存。buffer 快照引用已经持久化的 group，并单独保存当前 lease，避免在 checkpoint 或退出时再次编码所有缓存 token；旧版内嵌 group 的快照仍可读取。恢复检查数据集大小、每个 prompt 的样本数、seed、shuffle、run identity 和 fully async worker 拓扑。恢复早期 checkpoint 不回滚 journal 中的全局生产事实。Custom execution state 通过 `register_consumer(name, consumer)` 参与保存，实现 `pause`、`resume`、`state_dict`、`load_state_dict`、`close`。停用的 worker 槽位在恢复后仍停用。这是持久化队列与数据状态，不等于完整分布式 optimizer 精确恢复或训练结果逐位一致。
+Straw checkpoint 会将模型、optimizer/RNG、队列、builder 和 dataset 游标作为一个整体提交。默认 `--load` 恢复最近的有效联合 checkpoint；`--ckpt-step` 可选择当前分支历史中的步骤。恢复会从快照创建隔离分支，不改动源运行，也不会带入快照之后产生的样本。多次回退沿当前分支查找，不能越过分叉点。若模型 checkpoint 没有 straw 队列快照，则从空队列恢复，并在可用时恢复保存的 dataset 游标；联合快照损坏或不完整时直接报错，不会静默降级。这会持久化队列和数据状态，但不会恢复 GPU KV cache 或生成 RNG。
 
 R3 训练只读取当前 CP/TP rank 分配到的行。续跑批量发布、加载和状态保存通过有界读取会话复用已认证索引，结果回执采用批量 RPC 查询。这些优化保留 checksum、WAL 持久化和 GC 所有权约束；读取会话不能替代所有权 pin。
 

@@ -35,6 +35,9 @@ per test. Set `VIME_CI_IMAGE` to an immutable candidate digest when validating
 Dockerfile or vLLM patch changes. Jobs otherwise use `vllm/vime:latest`, which
 must not be updated before the change merges.
 
+The `megatron` suite includes `test_straw_checkpoint_fork.py` for checkpoint
+step selection, rollback branches and indexed debug archives.
+
 ## Registering tests
 
 - Add always-on CPU tests to the appropriate command in

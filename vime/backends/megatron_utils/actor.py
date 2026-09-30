@@ -12,6 +12,7 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from vime.data.tensor import DiskTensorRef, TensorRef
 from vime.observability import train_data_utils, train_metric_utils
 from vime.observability.logging_utils import init_tracking
 from vime.observability.profile_utils import TrainProfiler
@@ -30,7 +31,6 @@ from vime.utils.reloadable_process_group import (
 )
 from vime.utils.routed_experts import RoutedExpertsLayerRef, RoutedExpertsMicrobatch, RoutedExpertsMicrobatchPrefetcher
 from vime.utils.routing_replay import RoutingReplay
-from vime.utils.tensor_store import DiskTensorRef, TensorRef
 from vime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper

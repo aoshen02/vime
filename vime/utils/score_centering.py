@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from vime.data.tensor import DiskTensorRef, TensorRef
 from vime.utils.ppo_utils import get_pg_loss_type, importance_weights
-from vime.utils.tensor_store import DiskTensorRef, TensorRef
 
 SAMPLER_TOPK_FIELDS = ("rollout_topk_token_ids", "rollout_topk_log_probs")
 

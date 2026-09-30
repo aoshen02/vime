@@ -28,7 +28,7 @@ def no_gpu_server_imports(monkeypatch):
 
 
 def manager(**overrides):
-    from vime.rollout.batch_builder import BatchBuilder
+    from vime.data.batch_builder import BatchBuilder
 
     cls = BatchBuilder
     result = cls.__new__(cls)
@@ -136,7 +136,7 @@ def test_streaming_score_centering_rejected():
 
 @pytest.mark.parametrize("transport", ["object-store", "nixl"])
 def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
-    from vime.rollout import batch_builder as rollout
+    from vime.data import batch_builder as rollout
 
     mgr = manager(rollout_data_transport=transport, global_batch_size=2)
     mgr.train_parallel_config = {"dp_size": 2}
@@ -158,6 +158,7 @@ def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
 
 def test_evaluation_preserves_training_score_centering(monkeypatch):
     from contextlib import nullcontext
+
     from vime.rollout import vllm_rollout as rollout
 
     a = args(partial_rollout=False, group_rm=True, custom_generate_function_path=None)
@@ -197,10 +198,10 @@ def test_evaluation_preserves_training_score_centering(monkeypatch):
 
 
 def test_spilled_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
+    from vime.data.tensor import DiskTensorRef
     from vime.observability.rollout_data_utils import load_debug_rollout_data, save_debug_rollout_data
     from vime.utils.routed_experts import cleanup_routed_experts_rollout, link_routed_experts_for_rollout
     from vime.utils.score_centering import spill_sampler_topk, validate_sampler_topk
-    from vime.utils.tensor_store import DiskTensorRef
 
     a = args(rollout_routed_experts_store_dir=str(tmp_path))
     sample = samples()[0]
@@ -221,8 +222,9 @@ def test_spilled_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
 @pytest.mark.parametrize("disk", [False, True])
 def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, disk):
     from megatron.core import mpu
+
+    from vime.data.tensor import DiskTensorRef
     from vime.observability import train_metric_utils as metrics
-    from vime.utils.tensor_store import DiskTensorRef
 
     for name, value in {
         "get_tensor_model_parallel_rank": 0,
@@ -251,7 +253,8 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
 def test_exact_top_p_transport_and_microbatch(monkeypatch, transport):
     import numpy as np
     from test_score_centering import top_p_meta
-    from vime.rollout import batch_builder as rollout
+
+    from vime.data import batch_builder as rollout
 
     packed = types.ModuleType("megatron.core.packed_seq_params")
     packed.PackedSeqParams = object

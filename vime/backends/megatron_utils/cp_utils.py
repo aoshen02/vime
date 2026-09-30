@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from megatron.core import mpu
 
-from vime.utils.tensor_store import DiskTensorRef, TensorRef
+from vime.data.tensor import DiskTensorRef, TensorRef
 
 _RoutedExpertsInput = torch.Tensor | TensorRef | DiskTensorRef
 

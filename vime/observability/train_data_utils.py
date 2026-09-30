@@ -5,7 +5,7 @@ from typing import Any
 
 import torch
 
-from vime.utils.tensor_store import DiskTensorRef, TensorRef, materialize_tensor_refs
+from vime.data.tensor import DiskTensorRef, TensorRef, materialize_tensor_refs
 
 logger = logging.getLogger(__name__)
 

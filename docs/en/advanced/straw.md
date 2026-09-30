@@ -84,7 +84,7 @@ active leases. `QueueDataSource` adds job-level reader creation, consumer lifecy
 and source checkpoints. It inherits the same sample-access methods; it does not
 implement another buffer. With `--rollout-data-transport straw`, the source is
 selected automatically. Explicit `--data-source-path` values should use
-`vime.rollout.queue_data_source.QueueDataSource`.
+`vime.data.queue_data_source.QueueDataSource`.
 
 `QueueReader` has no local continuation buffer. `add_samples()` publishes valid
 continuations, then `yield_tasks()` atomically replaces their inputs and returns
@@ -237,40 +237,102 @@ control-task allowance lets the manager commit a collection under backpressure.
 
 ## Recovery and checkpoints
 
-| Failure or restart | Supported behavior and boundary |
+Save model and rollout state together through normal training checkpoints.
+They include the dataset cursor, sample/group counters, pending and partial
+inputs, ready groups, and training progress. Existing straw payloads are
+referenced rather than copied; retaining a checkpoint keeps its data available.
+
+Stop the previous job, including remote workers, before restarting. The
+save-directory lock rejects concurrent coordinators but does not stop orphaned
+readers; there is no automatic coordinator failover.
+
+### Resume or select a step
+
+Resume the latest completed checkpoint using the same logical directories:
+
+```bash
+--rollout-data-transport straw \
+--load /shared/checkpoints/run \
+--save /shared/checkpoints/run \
+--save-interval 1
+```
+
+Megatron requires a positive `--save-interval` when `--save` is set. To restore
+the state saved after rollout 7, add `--ckpt-step 7`; the next rollout is 8.
+Keep the dataset, model/tokenizer configuration, straw run ID, storage profile,
+and fully async worker topology consistent. Training recovery requires saved
+optimizer and RNG state.
+
+Restore creates an isolated queue that shares the checkpoint's immutable
+payloads. Pending/partial inputs, ready-group order, and dataset cursor come
+from that checkpoint; later samples from the source run are excluded. Further
+writes do not modify the source checkpoint. If `--save` already contains a run,
+outputs go to a unique `branches/<id>` directory tracked by
+`rollout/current.json`. A later restart can use the same logical `--load` and
+`--save`; omitting `--load` resumes the active branch. Use a fresh path for each
+immutable `.straw.json` debug archive.
+
+| Selection | Arguments |
 |---|---|
-| Worker lost before acceptance | Recover the latest durable continuation; reassign with a new attempt |
-| Acceptance committed but reply lost | Recover the accepted receipt without a second logical acceptance |
-| Whole job stops before its first batch is planned | `--rollout-queue-resume` recovers accepted groups and durable prefixes with the same initial model and rollout configuration |
-| Restart after batch planning | Requires matching model/optimizer and rollout checkpoints; queue-only recovery fails explicitly |
+| Step in current branch history | `--load /shared/checkpoints/run --ckpt-step 7` |
+| A specific branch | `--load /shared/checkpoints/run/branches/<id> --ckpt-step 7` |
+| Exact checkpoint | `--load /shared/checkpoints/run/rollout/committed_7.json` |
+| Separate output directory | `--save /shared/checkpoints/another-run` |
 
-Resume requires the entire previous job, including its coordinator and readers,
-to have stopped, and the same root and run ID. The flag is an operator assertion,
-not automatic fencing. Unpublished inference may run again; vLLM GPU KV cache
-is not restored.
+Editing `latest_checkpointed_iteration.txt` in the logical save directory or
+active branch also selects an earlier step. Explicit `--ckpt-step` or an exact
+commit file takes precedence. Automatic selection uses completed model-and-queue
+checkpoints, follows branch ancestry only to each fork point, and ignores newer
+incomplete model saves.
 
-Checkpoints contain `<save>/rollout/queue_state_<rollout_id>.json` for the source
-and registered scheduler consumers, and `builder_state_<rollout_id>.json` for
-the training consumer view. Their references retain the matching storage graph.
-Continuations are persisted incrementally, so checkpoints reference
-existing data instead of rewriting every returned token. Restoring a checkpoint
-does not erase later accepted history from the WAL.
+If a model checkpoint has no queue snapshot, recovery starts an empty queue and
+restores `rollout/global_dataset_state_dict_<step>.pt` when present; otherwise
+the dataset restarts at offset 0 with a warning. Missing models, incomplete or
+corrupt snapshots, and missing payloads raise instead of silently falling back.
+Before the first model checkpoint, the original run can recover persisted work
+only before its first training batch is planned. Recovery uses the original
+straw pool; copying the checkpoint directory alone does not copy payloads. The
+boundary is a completed rollout batch, not an optimizer microstep. GPU KV
+caches and generation RNG are not restored. When extending `--num-rollout`,
+use `--use-checkpoint-opt-param-scheduler` to retain the saved optimizer schedule.
 
-Partial R3/SC tensors remain lazy references in continuation snapshots and are
-loaded when generation appends new rows. Restoring source and builder state
-preserves saved warm groups and behavior-policy versions, and records which
-later outputs are excluded from the restored branch. Restored pending tasks retain
-their storage independently of filtering. The complete source snapshot,
-including consumers that have not restarted yet, is retained and durably
-recorded before old references are released. Failed saves keep the old references;
-background GC starts only after restored consumer state commits.
+## Debug archives and sample lookup
 
-The dataset producer cursor is not yet part of the source checkpoint, and
-restoring a saved pending snapshot does not exclude every later-created task.
-Complete rollback to an arbitrary older training step remains future work.
-The adapter does not yet establish a joint final manifest for model, optimizer,
-RNG and queue state. Persistent rollout is therefore not a claim of exact
-optimizer recovery or bit-identical training after an arbitrary crash.
+`.pt` and indexed `.straw.json` archives both work with the existing debug flags:
+
+```bash
+--save-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+# In a separate train-only job, without vLLM:
+--load-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+```
+
+An archive retains its data independently of queue consumption and GC. With
+straw transport it reuses existing tensors; otherwise it creates a `straw-data`
+pool beside the index. Each rollout has one immutable index, with samples
+stored in chunks. Evaluation uses `eval_<id>`. Copying only the JSON index does
+not copy payloads; train-only replay with straw needs a separate writable queue.
+`--load-debug-rollout-data-subsample` also applies to archives.
+
+```python
+from vime.data.archive import RolloutArchive
+from vime.observability.rollout_data_utils import load_debug_rollout_data
+
+with RolloutArchive('/shared/debug/rollout_7.straw.json') as archive:
+    print(archive.keys())
+    samples = archive.load_samples(sample_key='sample:42')
+    group = archive.load_samples(task_key='prompt:21')
+    archive.export_pt('/shared/debug/rollout_7.pt')
+
+samples = load_debug_rollout_data('/shared/debug/rollout_7.pt', rollout_id=7)
+RolloutArchive.save('/shared/debug/imported_7.straw.json', samples, rollout_id=7)
+```
+
+Lookups return lists because compact trajectories can share a sample index.
+Samples without an index use their archive position; samples without queue
+provenance have no task key. Closing an archive closes its reader but retains
+the data. After all readers finish, call `archive.release()`; other checkpoints,
+queues, and archives keep their own references. An exported `.pt` remains
+readable after straw reclaims the archive payloads.
 
 ## Validation and remaining limits
 

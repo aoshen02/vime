@@ -35,13 +35,13 @@ import queue
 import threading
 import time
 
+from vime.data.transport import discard_rollout_group, publish_rollout_async
 from vime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups
 from vime.rollout.filter_hub.base_types import call_dynamic_filter
 from vime.rollout.vllm_rollout import GenerateState, generate_and_rm_group
 from vime.utils.async_utils import run
 from vime.utils.http_utils import get_rollout_num_engines
 from vime.utils.misc import load_function
-from vime.utils.rollout_transport import discard_rollout_group, publish_rollout_async
 from vime.utils.types import Sample
 
 __all__ = [
@@ -254,11 +254,19 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
             verdict = call_dynamic_filter(dynamic_filter, args, group)
             if verdict.keep:
                 if args.rollout_data_transport == "straw":
-                    group = await publish_rollout_async(group, args, rollout_id, group=True)
+                    group = await publish_rollout_async(
+                        group, args, rollout_id, group=True, controller=getattr(data_buffer, "controller", None)
+                    )
                 collected.append(group)
                 continue
 
-            await asyncio.to_thread(discard_rollout_group, group, args, verdict.reason or "dynamic_filter")
+            await asyncio.to_thread(
+                discard_rollout_group,
+                group,
+                args,
+                verdict.reason or "dynamic_filter",
+                controller=getattr(data_buffer, "controller", None),
+            )
             reason = verdict.reason or "dynamic_filter"
             dropped_count += 1
             drop_reasons[reason] = drop_reasons.get(reason, 0) + 1
@@ -292,10 +300,17 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
     metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
     metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(collected) + dropped_count)
     if args.rollout_sample_filter_path is not None:
-        output = finalize_rollout_groups(args, rollout_id, collected, metrics)
+        output = finalize_rollout_groups(
+            args, rollout_id, collected, metrics, controller=getattr(data_buffer, "controller", None)
+        )
     else:
         output = await asyncio.to_thread(
-            finalize_rollout_groups, args, rollout_id, collected, metrics if filters_enabled else None
+            finalize_rollout_groups,
+            args,
+            rollout_id,
+            collected,
+            metrics if filters_enabled else None,
+            controller=getattr(data_buffer, "controller", None),
         )
     return output if filters_enabled or args.rollout_data_transport == "straw" else output.samples
 
@@ -306,7 +321,7 @@ def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool
     if evaluation:
         raise ValueError("fully-async rollout doesn't support evaluation mode")
     if getattr(args, "rollout_data_transport", "object-store") == "straw":
-        from vime.rollout.queue_data_source import QueueDataSource
+        from vime.data.queue_data_source import QueueDataSource
 
         if isinstance(data_buffer, QueueDataSource):
             from vime.rollout.fully_async_distributed import DistributedRollout

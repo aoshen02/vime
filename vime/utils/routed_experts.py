@@ -10,8 +10,8 @@ from typing import Any
 
 import torch
 
+from vime.data.tensor import DiskTensorRef, TensorRef
 from vime.utils import accelerator
-from vime.utils.tensor_store import DiskTensorRef, TensorRef
 from vime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
