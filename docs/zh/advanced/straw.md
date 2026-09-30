@@ -54,7 +54,7 @@ Ray 继续负责调度、RPC 和执行进程故障；vime 负责 Sample schema�
 
 straw 明确拒绝 `--buffer-filter-path`；`--buffer-sort-by-staleness` 仍用于内存数据源，straw 始终采用上述顺序。reward 和样本筛选 hook 继续可用。已经接收的 group 如果显式放回，会创建独立的 delivery task，保留原 accepted 历史；消费或丢弃 delivery 时也会确认被其替代的已接收版本。fully async scheduler 仍保留有界的 ready result 窗口，其 checkpoint 状态和已接收结果引用单独持久化。
 
-source checkpoint 统一保存共享 pending 任务、准确的不可变输入引用和排序 metadata；worker checkpoint 只保存 reader metadata。reader 快照格式升级为 v3，旧 v1/v2 本地 buffer 快照需要迁移，加载时明确报错。此功能需要带 `yield_tasks()` 和持久化排序字段的新版 `straw-queue` 构建，原 PyPI 0.1.0 wheel 尚无这些接口。
+source checkpoint 统一保存共享 pending 任务、准确的不可变输入引用和排序 metadata；worker checkpoint 只保存 reader metadata。reader 快照格式升级为 v3，旧 v1/v2 本地 buffer 快照需要迁移，加载时明确报错。此功能需要带 `yield_tasks()` 和持久化排序字段的 `straw-queue>=0.1.2`。
 
 ## 共享张量、R3 与 SC
 
@@ -74,10 +74,10 @@ straw 的 `tensor.v1` 保存连续、行优先、小端的 typed bytes。Lazy re
 
 ## 启用方式
 
-`requirements.txt` 已包含 `straw-queue`，标准 Docker 构建和正常安装 vime 时会自动安装。已有环境可以在每个生成和训练节点执行以下命令，同一任务的所有节点使用相同版本：
+`requirements.txt` 已包含 `straw-queue>=0.1.2`，标准 Docker 构建和正常安装 vime 时会自动安装。已有环境可以在每个生成和训练节点执行以下命令，同一任务的所有节点使用相同版本：
 
 ```bash
-pip install straw-queue
+pip install 'straw-queue>=0.1.2'
 ```
 
 未安装 straw 时，默认 Ray `object-store` 传输仍可运行，启动日志会提示安装命令。如果显式选择 `--rollout-data-transport straw`，则在启动检查阶段报错并给出同样的安装命令。
@@ -102,7 +102,7 @@ Python 导入名为 `straw`。在原有训练命令中追加以下参数，使�
 --rollout-function-path vime.rollout.fully_async_rollout.generate_rollout_fully_async
 ```
 
-未指定 `--rollout-data-dir` 时，straw 模式使用 `<save>/rollout_data`；没有 `--save` 则必须显式指定共享目录。`--rollout-io-concurrency` 限制事件循环之外的序列化和 I/O 并发，默认 4。Adapter 使用 worker 进程和有界线程，straw 本身不创建 I/O 进程池。`--rollout-queue-max-pending` 与 `--rollout-queue-max-inflight` 限制任务准入，默认均为 65,536；它们不是保留字节数或文件数配额。
+未指定 `--rollout-data-dir` 时，straw 模式使用 `<save>/rollout_data`；没有 `--save` 则必须显式指定共享目录。`--rollout-io-concurrency` 限制事件循环之外的序列化和 I/O 并发，默认 4。Adapter 使用 worker 进程和有界线程，straw 本身不创建 I/O 进程池。
 
 权重同步期间，分布式 producer 暂停提交新任务，让在途请求完成并持久化；还有下一次训练 rollout 时恢复。权重同步本身仍是独立子系统。
 
@@ -112,9 +112,9 @@ Python 导入名为 `straw`。在原有训练命令中追加以下参数，使�
 
 在线 GC 默认关闭，添加 `--rollout-queue-online-gc` 后，straw 可在任务运行期间回收不再使用的封存 pack。vime 通过 straw API 提供使用完成和丢弃信号。只有 task、publication、queue、reader、checkpoint 等所有者全部释放后，pack 才能删除。仅 lease 超时不能证明 reader 已停止。一条存活记录就会保留整个 pack；活跃 writer、保留 checkpoint 和 WAL 历史仍会占用空间。
 
-GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，关闭时也会报告错误；它不会停止已在远端 worker 中运行的工作。数据保留供排查。容量用尽时应使用背压或由操作者明确决定处理方式，不能 reset 活跃队列或直接删除 pack 腾空间。离线删除目录要求所有参与者停止；仍需配置存储配额与应用保留策略。
+GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，关闭时也会报告错误；它不会停止已在远端 worker 中运行的工作。数据保留供排查。磁盘空间不足时，应释放不再需要的保留数据或扩容，不能 reset 活跃队列或直接删除 pack 腾空间。离线删除目录要求所有参与者停止；仍需配置存储配额与应用保留策略。
 
-已处理位置和过滤决策被显式记录，避免接收顺序中的空洞使已消费数据持续占用容量。独立且有界的 control task 配额允许 Manager 在生产背压时仍能提交 collection。
+已处理位置和过滤决策被显式记录，避免接收顺序中的空洞使已消费数据持续保留。
 
 ## 恢复与 checkpoint
 
@@ -158,7 +158,7 @@ GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，�
 --load-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
 ```
 
-归档独立于队列消费和 GC 保留数据。使用 straw 传输保存时复用已有张量；否则在索引旁创建 `straw-data` 存储池。每个 rollout 一个不可变索引，样本按块打包；Evaluation 使用 `eval_<id>`。单独复制 JSON 索引不会复制载荷；使用 straw 做只训练回放时，应选择独立的可写训练队列。`--load-debug-rollout-data-subsample` 也适用于归档。
+归档独立于队列消费和 GC 保留数据。使用 straw 传输保存时复用已有张量；否则在索引旁创建 `straw-data` 存储池。每个 rollout 一个不可变索引，样本按块打包；Evaluation 使用 `eval_<id>`。单独复制 JSON 索引不会复制载荷。使用 straw 做只训练回放时，自动使用归档的存储池和 run，覆盖 `--rollout-data-dir` 和 `--rollout-queue-run-id`，并在该可写存储池中新建独立队列，不改变原队列。完整回放（不抽样）直接复用已有 Sample 和张量记录，不重新写入。一次回放的所有归档必须属于同一存储池和 run。`--load-debug-rollout-data-subsample` 也适用于归档。
 
 ```python
 from vime.data.archive import RolloutArchive
