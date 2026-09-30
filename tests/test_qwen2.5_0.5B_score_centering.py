@@ -30,6 +30,7 @@ def execute(top_p=1.0):
             "--input-key messages --label-key label --apply-chat-template --rm-type math "
             "--num-rollout 2 --rollout-batch-size 2 --n-samples-per-prompt 4 "
             f"--rollout-max-response-len 256 --rollout-temperature 0.8 --rollout-top-p {top_p} --rollout-top-k -1 "
+            "--vllm-generation-config vllm "
             "--global-batch-size 8 --use-score-centering --score-centering-top-k 128 "
             "--rollout-data-transport straw --rollout-queue-online-gc "
             f"--rollout-data-dir {quote(str(Path(directory) / 'queue'))} "
