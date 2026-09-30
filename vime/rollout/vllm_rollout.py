@@ -787,6 +787,7 @@ async def generate_rollout_async(
     """
 
     state = GenerateState(args)
+    controller = getattr(getattr(data_source, "__self__", None), "controller", None)
 
     # instantiate data filters
     dynamic_filter = (
@@ -837,7 +838,11 @@ async def generate_rollout_async(
             ):
                 if not keep_all_samples:
                     await asyncio.to_thread(
-                        discard_rollout_group, group, args, dynamic_filter_output.reason or "dynamic_filter"
+                        discard_rollout_group,
+                        group,
+                        args,
+                        dynamic_filter_output.reason or "dynamic_filter",
+                        controller=controller,
                     )
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
@@ -848,7 +853,7 @@ async def generate_rollout_async(
             if len(data) < target_data_size:
                 sample = group[0][0] if isinstance(group[0], list) else group[0]
                 if args.rollout_data_transport == "straw" and not keep_all_samples:
-                    group = await publish_rollout_async(group, args, rollout_id, group=True)
+                    group = await publish_rollout_async(group, args, rollout_id, group=True, controller=controller)
                 data.append(group)
                 pbar.update(args.n_samples_per_prompt)
 
@@ -871,7 +876,10 @@ async def generate_rollout_async(
         process_func = load_function(args.rollout_all_samples_process_path)
         process_func(args, all_data, data_source)
         if args.rollout_data_transport == "straw":
-            data = [await publish_rollout_async(group, args, rollout_id, group=True) for group in data]
+            data = [
+                await publish_rollout_async(group, args, rollout_id, group=True, controller=controller)
+                for group in data
+            ]
             data = await publish_rollout_async(data, args, rollout_id)
         output = RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect())
     elif args.rollout_sample_filter_path is not None:
