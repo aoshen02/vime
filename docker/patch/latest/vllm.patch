@@ -213,10 +213,18 @@ index cb7d3d47183..09618d7eb66 100644
                  self.vllm_config.reasoning_config is None
                  or not self.vllm_config.reasoning_config.enabled
 diff --git a/vllm/v1/engine/output_processor.py b/vllm/v1/engine/output_processor.py
-index b4f7338048c..a98bf6f6e09 100644
+index b4f7338048c..f712c9b4962 100644
 --- a/vllm/v1/engine/output_processor.py
 +++ b/vllm/v1/engine/output_processor.py
-@@ -304,6 +304,7 @@ class RequestState:
+@@ -183,6 +183,7 @@ class RequestState:
+         # Per-sequence spec-decode accumulator; arrives once (on finish) via
+         # EngineCoreOutput, then attached to this sequence's CompletionOutput.
+         self.spec_decode_metrics: RequestSpecDecodeMetrics | None = None
++        self.weight_version: str | None = None
+ 
+         self.stats = RequestStateStats(arrival_time=arrival_time) if log_stats else None
+ 
+@@ -304,6 +305,7 @@ class RequestState:
          stop_reason: int | str | None,
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
@@ -224,7 +232,7 @@ index b4f7338048c..a98bf6f6e09 100644
      ) -> RequestOutput | PoolingRequestOutput | None:
          finished = finish_reason is not None
          final_only = self.output_kind == RequestOutputKind.FINAL_ONLY
-@@ -360,6 +361,7 @@ class RequestState:
+@@ -360,6 +362,7 @@ class RequestState:
              finished,
              kv_transfer_params,
              ec_transfer_params,
@@ -232,7 +240,7 @@ index b4f7338048c..a98bf6f6e09 100644
          )
  
      def _new_request_output(
-@@ -369,6 +371,7 @@ class RequestState:
+@@ -369,6 +372,7 @@ class RequestState:
          finished: bool,
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
@@ -240,7 +248,7 @@ index b4f7338048c..a98bf6f6e09 100644
      ) -> RequestOutput | PoolingRequestOutput:
          # If prompt embeds were used, put placeholder prompt token ids
          prompt_token_ids = self.prompt_token_ids
-@@ -403,6 +406,7 @@ class RequestState:
+@@ -403,6 +407,7 @@ class RequestState:
              finished=finished,
              kv_transfer_params=kv_transfer_params,
              ec_transfer_params=ec_transfer_params,
@@ -248,7 +256,7 @@ index b4f7338048c..a98bf6f6e09 100644
              num_cached_tokens=self.num_cached_tokens,
              num_cache_creation_tokens=self.num_cache_creation_tokens,
              metrics=self.stats,
-@@ -434,10 +438,16 @@ class RequestState:
+@@ -434,10 +439,16 @@ class RequestState:
              logprobs = logprobs[-num_new_tokens:] if num_new_tokens else logprobs[:0]
  
          sampling_mask = None
@@ -267,7 +275,23 @@ index b4f7338048c..a98bf6f6e09 100644
  
          # Concatenate routed experts on finish
          routed_experts = None
-@@ -731,6 +741,7 @@ class OutputProcessor:
+@@ -560,6 +571,7 @@ class OutputProcessor:
+                         stop_reason=None,
+                         kv_transfer_params=None,
+                         ec_transfer_params=None,
++                        weight_version=req_state.weight_version,
+                     )
+                 ):
+                     req_state.queue.put(request_output)
+@@ -724,6 +736,7 @@ class OutputProcessor:
+                 req_state.logprobs_processor.update_from_output(engine_core_output)
+ 
+             # 4) Create and handle RequestOutput objects.
++            req_state.weight_version = engine_core_output.weight_version
+             if request_output := req_state.make_request_output(
+                 new_token_ids,
+                 pooling_output,
+@@ -731,6 +744,7 @@ class OutputProcessor:
                  stop_reason,
                  kv_transfer_params,
                  ec_transfer_params,
