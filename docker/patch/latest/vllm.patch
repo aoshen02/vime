@@ -174,7 +174,7 @@ index e5bbb96a9cf..e7a849297ed 100644
      @property
      def finished(self) -> bool:
 diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
-index 9b27f50edc0..f0d8226e042 100644
+index 9b27f50edc0..3a35a40e4e1 100644
 --- a/vllm/v1/engine/core.py
 +++ b/vllm/v1/engine/core.py
 @@ -655,7 +655,7 @@ class EngineCore:
@@ -195,6 +195,20 @@ index 9b27f50edc0..f0d8226e042 100644
          )
          self._attach_iteration_details(engine_core_outputs, iteration_details)
  
+@@ -2036,7 +2036,12 @@ class EngineCoreProc(EngineCore):
+         self, req_ids: list[str], client_index: int, finish_reason: FinishReason
+     ) -> None:
+         outputs = [
+-            EngineCoreOutput(req_id, [], finish_reason=finish_reason)
++            EngineCoreOutput(
++                req_id,
++                [],
++                finish_reason=finish_reason,
++                weight_version=self._weight_version,
++            )
+             for req_id in req_ids
+         ]
+         eco = EngineCoreOutputs(finished_requests=req_ids, outputs=outputs)
 diff --git a/vllm/v1/engine/input_processor.py b/vllm/v1/engine/input_processor.py
 index cb7d3d47183..09618d7eb66 100644
 --- a/vllm/v1/engine/input_processor.py
