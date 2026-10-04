@@ -73,10 +73,12 @@ class GenerationProbe:
                     for choice in data["choices"]:
                         with self.condition:
                             tokens = len(choice.get("token_ids") or [])
+                            if tokens:
+                                assert data.get("weight_version") is not None
                             self.events.append(
                                 {
                                     "tokens": (self.events[-1]["tokens"] if self.events else 0) + tokens,
-                                    "version": str(data["weight_version"]),
+                                    "version": data.get("weight_version"),
                                     "finish_reason": choice.get("finish_reason"),
                                     "time": time.time(),
                                 }
