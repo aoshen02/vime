@@ -953,6 +953,7 @@ def train(
                 if (
                     accumulated_step_id == 0
                     and not getattr(args, "use_rollout_routing_replay", False)
+                    and args.rollout_top_p == 1.0
                     and "train/kl_loss" in log_dict
                 ):
                     assert log_dict["train/kl_loss"] < 1e-8, f"{log_dict=}"
