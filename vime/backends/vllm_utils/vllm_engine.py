@@ -412,8 +412,9 @@ class VLLMEngine(RayActor):
         model_path: str,
         load_format: str | None = None,
         weight_version: str | None = None,
+        flush_cache: bool = True,
     ):
-        del load_format
+        del load_format, flush_cache
         if self.node_rank != 0:
             return
         response = requests.post(
@@ -469,12 +470,12 @@ class VLLMEngine(RayActor):
         del weight_version
         return result
 
-    def pause_generation(self):
+    def pause_generation(self, mode: str = "abort"):
         if self.node_rank != 0:
             return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/pause",
-            params={"mode": "keep", "clear_cache": "false"},
+            params={"mode": "keep" if mode == "in_place" else mode, "clear_cache": "false"},
             json={},
         )
         response.raise_for_status()

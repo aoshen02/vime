@@ -381,7 +381,7 @@ index 6e86ac8341..5c38c0f672 100644
 +                        per_request_metrics.speculative_decoding = spec_stats
                  final_chunk = GenerateStreamResponse(
                      request_id=request_id,
-                     weight_version=weight_version,
+                     choices=[],
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
 index 18bbc10283..3996a257e7 100644
 --- a/vllm/v1/core/sched/scheduler.py

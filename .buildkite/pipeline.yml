@@ -168,6 +168,7 @@ steps:
             tests/test_layerwise_alignment.py \
             tests/test_model_provider_freeze.py \
             tests/test_policy_loss.py \
+            tests/test_pipeline_rl.py \
             tests/test_ppo_kl_metric.py \
             tests/test_published_payload_retry.py \
             tests/test_rollout_metadata_index.py \
@@ -177,6 +178,7 @@ steps:
             tests/test_qwen3_5_vl_native.py \
             tests/test_qwen3_linear_attention_cu_seqlens.py \
             tests/test_read_file_slicing.py \
+            tests/test_reference_top_p_replay.py \
             tests/test_reloadable_process_group_world.py \
             tests/test_r3_spill.py \
             tests/test_rollout_buffer_order.py \
@@ -238,7 +240,7 @@ steps:
             value: short
           - label: "run-ci-vllm-config — 8 GPU, 4 tests"
             value: vllm-config
-          - label: "run-ci-megatron — up to 8 GPU, 23 runs"
+          - label: "run-ci-megatron — up to 8 GPU, 26 runs"
             value: megatron
           - label: "run-ci-vime-customized — 1–8 GPU, 5 tests"
             value: vime-customized

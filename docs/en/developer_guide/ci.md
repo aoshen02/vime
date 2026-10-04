@@ -38,6 +38,13 @@ must not be updated before the change merges.
 The `megatron` suite includes `test_straw_checkpoint_fork.py` for checkpoint
 step selection, rollback branches and indexed debug archives.
 
+`test_qwen2.5_0.5B_pipeline_rl.py` runs three GRPO steps with fully async rollout
+on 4 GPUs. Its probes check that requests continue across weight updates and
+that policy weights change. The matrix covers NCCL and full disk sync with
+`--flush-cache-interval 0`, plus periodic refresh with NCCL and interval `2`.
+`test_pipeline_rl.py` checks the schedule on CPU. These tests do not measure
+learning quality or throughput gains.
+
 ## Registering tests
 
 - Add always-on CPU tests to the appropriate command in

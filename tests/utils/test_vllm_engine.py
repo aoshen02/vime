@@ -829,6 +829,45 @@ def test_update_weights_from_disk_posts_collective_rpc(vllm_engine, monkeypatch)
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("flush_cache", [False, True])
+def test_pipeline_rl_pause_and_disk_reload(vllm_engine, monkeypatch, flush_cache):
+    calls = []
+
+    def post(url, *, json, params=None):
+        calls.append((url, json, params))
+        return _MockResponse(json_data={"success": True})
+
+    monkeypatch.setattr(mod.requests, "post", post)
+    monkeypatch.setattr(vllm_engine, "set_weight_version", lambda version: None)
+    vllm_engine.pause_generation(mode="abort" if flush_cache else "in_place")
+    vllm_engine.update_weights_from_disk("/weights", weight_version="2", flush_cache=flush_cache)
+    vllm_engine.continue_generation()
+
+    assert calls == [
+        (
+            "http://127.0.0.1:8765/pause",
+            {},
+            {"mode": "abort" if flush_cache else "keep", "clear_cache": "false"},
+        ),
+        (
+            "http://127.0.0.1:8765/collective_rpc",
+            {"method": "reload_weights", "kwargs": {"weights_path": "/weights", "is_checkpoint_format": True}},
+            None,
+        ),
+        ("http://127.0.0.1:8765/resume", {}, None),
+    ]
+
+
+def test_pipeline_rl_worker_rank_does_not_send_control_requests(vllm_engine, monkeypatch):
+    vllm_engine.node_rank = 1
+    monkeypatch.setattr(
+        mod.requests, "post", lambda *args, **kwargs: pytest.fail("Only node rank zero controls serving")
+    )
+    vllm_engine.pause_generation()
+    vllm_engine.update_weights_from_disk("/weights", weight_version="2")
+    vllm_engine.continue_generation()
+
+
 def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
     vllm_engine.args.update_weight_local_checkpoint_dir = "/local/checkpoint"
     vllm_engine.args.update_weight_disk_dir = "/shared/checkpoints"

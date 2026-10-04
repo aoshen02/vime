@@ -36,6 +36,12 @@ job。验证 Dockerfile 或 vLLM patch 修改时，通过 `VIME_CI_IMAGE` 指定
 `megatron` 套件包含 `test_straw_checkpoint_fork.py`，覆盖 checkpoint
 步骤选择、回退分支和带索引的 debug 归档。
 
+`test_qwen2.5_0.5B_pipeline_rl.py` 使用 4 张 GPU，运行 fully async rollout
+和三个真实 GRPO step。探针检查同一请求跨权重更新持续生成，并确认训练改变了
+策略权重。固定矩阵覆盖 `--flush-cache-interval 0` 下的 NCCL 和 full disk
+权重同步，以及 NCCL 下 interval `2` 的周期性刷新。`test_pipeline_rl.py`
+在 CPU 上检查刷新周期。这些测试不衡量学习效果或吞吐增益。
+
 ## 注册测试
 
 - 始终运行的 CPU 测试加入 `.buildkite/pipeline.yml` 中对应的命令。

@@ -430,6 +430,38 @@ R3 训练只读取当前 CP/TP rank 分配到的行。续跑批量发布、加�
 
 Manager 仍会读取选中的 batch 做转换，共享存储带宽和 manager 内存仍可能成为瓶颈。`--rollout-io-concurrency` 限制队列发布的 I/O 待办数量。straw 的存储、日志和 GC 由 Rust 实现，vime 保留 Python sample 转换和训练集成。改变部署默认值前，需针对实际模型、并发和共享文件系统测量吞吐。
 
+### 跨权重更新保留 KV（PipelineRL）
+
+`--flush-cache-interval` 控制权重同步时的缓存刷新策略：
+
+| 值 | 行为 |
+| --- | --- |
+| `1`（默认） | abort 生成、flush KV、更新权重，再恢复生成。 |
+| `<= 0` | 原地暂停生成，更新权重后让未完成请求沿用已有 KV 继续生成。 |
+| `N > 1` | 每 N 次训练权重更新完整刷新一次，其余更新保留 KV。 |
+
+首次发布权重总会刷新，包括从 checkpoint 恢复时。例如 `2` 会在 serving
+version 2 保留 KV、version 3 刷新、version 4 再次保留。周期按权重同步次数
+计算，而不是 optimizer step 或 rollout batch 数。
+
+使用默认 rollout 函数时，非 `1` 的值会自动选择 fully async rollout 实现。
+自定义 rollout 函数保留自己的调度逻辑。训推需要使用独立 GPU，不能开启
+rollout offload 或 `--release-train`。默认评估仍使用标准 vLLM rollout 函数。
+
+```bash
+--flush-cache-interval 8 \
+--use-rollout-logprobs
+```
+
+实现使用 vLLM 已有的 `pause(mode="keep", clear_cache=false)` API。跨更新的请求
+会使用旧权重计算的 KV；rollout log probabilities 对应实际生成各 token 的策略。
+周期性完整刷新会 abort 未完成请求，fully async worker 会将其重新排队生成。
+
+公共 prefix 也可能在刷新前一直复用旧 KV。设为 `<= 0` 时，高频 prefix 没有
+缓存年龄上限。可关闭 vLLM 的 prefix caching，防止跨请求复用，同时保留未完成
+请求自身的 KV。周期性刷新则可以限制公共 KV 的存活时间，暂不引入权重版本
+缓存命名空间。
+
 ## vLLM 使用方法
 
 vime 以 server 模式运行 vLLM，通过 HTTP 与之通信。

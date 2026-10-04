@@ -432,6 +432,42 @@ Restored reader buffers keep an explicit storage reference independent of filter
 
 The manager still materializes the selected batch for conversion, so manager memory and shared-storage bandwidth remain limits. `--rollout-io-concurrency` bounds publication I/O submissions. straw's storage, journal and GC implementation is Rust; vime retains Python sample conversion and training integration. Measure throughput for the intended model, concurrency and shared filesystem before changing deployment defaults.
 
+### Preserve KV across weight updates (PipelineRL)
+
+`--flush-cache-interval` controls the cache refresh policy at weight synchronization:
+
+| Value | Behavior |
+| --- | --- |
+| `1` (default) | Abort generation, flush KV, update weights, then resume. |
+| `<= 0` | Pause generation in place, update weights, and continue unfinished requests with their existing KV. |
+| `N > 1` | Fully flush every N training weight updates; preserve KV on the intervening updates. |
+
+The initial weight publication always flushes, including after checkpoint recovery.
+For example, `2` preserves KV at serving version 2, flushes at version 3, and
+preserves it again at version 4. This counts weight synchronizations, rather
+than optimizer steps or rollout batches.
+
+Values other than `1` automatically select the fully async rollout implementation
+when using the default rollout function. Custom rollout functions keep their
+own scheduling. Training and rollout must use separate GPUs, without rollout
+offload or `--release-train`. Stock evaluation remains available through the
+standard vLLM rollout function.
+
+```bash
+--flush-cache-interval 8 \
+--use-rollout-logprobs
+```
+
+This uses vLLM's `pause(mode="keep", clear_cache=false)` API. Requests spanning an
+update use KV computed with older weights; rollout log probabilities reflect
+the policies that generated their tokens. Periodic full refreshes abort
+unfinished requests, which the fully async worker requeues.
+
+Shared prefixes can also retain old KV between refreshes. With `<= 0`, frequently
+reused prefixes have no age bound. Disable vLLM prefix caching to prevent reuse
+across requests while preserving each unfinished request's KV. Periodic refresh
+bounds the lifetime of shared KV without introducing weight-version cache namespaces.
+
 ## How to Use vLLM
 
 vime runs vLLM in server mode and talks to it over HTTP.

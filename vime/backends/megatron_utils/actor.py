@@ -388,6 +388,7 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
+        use_rollout_top_p_replay: bool = True,
     ) -> dict[str, list[torch.Tensor]]:
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
@@ -397,7 +398,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
-                use_rollout_top_p_replay=True,
+                use_rollout_top_p_replay=use_rollout_top_p_replay,
             )
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
@@ -470,6 +471,7 @@ class MegatronTrainRayActor(TrainRayActor):
                             data_iterator,
                             num_microbatches,
                             store_prefix="ref_",
+                            use_rollout_top_p_replay=False,
                         )
                     )
 

@@ -116,18 +116,6 @@ index 6e86ac83417..397902ddca1 100644
                              )
                          ],
                      )
-@@ -607,7 +615,10 @@ class ServingTokens(GenerateBaseServing):
-                                 step_top_logprobs.items()
-                             )
-                             if num_output_top_logprobs is not None
--                            and i < max(num_output_top_logprobs, 1)
-+                            and (
-+                                num_output_top_logprobs == -1
-+                                or i < max(num_output_top_logprobs, 1)
-+                            )
-                         ],
-                     )
-                 )
 diff --git a/vllm/outputs.py b/vllm/outputs.py
 index 0507f2555df..814fa16d86b 100644
 --- a/vllm/outputs.py
@@ -221,10 +209,65 @@ index 57f0180edc9..3a4d262210d 100644
              }
              if self.vllm_config.watermark_config is None:
 diff --git a/vllm/v1/worker/gpu/sample/output.py b/vllm/v1/worker/gpu/sample/output.py
-index aedff5ce187..2bedf360f56 100644
 --- a/vllm/v1/worker/gpu/sample/output.py
 +++ b/vllm/v1/worker/gpu/sample/output.py
-@@ -85,6 +85,7 @@ class SamplingMaskTensors(NamedTuple):
+@@ -10,6 +10,7 @@ import torch
+ 
+ from vllm.triton_utils import tl, triton
+ from vllm.v1.outputs import LogprobsTensors, SamplingMaskLists
++from vllm.v1.worker.gpu.sample.logprob import compute_token_logprobs
+ 
+ 
+ @dataclass
+@@ -36,6 +37,7 @@ def _compact_sampling_mask_kernel(
+     vocab_size,
+     max_num_kept,
+     BLOCK_SIZE: tl.constexpr,
++    WRITE_PACKED_MASK: tl.constexpr,
+ ):
+     """Per row: first ``max_num_kept`` finite-logit ids, the full count, the bitmask."""
+     req_idx = tl.program_id(0)
+@@ -59,24 +61,30 @@ def _compact_sampling_mask_kernel(
+         )
+         count += tl.sum(keep_i32)
+ 
+-        bits = tl.reshape(keep_i32, (BLOCK_SIZE // 8, 8)) << tl.arange(0, 8)[None, :]
+-        byte_offsets = start_idx // 8 + tl.arange(0, BLOCK_SIZE // 8)
+-        tl.store(
+-            packed_mask_ptr + req_idx * packed_mask_row_stride + byte_offsets,
+-            tl.sum(bits, axis=1).to(tl.uint8),
+-            mask=byte_offsets < tl.cdiv(vocab_size, 8),
+-        )
++        if WRITE_PACKED_MASK:
++            bits = (
++                tl.reshape(keep_i32, (BLOCK_SIZE // 8, 8)) << tl.arange(0, 8)[None, :]
++            )
++            byte_offsets = start_idx // 8 + tl.arange(0, BLOCK_SIZE // 8)
++            tl.store(
++                packed_mask_ptr + req_idx * packed_mask_row_stride + byte_offsets,
++                tl.sum(bits, axis=1).to(tl.uint8),
++                mask=byte_offsets < tl.cdiv(vocab_size, 8),
++            )
+ 
+     tl.store(counts_ptr + req_idx, count)
+ 
+ 
+-# Bounds the [num_reqs, width] int32 buffer; wider rows use the bitmask instead.
+ MAX_COMPACT_SUPPORT = 2048
+ 
+ 
+ class SamplingMaskTensors(NamedTuple):
+     """Device-side masks pending async D2H: compact ids, plus the bitmask as
+-    the exact fallback for rows wider than ``max_num_kept``."""
++    the exact fallback for rows wider than ``max_num_kept``.
++
++    With ``logprobs``, full-vocabulary buffers preserve pure top-p support
++    without synchronizing the device.
++    """
+ 
+     # [num_requests, max_num_kept]
+     token_ids: torch.Tensor
+@@ -85,6 +93,7 @@ class SamplingMaskTensors(NamedTuple):
      # [num_requests]
      counts: torch.Tensor
      vocab_size: int
@@ -232,7 +275,7 @@ index aedff5ce187..2bedf360f56 100644
  
      @classmethod
      def from_logits(
-@@ -92,10 +93,15 @@ class SamplingMaskTensors(NamedTuple):
+@@ -92,18 +101,33 @@ class SamplingMaskTensors(NamedTuple):
          logits: torch.Tensor,
          num_sampled_tokens: torch.Tensor,
          max_num_kept: int,
@@ -244,59 +287,83 @@ index aedff5ce187..2bedf360f56 100644
 +        max_num_kept = (
 +            vocab_size
 +            if return_logprobs
-+            else min(max_num_kept, vocab_size, MAX_COMPACT_SUPPORT)
++            else min(
++                MAX_COMPACT_SUPPORT if max_num_kept == -1 else max_num_kept,
++                vocab_size,
++                MAX_COMPACT_SUPPORT,
++            )
 +        )
          device = logits.device
  
-         token_ids = torch.empty(
-@@ -119,16 +125,34 @@ class SamplingMaskTensors(NamedTuple):
+-        token_ids = torch.empty(
+-            (num_reqs, max_num_kept), dtype=torch.int32, device=device
+-        )
+-        packed_mask = torch.empty(
+-            (num_reqs, (vocab_size + 7) // 8), dtype=torch.uint8, device=device
+-        )
++        if return_logprobs:
++            token_ids = torch.zeros(
++                (num_reqs, max_num_kept), dtype=torch.int32, device=device
++            )
++            packed_mask = torch.empty((num_reqs, 0), dtype=torch.uint8, device=device)
++        else:
++            token_ids = torch.empty(
++                (num_reqs, max_num_kept), dtype=torch.int32, device=device
++            )
++            packed_mask = torch.empty(
++                (num_reqs, (vocab_size + 7) // 8), dtype=torch.uint8, device=device
++            )
+         counts = torch.empty(num_reqs, dtype=torch.int32, device=device)
+         _compact_sampling_mask_kernel[(num_reqs,)](
+             logits,
+@@ -118,26 +142,45 @@ class SamplingMaskTensors(NamedTuple):
+             vocab_size,
              max_num_kept,
              BLOCK_SIZE=8192,
++            WRITE_PACKED_MASK=not return_logprobs,
          )
 -        return cls(token_ids, packed_mask, counts, vocab_size)
 +        logprobs = None
 +        if return_logprobs:
-+            logprobs = torch.log_softmax(logits.float(), dim=-1)
++            logprobs = compute_token_logprobs(logits, token_ids)
 +        return cls(token_ids, packed_mask, counts, vocab_size, logprobs)
  
      def to_cpu_nonblocking(self) -> SamplingMaskTensors:
          if self.token_ids.device.type == "cpu":
              return self
-+        if self.logprobs is not None:
-+            counts = self.counts.cpu()
-+            width = int(counts.max())
-+            ids = self.token_ids[:, :width]
-+            positions = torch.arange(width, device=ids.device)[None, :]
-+            safe_ids = torch.where(positions < self.counts[:, None], ids, 0)
-+            scores = self.logprobs.gather(1, safe_ids.long())
-+            return SamplingMaskTensors(
-+                ids.to("cpu", non_blocking=True),
-+                self.packed_mask.to("cpu", non_blocking=True),
-+                counts,
-+                self.vocab_size,
-+                scores.to("cpu", non_blocking=True),
-+            )
++        logprobs = self.logprobs
++        if logprobs is not None:
++            logprobs = logprobs.to("cpu", non_blocking=True)
          return SamplingMaskTensors(
              self.token_ids.to("cpu", non_blocking=True),
              self.packed_mask.to("cpu", non_blocking=True),
              self.counts.to("cpu", non_blocking=True),
              self.vocab_size,
-+            None,
++            logprobs,
          )
  
      def tolists(self) -> SamplingMaskLists:
-@@ -150,4 +174,10 @@ class SamplingMaskTensors(NamedTuple):
-         supports = [support(row) for row in range(len(counts))]
-         offsets = np.zeros(len(supports) + 1, dtype=np.int64)
-         np.cumsum([len(s) for s in supports], out=offsets[1:])
--        return SamplingMaskLists(np.concatenate(supports), offsets)
-+        logprobs = None
+         """CSR over all requests; rows without a sampled token are empty."""
+         counts = self.counts.cpu().numpy()
+         token_ids = self.token_ids.cpu().numpy()
+-        packed_mask = self.packed_mask.cpu().numpy()
+         width = token_ids.shape[1]
+ 
 +        if self.logprobs is not None:
-+            scores = self.logprobs.cpu().numpy()
-+            logprobs = np.concatenate(
-+                [scores[row, :count] for row, count in enumerate(counts)]
++            valid = np.arange(width)[None, :] < counts[:, None]
++            offsets = np.zeros(len(counts) + 1, dtype=np.int64)
++            np.cumsum(counts, out=offsets[1:])
++            return SamplingMaskLists(
++                token_ids[valid],
++                offsets,
++                logprobs=self.logprobs.cpu().numpy()[valid],
 +            )
-+        return SamplingMaskLists(np.concatenate(supports), offsets, logprobs=logprobs)
++
++        packed_mask = self.packed_mask.cpu().numpy()
++
+         def support(row: int) -> np.ndarray:
+             if counts[row] <= width:
+                 return token_ids[row, : counts[row]]
 diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
 index 802adb6f642..0deb66ec5a2 100644
 --- a/vllm/v1/worker/gpu/sample/sampler.py
