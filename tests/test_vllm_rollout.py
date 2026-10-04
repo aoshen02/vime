@@ -1327,6 +1327,96 @@ def test_partial_abort_resumes_only_aborted_siblings(patch_generate_state, monke
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("custom", [False, True])
+def test_generation_pacing_preserves_concurrency_cancellation_and_reuse(monkeypatch, custom):
+    async def exercise():
+        args = _rollout_args(group_rm=True, custom_generate_function_path="test.generate" if custom else None)
+        state = _PatchedGenerateState(args)
+        state.semaphore = asyncio.Semaphore(128)
+        started = []
+        first_batch, all_started, finish = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        timers = []
+        loop = asyncio.get_running_loop()
+        call_later = loop.call_later
+
+        def schedule(delay, callback, *args, **kwargs):
+            if delay == 0.001:
+                timers.append(callback)
+            else:
+                return call_later(delay, callback, *args, **kwargs)
+
+        async def generate(_args, sample, params, evaluation=False):
+            assert params == {"temperature": 0.5}
+            assert evaluation == custom
+            started.append(sample.index)
+            if len(started) == 64:
+                first_batch.set()
+            if len(started) == 127:
+                all_started.set()
+            await finish.wait()
+            sample.status = Sample.Status.COMPLETED
+            return sample
+
+        monkeypatch.setattr(loop, "call_later", schedule)
+        monkeypatch.setattr(mod, "GenerateState", lambda _args: state)
+        monkeypatch.setattr(mod, "generate", generate)
+        monkeypatch.setattr(mod, "load_function", lambda _path: generate)
+
+        def start(index):
+            return asyncio.create_task(
+                mod.generate_and_rm(args, Sample(index=index), {"temperature": 0.5}, evaluation=custom)
+            )
+
+        tasks = [start(index) for index in range(128)]
+        await asyncio.wait_for(first_batch.wait(), 1)
+        assert started == list(range(64))
+        assert len(timers) == 1
+        assert not any(task.done() for task in tasks)
+        tasks[70].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await tasks[70]
+        timers.pop()()
+        await asyncio.wait_for(all_started.wait(), 1)
+        assert started == [index for index in range(128) if index != 70]
+        assert state.active_server_generations == 127
+        finish.set()
+        await asyncio.gather(*(task for index, task in enumerate(tasks) if index != 70))
+        assert (await start(128)).status == Sample.Status.COMPLETED
+        assert not state.generation_pacer.pending
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.unit
+def test_abort_while_waiting_for_generation_pacer_does_not_start_request(monkeypatch):
+    async def exercise():
+        args = _rollout_args(group_rm=True)
+        state = _PatchedGenerateState(args)
+        queued, release = asyncio.Event(), asyncio.Event()
+        wait = state.generation_pacer.wait
+
+        async def wait_for_release():
+            queued.set()
+            await release.wait()
+            await wait()
+
+        async def unexpected_generate(*args, **kwargs):
+            raise AssertionError("An aborted queued sample must not start generation")
+
+        monkeypatch.setattr(state.generation_pacer, "wait", wait_for_release)
+        monkeypatch.setattr(mod, "GenerateState", lambda _args: state)
+        monkeypatch.setattr(mod, "generate", unexpected_generate)
+        task = asyncio.create_task(mod.generate_and_rm(args, Sample(), {}))
+        await queued.wait()
+        state.aborted = True
+        release.set()
+        assert (await task).status == Sample.Status.ABORTED
+        assert state.active_server_generations == 0
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.unit
 def test_multi_agent_generate_response_preserves_request_metadata(monkeypatch):
     from examples.multi_agent import agent_system
 
