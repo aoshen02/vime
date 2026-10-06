@@ -1,6 +1,7 @@
 """Sampler heads survive the real rollout-manager, DP and microbatch boundaries."""
 
 import asyncio
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -16,6 +17,49 @@ from vime.utils.async_utils import AsyncPacer
 from vime.utils.types import Sample
 
 NUM_GPUS = 0
+
+
+@pytest.mark.parametrize("finish_reason", ["abort", "length"])
+@pytest.mark.parametrize("return_token_ids", [False, True])
+@pytest.mark.parametrize("terminal_only", [False, True])
+def test_tito_stream_preserves_empty_finish_reason(finish_reason, return_token_ids, terminal_only):
+    serving_module = pytest.importorskip("vllm.entrypoints.scale_out.token_in_token_out.serving")
+    outputs = pytest.importorskip("vllm.outputs")
+    from vllm.sampling_params import SamplingParams
+
+    serving = object.__new__(serving_module.ServingTokens)
+    serving.enable_log_outputs = False
+    serving.enable_prompt_tokens_details = False
+    serving.enable_per_request_metrics = False
+    serving.request_logger = None
+    request = SimpleNamespace(
+        sampling_params=SamplingParams(),
+        stream_options=None,
+        return_token_ids=return_token_ids,
+        _response_mm_placeholders=None,
+        kv_transfer_params=None,
+    )
+
+    async def results():
+        chunks = [([], finish_reason)] if terminal_only else [([42], None), ([], finish_reason)]
+        for token_ids, reason in chunks:
+            completion = outputs.CompletionOutput(
+                index=0, text="", token_ids=token_ids, cumulative_logprob=None, logprobs=None, finish_reason=reason
+            )
+            yield outputs.RequestOutput("probe", [1, 2, 3], None, None, [completion], reason is not None)
+
+    async def collect():
+        return [
+            json.loads(chunk[6:])
+            async for chunk in serving.serve_tokens_stream_generator(
+                request, results(), "probe", "model", SimpleNamespace()
+            )
+            if chunk.startswith("data: {")
+        ]
+
+    chunks = asyncio.run(collect())
+    assert chunks[-1]["choices"][0]["finish_reason"] == finish_reason
+    assert chunks[-1]["choices"][0]["token_ids"] == []
 
 
 @pytest.mark.parametrize("aggregate", [False, True])

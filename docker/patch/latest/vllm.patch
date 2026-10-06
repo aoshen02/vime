@@ -30,6 +30,16 @@ index 59fda2dbf8c..862413c2da4 100644
              kv_transfer_params=final_res.kv_transfer_params,
              ec_transfer_params=final_res.ec_transfer_params,
          )
+@@ -464,8 +465,6 @@ class ServingTokens(GenerateBaseServing):
+                     # Still emit a terminal empty chunk while prompt metadata
+                     # is pending, so zero-token completions deliver it.
+-                    if not delta_token_ids and (
+-                        finish_reason is None or prompt_token_ids is None
+-                    ):
++                    if not delta_token_ids and finish_reason is None:
+                         continue
+ 
+                     if sampling_params.logprobs is not None:
 @@ -487,6 +488,7 @@ class ServingTokens(GenerateBaseServing):
  
                      chunk = GenerateStreamResponse(
