@@ -128,6 +128,8 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
             'PR="${BUILDKITE_PULL_REQUEST:-false}"',
             '[ "$PR" = "false" ] && PR="non-pr"',
             'export GITHUB_COMMIT_NAME="${BUILDKITE_COMMIT}_${PR}"',
+            'ulimit -n "$(ulimit -Hn)"',
+            'echo "RLIMIT_NOFILE=$(ulimit -Sn)/$(ulimit -Hn)"',
             "pip install -e . --no-deps --break-system-packages",
             f"python tests/ci/gpu_lock_exec.py --count {num_gpus} -- "
             f"python tests/{test_file}{' ' + extra_args if extra_args else ''}",
