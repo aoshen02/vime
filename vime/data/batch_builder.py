@@ -11,7 +11,7 @@ from pathlib import Path
 import ray
 import torch
 
-from vime.data.tensor import DiskTensorRef, TensorRef
+from vime.data.tensor import TensorRef
 from vime.data.transport import DiskPayloadRef, TrainBatchRef, pack_rollout_payload
 from vime.observability.rollout_data_utils import (
     tensorize_rollout_data_for_training,
@@ -371,7 +371,7 @@ class BatchBuilder:
                 (
                     (
                         sample.rollout_routed_experts
-                        if isinstance(sample.rollout_routed_experts, (TensorRef, DiskTensorRef))
+                        if isinstance(sample.rollout_routed_experts, TensorRef)
                         else sample.materialize_rollout_routed_experts()
                     )
                     if present

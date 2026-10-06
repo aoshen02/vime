@@ -1182,25 +1182,10 @@ def get_vime_extra_args_provider(add_custom_arguments=None):
                 help="The rollout routing replay technique from https://arxiv.org/abs/2510.11370",
             )
             parser.add_argument(
-                "--rollout-routed-experts-store-dir",
-                type=str,
-                default=None,
-                help=(
-                    "Shared filesystem directory used by routed-experts sample spill hooks. "
-                    "All rollout and training nodes must be able to access this path."
-                ),
-            )
-            parser.add_argument(
                 "--routing-replay-prefetch-microbatches",
                 type=int,
                 default=1,
                 help="Number of upcoming disk-backed R3 microbatches to prefetch into CPU memory.",
-            )
-            parser.add_argument(
-                "--keep-rollout-routed-experts-files",
-                action="store_true",
-                default=False,
-                help="Keep disk-backed routed-experts files after all trainers finish the rollout.",
             )
             parser.add_argument(
                 "--use-opsm",
@@ -2289,12 +2274,6 @@ def vime_validate_args(args):
         if args.routing_replay_prefetch_microbatches < 0:
             raise ValueError("--routing-replay-prefetch-microbatches must be non-negative")
 
-    disk_spill = "vime.utils.routed_experts.spill_routed_experts" in (
-        getattr(args, "rollout_sample_hook_path", None) or []
-    )
-    if disk_spill and not getattr(args, "rollout_routed_experts_store_dir", None):
-        raise ValueError("vime.utils.routed_experts.spill_routed_experts requires --rollout-routed-experts-store-dir.")
-
     if args.custom_config_path:
         with open(args.custom_config_path) as f:
             data = yaml.safe_load(f) or {}
@@ -2370,16 +2349,5 @@ def vime_validate_args(args):
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
-
-    if (
-        not args.debug_train_only
-        and "fully_async" in args.rollout_function_path
-        and disk_spill
-        and not getattr(args, "keep_rollout_routed_experts_files", False)
-    ):
-        raise ValueError(
-            "fully-async rollout with routed-experts disk spill requires "
-            "--keep-rollout-routed-experts-files because in-flight samples can cross rollout boundaries."
-        )
 
     return restore_plan

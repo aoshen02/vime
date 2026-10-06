@@ -170,6 +170,70 @@ def test_streaming_score_centering_rejected():
         asyncio.run(generate_streaming(args(), Sample(), {}))
 
 
+@pytest.mark.parametrize("returned_rows", [1, 2])
+def test_r3_resume_preserves_routes_and_score_centering_heads(monkeypatch, returned_rows):
+    import base64
+    import io
+
+    from vime.rollout import vllm_rollout as rollout
+
+    configured = args(
+        hf_checkpoint="model",
+        vllm_router_ip="localhost",
+        vllm_router_port=1234,
+        use_rollout_routing_replay=True,
+        ci_test=False,
+        num_layers=2,
+        moe_router_topk=2,
+    )
+    sample = samples()[0]
+    sample.status = Sample.Status.ABORTED
+    prefix = torch.tensor([[[1, 2], [3, 4]]], dtype=torch.int32)
+    sample.rollout_routed_experts = prefix.clone()
+    tokenizer = SimpleNamespace(decode=lambda *_args, **_kwargs: "x")
+    monkeypatch.setattr(rollout, "GenerateState", lambda _: SimpleNamespace(tokenizer=tokenizer, processor=None))
+    monkeypatch.setattr(rollout, "_prepare_prompt_ids", lambda sample, *_: sample.tokens)
+
+    async def post(url, payload, **kwargs):
+        assert payload["sampling_params"]["routed_experts_prompt_start"] == 1
+        assert payload["token_ids"] == [9, 3]
+        capture = io.BytesIO()
+        np.save(capture, np.array([[[5, 6], [7, 8]]] * returned_rows, dtype=np.int32))
+        head_ids, head_logprobs = meta()["score_centering_topk"]
+        return {
+            "choices": [
+                {
+                    "token_ids": [3],
+                    "finish_reason": "stop",
+                    "routed_experts": base64.b64encode(capture.getvalue()).decode(),
+                    "logprobs": {
+                        "content": [
+                            {
+                                "logprob": -0.5,
+                                "top_logprobs": [
+                                    {"token": f"token_id:{token_id}", "logprob": float(logprob)}
+                                    for token_id, logprob in zip(head_ids[0], head_logprobs[0], strict=True)
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(rollout, "post", post)
+    if returned_rows == 2:
+        with pytest.raises(ValueError, match="element count"):
+            asyncio.run(rollout.generate(configured, sample, {"max_new_tokens": 8}))
+        assert torch.equal(sample.materialize_rollout_routed_experts(), prefix)
+    else:
+        result = asyncio.run(rollout.generate(configured, sample, {"max_new_tokens": 8}))
+        assert result.tokens == [9, 3, 3]
+        assert torch.equal(result.materialize_rollout_routed_experts()[:1], prefix)
+        assert result.materialize_rollout_routed_experts()[1:].flatten().tolist() == [5, 6, 7, 8]
+        assert result.rollout_topk_token_ids.tolist() == [[3, 1, 4]] * 2
+
+
 @pytest.mark.parametrize("transport", ["object-store", "nixl"])
 def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
     from vime.data import batch_builder as rollout
@@ -233,33 +297,10 @@ def test_evaluation_preserves_training_score_centering(monkeypatch):
     assert a.use_score_centering
 
 
-def test_spilled_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
-    from vime.data.tensor import DiskTensorRef
-    from vime.observability.rollout_data_utils import load_debug_rollout_data, save_debug_rollout_data
-    from vime.utils.routed_experts import cleanup_routed_experts_rollout, link_routed_experts_for_rollout
-    from vime.utils.score_centering import spill_sampler_topk, validate_sampler_topk
-
-    a = args(rollout_routed_experts_store_dir=str(tmp_path))
-    sample = samples()[0]
-    spill_sampler_topk(a, sample, 1)
-    assert isinstance(sample.rollout_topk_token_ids, DiskTensorRef)
-    link_routed_experts_for_rollout(a, sample, 2)
-    path = str(tmp_path / "debug.pt")
-    save_debug_rollout_data(path, [sample], rollout_id=2, evaluation=False)
-    cleanup_routed_experts_rollout(a, 1)
-    validate_sampler_topk(sample, 3)
-    cleanup_routed_experts_rollout(a, 2)
-    restored = load_debug_rollout_data(path, rollout_id=2)[0]
-    validate_sampler_topk(restored, 3)
-    restored.append_response_tokens(a, tokens=[3], log_probs=[-0.5], meta_info=meta())
-    assert restored.rollout_topk_token_ids.tolist() == [[3, 1, 4]] * 2
-
-
 @pytest.mark.parametrize("disk", [False, True])
 def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, disk):
     from megatron.core import mpu
 
-    from vime.data.tensor import DiskTensorRef
     from vime.observability import train_metric_utils as metrics
 
     for name, value in {
@@ -275,8 +316,14 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
     tensorize_rollout_data_for_training(batch)
     batch.update(total_lengths=[2, 2], global_batch_sizes=[2])
     if disk:
-        for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-            batch[key] = [DiskTensorRef.write(x, tmp_path / f"{key}_{i}") for i, x in enumerate(batch[key])]
+        from straw import SharedFilesystemStore
+        from straw.tensor import publish_tensors
+
+        with SharedFilesystemStore(tmp_path, "metrics", codecs=("tensor.v1",)) as store:
+            for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                batch[key] = list(
+                    publish_tensors(store, {str(i): x for i, x in enumerate(batch[key])}, submission_id=key)
+                )
     metrics.log_rollout_data(
         0, args(ci_test=False, log_multi_turn=False, log_passrate=False, log_correct_samples=False), batch
     )

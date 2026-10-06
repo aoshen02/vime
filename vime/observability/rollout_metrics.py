@@ -4,7 +4,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from vime.data.tensor import DiskTensorRef, TensorRef
+from vime.data.tensor import TensorRef
 from vime.observability import logging_utils
 from vime.observability.metric_utils import (
     compute_pass_rate,
@@ -175,7 +175,7 @@ def _compute_top_p_kept_vocab_metrics(all_samples: list[Sample]):
         offsets = sample.rollout_top_p_token_offsets
         if offsets is None or sample.response_length == 0:
             continue
-        if isinstance(offsets, (TensorRef, DiskTensorRef)):
+        if isinstance(offsets, TensorRef):
             offsets = offsets.load()
         offsets = torch.as_tensor(offsets, dtype=torch.int64)
         if offsets.numel() == 0:

@@ -180,7 +180,6 @@ steps:
             tests/test_read_file_slicing.py \
             tests/test_reference_top_p_replay.py \
             tests/test_reloadable_process_group_world.py \
-            tests/test_r3_spill.py \
             tests/test_rollout_buffer_order.py \
             tests/test_rollout_data_utils.py \
             tests/test_rollout_metrics.py \

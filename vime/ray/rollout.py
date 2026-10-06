@@ -4,11 +4,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-import psutil
 import ray
 
 from vime.data.batch_builder import BatchBuilder
-from vime.data.tensor import DiskTensorRef
 from vime.data.transport import (
     DiskPayloadRef,
     accept_raw_rollout,
@@ -28,7 +26,6 @@ from vime.rollout.base_types import RolloutFnTrainOutput, call_rollout_fn
 from vime.rollout.sample_hooks import set_current_rollout_id
 from vime.utils.health_monitor import RolloutHealthMonitor
 from vime.utils.http_utils import init_http_client
-from vime.utils.memory_utils import get_process_host_memory_gib
 from vime.utils.misc import load_function
 from vime.utils.staleness import fully_async_metrics_enabled
 
@@ -98,7 +95,6 @@ class RolloutManager:
             runtime_env={"env_vars": add_default_ray_env_vars()},
         ).remote()
         self.rollout_id = -1
-        self._active_routed_experts_rollouts: set[int] = set()
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
@@ -166,8 +162,6 @@ class RolloutManager:
     def dispose(self):
         for monitor in self._health_monitors:
             monitor.stop()
-        for rollout_id in list(self._active_routed_experts_rollouts):
-            self.cleanup_rollout_data(rollout_id)
         if close := getattr(self.data_source, "close", None):
             close()
         if self._owns_controller:
@@ -181,13 +175,6 @@ class RolloutManager:
         if engines:
             ray.get([engine.shutdown.remote() for engine in engines])
         logging_utils.finish_tracking(self.args)
-
-    def cleanup_rollout_data(self, rollout_id: int) -> None:
-        from vime.utils.routed_experts import cleanup_routed_experts_rollout
-
-        cleanup_routed_experts_rollout(self.args, rollout_id)
-        if active := getattr(self, "_active_routed_experts_rollouts", None):
-            active.discard(rollout_id)
 
     @property
     def server(self) -> Any | None:
@@ -239,26 +226,6 @@ class RolloutManager:
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-        disk_routes = [
-            value
-            for sample in data
-            for value in (sample.rollout_routed_experts, sample.rollout_topk_token_ids, sample.rollout_topk_log_probs)
-            if isinstance(value, DiskTensorRef)
-        ]
-        if disk_routes:
-            self._active_routed_experts_rollouts.add(rollout_id)
-            rss_gib, hwm_gib = get_process_host_memory_gib()
-            logger.info(
-                "R3 manager spill profile: rollout_id=%d samples=%d files=%d disk_bytes=%.3f GiB "
-                "rss=%.3f GiB hwm=%.3f GiB host_available=%.3f GiB",
-                rollout_id,
-                len(data),
-                len(disk_routes),
-                sum(ref.nbytes for ref in disk_routes) / 1024**3,
-                rss_gib,
-                hwm_gib,
-                psutil.virtual_memory().available / 1024**3,
-            )
         save_debug_rollout_data(
             self.args.save_debug_rollout_data,
             data,
@@ -313,7 +280,6 @@ class RolloutManager:
 
     def training_completed(self, rollout_id):
         self.batch_builder.training_completed(rollout_id)
-        self.cleanup_rollout_data(rollout_id)
 
     def load(self, rollout_id=None):
         from vime.data.checkpoint import SourceRestore

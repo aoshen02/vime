@@ -5,9 +5,9 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from megatron.core import mpu
 
-from vime.data.tensor import DiskTensorRef, TensorRef
+from vime.data.tensor import TensorRef
 
-_RoutedExpertsInput = torch.Tensor | TensorRef | DiskTensorRef
+_RoutedExpertsInput = torch.Tensor | TensorRef
 
 
 def get_logits_and_tokens_offset_with_cp(
@@ -283,8 +283,8 @@ def _new_routed_experts_buffer(
     reference: _RoutedExpertsInput,
 ) -> torch.Tensor:
     kwargs = {
-        "device": (torch.device("cpu") if isinstance(reference, (TensorRef, DiskTensorRef)) else reference.device),
-        "dtype": (reference.torch_dtype if isinstance(reference, (TensorRef, DiskTensorRef)) else reference.dtype),
+        "device": (torch.device("cpu") if isinstance(reference, TensorRef) else reference.device),
+        "dtype": (reference.torch_dtype if isinstance(reference, TensorRef) else reference.dtype),
     }
     if kwargs["device"].type == "cpu":
         return torch.empty((rows, num_layers, topk), pin_memory=True, **kwargs)

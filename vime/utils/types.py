@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from vime.data.tensor import DiskTensorRef, TensorRef
+from vime.data.tensor import TensorRef
 from vime.utils.misc import decode_int32_meta_array
 
 _TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
@@ -45,9 +45,9 @@ def _merge_rollout_top_p_token_data(
     token_ids: torch.Tensor,
     offsets: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if isinstance(base_token_ids, (TensorRef, DiskTensorRef)):
+    if isinstance(base_token_ids, TensorRef):
         base_token_ids = base_token_ids.load()
-    if isinstance(base_offsets, (TensorRef, DiskTensorRef)):
+    if isinstance(base_offsets, TensorRef):
         base_offsets = base_offsets.load()
     base_token_ids = torch.as_tensor([] if base_token_ids is None else base_token_ids, dtype=torch.int32).reshape(-1)
     base_offsets = torch.as_tensor([0] if base_offsets is None else base_offsets, dtype=torch.int32).reshape(-1)
@@ -68,9 +68,9 @@ def _pad_rollout_top_p_offsets(
     if num_tokens < 0:
         raise ValueError(f"num_tokens must be non-negative, got {num_tokens}.")
     # Masked tool tokens only extend offsets; keep the immutable ids shared.
-    if not isinstance(token_ids, (TensorRef, DiskTensorRef)):
+    if not isinstance(token_ids, TensorRef):
         token_ids = torch.as_tensor(token_ids, dtype=torch.int32).reshape(-1)
-    if isinstance(offsets, (TensorRef, DiskTensorRef)):
+    if isinstance(offsets, TensorRef):
         offsets = offsets.load()
     offsets = torch.as_tensor(offsets, dtype=torch.int32).reshape(-1)
     if offsets.numel() == 0:
@@ -98,7 +98,7 @@ def _to_float_list(values) -> list[float] | None:
 
 
 def _numel(value) -> int:
-    if isinstance(value, (TensorRef, DiskTensorRef)):
+    if isinstance(value, TensorRef):
         return math.prod(value.shape)
     return int(torch.as_tensor(value).reshape(-1).numel())
 
@@ -132,14 +132,14 @@ class Sample:
     loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
-    rollout_topk_token_ids: np.ndarray | torch.Tensor | list[list[int]] | TensorRef | DiskTensorRef | None = None
-    rollout_topk_log_probs: np.ndarray | torch.Tensor | list[list[float]] | TensorRef | DiskTensorRef | None = None
+    rollout_topk_token_ids: np.ndarray | torch.Tensor | list[list[int]] | TensorRef | None = None
+    rollout_topk_log_probs: np.ndarray | torch.Tensor | list[list[float]] | TensorRef | None = None
     # Ragged top-p nucleus token ids replayed from rollout sampling. For response
     # token i, kept ids are rollout_top_p_token_ids[offsets[i]:offsets[i + 1]].
     rollout_top_p_token_ids: list[int] | torch.Tensor | TensorRef | None = None
     rollout_top_p_token_offsets: list[int] | torch.Tensor | TensorRef | None = None
     rollout_top_p_log_probs: np.ndarray | torch.Tensor | list[float] | TensorRef | None = None
-    rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | TensorRef | DiskTensorRef | None = (
+    rollout_routed_experts: list[list[int]] | list[torch.Tensor] | torch.Tensor | TensorRef | None = (
         None  # Routed experts from rollout engine
     )
     remove_sample: bool = False
@@ -305,7 +305,7 @@ class Sample:
             k = args.score_centering_top_k
             for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
                 value = getattr(self, key)
-                if isinstance(value, (TensorRef, DiskTensorRef)):
+                if isinstance(value, TensorRef):
                     setattr(self, key, value.load().numpy())
             if trainable:
                 ids, logps = extract_sampler_topk(meta_info or {}, len(tokens), k)
@@ -350,7 +350,7 @@ class Sample:
                     torch.as_tensor(offsets),
                 )
                 previous_logps = self.rollout_top_p_log_probs
-                if isinstance(previous_logps, (TensorRef, DiskTensorRef)):
+                if isinstance(previous_logps, TensorRef):
                     previous_logps = previous_logps.load()
                 self.rollout_top_p_log_probs = np.concatenate((np.asarray(previous_logps), logps))
                 # Already appended the validated replay data above.
@@ -499,7 +499,7 @@ class Sample:
         existing = self.rollout_routed_experts
         if existing is None:
             self.rollout_routed_experts = routed_experts
-        elif isinstance(existing, (TensorRef, DiskTensorRef)):
+        elif isinstance(existing, TensorRef):
             self.rollout_routed_experts = [existing.load(), routed_experts]
         elif isinstance(existing, list) and all(torch.is_tensor(item) for item in existing):
             existing.append(routed_experts)
@@ -510,7 +510,7 @@ class Sample:
         routed_experts = self.rollout_routed_experts
         if routed_experts is None:
             return 0
-        if isinstance(routed_experts, (TensorRef, DiskTensorRef)):
+        if isinstance(routed_experts, TensorRef):
             return int(routed_experts.shape[0])
         if torch.is_tensor(routed_experts):
             return int(routed_experts.shape[0])
@@ -526,7 +526,7 @@ class Sample:
         routed_experts = self.rollout_routed_experts
         if routed_experts is None:
             return None
-        if isinstance(routed_experts, (TensorRef, DiskTensorRef)):
+        if isinstance(routed_experts, TensorRef):
             tensor = routed_experts.load()
         elif torch.is_tensor(routed_experts):
             tensor = routed_experts.reshape(*routed_experts.shape)
@@ -558,7 +558,7 @@ class Sample:
             raise ValueError("rollout top-p replay must include both token ids and offsets.")
 
         offsets = self.rollout_top_p_token_offsets
-        if isinstance(offsets, (TensorRef, DiskTensorRef)):
+        if isinstance(offsets, TensorRef):
             offsets = offsets.load()
         offsets = torch.as_tensor(offsets, dtype=torch.int32).reshape(-1)
         if offsets.numel() != self.response_length + 1:

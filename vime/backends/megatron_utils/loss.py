@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
-from vime.data.tensor import DiskTensorRef, TensorRef
+from vime.data.tensor import TensorRef
 from vime.utils.distributed_utils import distributed_masked_whiten
 from vime.utils.misc import load_function
 from vime.utils.ppo_utils import (
@@ -383,11 +383,7 @@ def _build_topp_keep_mask(
 
     # Only offsets are needed in full; ids stay lazy until selecting CP rows.
     top_p_token_offsets = [
-        (
-            t.load().tolist()
-            if isinstance(t, (TensorRef, DiskTensorRef))
-            else t.tolist() if torch.is_tensor(t) else list(t)
-        )
+        t.load().tolist() if isinstance(t, TensorRef) else t.tolist() if torch.is_tensor(t) else list(t)
         for t in top_p_token_offsets
     ]
 
@@ -1014,7 +1010,7 @@ def get_score_centering_terms(args, batch, logits):
             batch["rollout_top_p_log_probs"],
             strict=True,
         ):
-            if isinstance(offsets, (TensorRef, DiskTensorRef)):
+            if isinstance(offsets, TensorRef):
                 offsets = offsets.load()
             offsets = torch.as_tensor(offsets, device="cpu", dtype=torch.long)
             # Coalesce adjacent row supports, preserving zigzag/allgather CP
@@ -1070,7 +1066,7 @@ def get_score_centering_terms(args, batch, logits):
                         if mpu.get_context_parallel_world_size() == 1
                         else slice_log_prob_with_cp(value, total, response)
                     )
-                    if isinstance(value, (TensorRef, DiskTensorRef))
+                    if isinstance(value, TensorRef)
                     else value
                 )
                 for value, total, response in zip(values, total_lengths, response_lengths, strict=True)
