@@ -298,6 +298,8 @@ class RolloutManager:
         log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
+        # Keep admission frozen across source and builder snapshots. Source.save
+        # preserves this pre-existing pause instead of resuming between files.
         paused = []
         try:
             for consumer in getattr(self.data_source, "consumers", {}).values():
@@ -317,6 +319,8 @@ class RolloutManager:
         from vime.data.checkpoint import SourceRestore
 
         source_restore = self.data_source.load(rollout_id)
+        # Custom sources keep their existing load() contract; only the built-in
+        # queue returns a source/builder restoration handoff.
         self.batch_builder.load(
             rollout_id, source_restore=source_restore if isinstance(source_restore, SourceRestore) else None
         )

@@ -128,6 +128,18 @@ index 0507f2555df..814fa16d86b 100644
  
  
  @dataclass
+@@ -202,6 +203,11 @@ class RequestOutput:
+                                 completion.sampling_mask.token_ids.extend(
+                                     next_completion.sampling_mask.token_ids
+                                 )
++                                if next_completion.sampling_mask.logprobs is not None:
++                                    assert completion.sampling_mask.logprobs is not None
++                                    completion.sampling_mask.logprobs.extend(
++                                        next_completion.sampling_mask.logprobs
++                                    )
+                         if next_completion.spec_decode_metrics is not None:
+                             completion.spec_decode_metrics = (
+                                 next_completion.spec_decode_metrics
 diff --git a/vllm/v1/engine/input_processor.py b/vllm/v1/engine/input_processor.py
 index 09618d7eb66..92ad049f5dc 100644
 --- a/vllm/v1/engine/input_processor.py

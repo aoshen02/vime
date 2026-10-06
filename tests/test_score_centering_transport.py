@@ -18,6 +18,28 @@ from vime.utils.types import Sample
 NUM_GPUS = 0
 
 
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_sampling_mask_logprobs_survive_output_coalescing(aggregate):
+    outputs = pytest.importorskip("vllm.outputs")
+
+    def output(token, support, logprobs):
+        completion = outputs.CompletionOutput(
+            index=0,
+            text="",
+            token_ids=[token],
+            cumulative_logprob=None,
+            logprobs=None,
+            sampling_mask=outputs.SamplingMask([support], [logprobs]),
+        )
+        return outputs.RequestOutput("audit", None, None, None, [completion], False)
+
+    first = output(2, [1, 2], [-1.2, -0.4])
+    first.add(output(3, [3, 4], [-0.3, -1.4]), aggregate=aggregate)
+    mask = first.outputs[0].sampling_mask
+    assert mask.token_ids == ([[1, 2], [3, 4]] if aggregate else [[3, 4]])
+    assert mask.logprobs == ([[-1.2, -0.4], [-0.3, -1.4]] if aggregate else [[-0.3, -1.4]])
+
+
 @pytest.fixture(autouse=True)
 def no_gpu_server_imports(monkeypatch):
     deployment = types.ModuleType("vime.backends.vllm_utils.deployment")
@@ -25,6 +47,20 @@ def no_gpu_server_imports(monkeypatch):
     monkeypatch.setitem(sys.modules, deployment.__name__, deployment)
     if "vllm_router" not in sys.modules:
         monkeypatch.setitem(sys.modules, "vllm_router", SimpleNamespace(__version__="0.3.0"))
+
+
+def test_terminal_spec_metrics_survive_output_coalescing():
+    outputs = pytest.importorskip("vllm.outputs")
+    metrics = outputs.RequestSpecDecodeMetrics.new(2)
+    metrics.observe(num_draft_tokens=2, num_accepted=1)
+    completions = [
+        outputs.CompletionOutput(index=0, text="", token_ids=[token], cumulative_logprob=None, logprobs=None)
+        for token in (2, 3)
+    ]
+    completions[1].spec_decode_metrics = metrics
+    first = outputs.RequestOutput("audit", None, None, None, [completions[0]], False)
+    first.add(outputs.RequestOutput("audit", None, None, None, [completions[1]], True), aggregate=True)
+    assert first.outputs[0].spec_decode_metrics is metrics
 
 
 def manager(**overrides):

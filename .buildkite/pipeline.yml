@@ -236,7 +236,7 @@ steps:
         multiple: true
         required: true
         options:
-          - label: "run-ci-short — 4 GPU, 3 tests"
+          - label: "run-ci-short — 4 GPU, 2 tests"
             value: short
           - label: "run-ci-vllm-config — 8 GPU, 4 tests"
             value: vllm-config

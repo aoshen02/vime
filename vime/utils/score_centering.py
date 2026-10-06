@@ -1,7 +1,6 @@
 """Score Centering, arXiv:2609.20807, equations (9), (12), and (14)."""
 
 import math
-import os
 import uuid
 from pathlib import Path
 
@@ -56,7 +55,7 @@ def score_centering_correction(train_head_logp, sampler_head_logp, *, mode="none
 
 
 def score_centering_request(args, sampling_params):
-    """Extra vLLM /generate fields; validate the actual request's distribution."""
+    """Validate the actual vLLM token-generation request's distribution."""
     if not getattr(args, "use_score_centering", False):
         return {}
     # vLLM's omitted-temperature default can differ from the trainer's.
@@ -68,14 +67,6 @@ def score_centering_request(args, sampling_params):
     top_p = sampling_params.setdefault("top_p", getattr(args, "rollout_top_p", 1.0))
     if not 0 < top_p <= 1 or top_p != getattr(args, "rollout_top_p", 1.0):
         raise ValueError("Score centering requires the configured rollout top_p in (0, 1] on every request.")
-    if (temperature != 1 or top_p < 1) and os.environ.get("VLLM_RETURN_ORIGINAL_LOGPROB", "").lower() in (
-        "1",
-        "true",
-    ):
-        raise ValueError(
-            "Score centering requires temperature-scaled, post-truncation sampler logprobs; "
-            "unset VLLM_RETURN_ORIGINAL_LOGPROB."
-        )
     for key, default in (("top_k", -1), ("min_p", 0.0)):
         if sampling_params.get(key, default) != default:
             raise ValueError(f"Score centering requires {key}={default}; only top-p truncation is supported.")

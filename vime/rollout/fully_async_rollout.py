@@ -300,6 +300,7 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
     metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
     metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(collected) + dropped_count)
     if args.rollout_sample_filter_path is not None:
+        # Preserve the calling thread/context of custom batch hooks.
         output = finalize_rollout_groups(
             args, rollout_id, collected, metrics, controller=getattr(data_buffer, "controller", None)
         )

@@ -296,6 +296,26 @@ def test_compute_server_args_enables_sampling_mask_logprobs_for_score_centering(
 
 
 @pytest.mark.unit
+def test_score_centering_requires_processed_server_logprobs(vllm_args):
+    vllm_args.use_score_centering = True
+    vllm_args.score_centering_top_k = 3
+    server_args, check_fields = mod._compute_server_args(
+        vllm_args, rank=0, dist_init_addr=None, host="127.0.0.1", port=8000
+    )
+    assert server_args["logprobs_mode"] == "processed_logprobs"
+    assert "logprobs_mode" in check_fields
+    with pytest.raises(ValueError, match="processed_logprobs"):
+        mod._compute_server_args(
+            vllm_args,
+            rank=0,
+            dist_init_addr=None,
+            host="127.0.0.1",
+            port=8000,
+            vllm_overrides={"logprobs_mode": "raw_logprobs"},
+        )
+
+
+@pytest.mark.unit
 def test_compute_server_args_applies_max_model_len_from_rollout_context(vllm_args):
     vllm_args.rollout_max_context_len = 8192
     vllm_args.vllm_max_model_len = None

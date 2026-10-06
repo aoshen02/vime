@@ -137,8 +137,8 @@ def test_local_test_launcher_does_not_invent_storage_paths(options, monkeypatch)
     commands = []
     monkeypatch.setattr(command_utils, "exec_command", commands.append)
     monkeypatch.setattr(command_utils, "check_has_nvlink", lambda: False)
-    monkeypatch.setenv("SLIME_SCRIPT_EXTERNAL_RAY", "0")
-    monkeypatch.setenv("SLIME_SCRIPT_ENABLE_RAY_SUBMIT", "1")
+    monkeypatch.setenv("VIME_SCRIPT_EXTERNAL_RAY", "0")
+    monkeypatch.setenv("VIME_SCRIPT_ENABLE_RAY_SUBMIT", "1")
     command_utils.execute_train(options, num_gpus_per_node=1, megatron_model_type=None)
     assert commands[-1].count("--rollout-data-dir") == options.count("--rollout-data-dir")
     assert options in commands[-1]
@@ -845,7 +845,7 @@ def test_training_commits_only_after_save_calls_return(tmp_path, monkeypatch, fa
     from unittest.mock import Mock
 
     # Exercise the real training loop with CPU stand-ins for the GPU services.
-    # Argument parsing is not used here and must not pull in SGLang on CPU CI.
+    # Argument parsing is not used here and must not pull in vLLM on CPU CI.
     monkeypatch.setitem(sys.modules, "vime.utils.arguments", SimpleNamespace(parse_args=None))
     spec = importlib.util.spec_from_file_location("checkpoint_train", Path(__file__).parents[1] / "train.py")
     module = importlib.util.module_from_spec(spec)

@@ -146,7 +146,19 @@ def _next_actor():
 
 
 class _ShardedHTTPTransport(httpx.AsyncBaseTransport):
-    """Limit the per-request httpcore connection scan to small pools."""
+    """Reduce asyncio CPU stalls from httpcore's per-request connection scans.
+
+    Split this client's connection budget across pools of at most 128
+    connections, so each synchronous scan touches a small pool. The pools
+    operate concurrently: 128 is a per-pool limit, not a client-wide request
+    limit. Their connection limits sum to max_connections; requests assigned
+    to a full pool wait for a connection there.
+
+    Allow each pool to retain its entire connection budget as idle keep-alive
+    connections, subject to the usual expiry. This avoids closing/reopening
+    most sockets after a request wave; httpx otherwise keeps at most 20 idle
+    connections per pool. That idle limit is separate from active concurrency.
+    """
 
     def __init__(self, max_connections: int):
         count = max(1, (max_connections + 127) // 128)

@@ -107,7 +107,7 @@ index e9a08f7c462..a5c41c99e9a 100644
  
          for next_completion in next_output.outputs:
              for i, completion in enumerate(self.outputs):
-@@ -191,6 +195,13 @@ class RequestOutput:
+@@ -191,6 +195,17 @@ class RequestOutput:
                          if next_completion.logprobs:
                              assert completion.logprobs is not None
                              completion.logprobs.extend(next_completion.logprobs)  # type: ignore[arg-type]
@@ -118,6 +118,10 @@ index e9a08f7c462..a5c41c99e9a 100644
 +                                completion.sampling_mask.token_ids.extend(
 +                                    next_completion.sampling_mask.token_ids
 +                                )
++                        if next_completion.spec_decode_metrics is not None:
++                            completion.spec_decode_metrics = (
++                                next_completion.spec_decode_metrics
++                            )
                          completion.cumulative_logprob = (
                              next_completion.cumulative_logprob
                          )

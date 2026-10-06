@@ -51,7 +51,6 @@ def execute(top_p=1.0):
             train_args=train_args,
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=MODEL_TYPE,
-            extra_env_vars={"VLLM_RETURN_ORIGINAL_LOGPROB": "0"},
         )
         for rollout_id in range(2):
             data = torch.load(Path(directory) / f"rollout_{rollout_id}.pt", weights_only=False)

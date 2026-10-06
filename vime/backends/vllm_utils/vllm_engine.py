@@ -747,6 +747,11 @@ def _compute_server_args(
         if "model_path" in vllm_overrides:
             kwargs["model"] = str(vllm_overrides["model_path"])
 
+    if getattr(args, "use_score_centering", False):
+        if kwargs["logprobs_mode"] != "processed_logprobs":
+            raise ValueError("Score centering requires vLLM logprobs_mode=processed_logprobs.")
+        external_engine_need_check_fields.append("logprobs_mode")
+
     kwargs["host"] = _wrap_ipv6(kwargs.get("host") or "127.0.0.1")
 
     # vLLM-specific: topology metadata consumed by launch_server_process / _build_subprocess_env.
