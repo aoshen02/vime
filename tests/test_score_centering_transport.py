@@ -46,7 +46,7 @@ def test_tito_stream_preserves_empty_finish_reason(finish_reason, return_token_i
             completion = outputs.CompletionOutput(
                 index=0, text="", token_ids=token_ids, cumulative_logprob=None, logprobs=None, finish_reason=reason
             )
-            yield outputs.RequestOutput("probe", [1, 2, 3], None, None, [completion], reason is not None)
+            yield outputs.RequestOutput("probe", None, [1, 2, 3], None, [completion], reason is not None)
 
     async def collect():
         return [
