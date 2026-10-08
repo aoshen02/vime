@@ -1038,3 +1038,74 @@ index 7c87eca191a525915502a1deb7622f03990c89de..bdb62df91b9ca2fe6e13d166a21f38e1
          if non_persistent_iteration >= iteration:
              return _load_non_persistent_base_checkpoint(
                  non_persistent_global_dir,
+diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
+index dd8590a79..2a6d8fbc1 100644
+--- a/megatron/core/optimizer/distrib_optimizer.py
++++ b/megatron/core/optimizer/distrib_optimizer.py
+@@ -641,6 +641,8 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+         """
+         inner_state_dict = self.optimizer.state_dict()
+         state_dict = {}
++        if self.config.use_precision_aware_optimizer_no_fp8_or_ds_fp8:
++            state_dict["master_param_format"] = "fp32"
+
+         # Extract 'step', for non-Apex/TE support.
+         if not HAVE_APEX_OR_TE:
+@@ -733,6 +735,13 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+             self.optimizer.load_state_dict(state_dict)
+             return
+
++        if (
++            self.config.use_precision_aware_optimizer_no_fp8_or_ds_fp8
++            and getattr(self.optimizer, "store_param_remainders", False)
++            and state_dict.get("master_param_format") != "fp32"
++        ):
++            raise ValueError("Checkpoint master parameter representation is not identified as FP32.")
++
+         if len(self.optimizer.state) == 0:
+             if isinstance(self.optimizer, HybridDeviceOptimizer):
+                 self.optimizer.dummy_step()
+@@ -887,6 +896,9 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                 self.load_parameter_state_from_fs_model_space(param_state)
+             else:
+                 raise NotImplementedError(f'Unknown sharding_type: {sharding_type}')
++            if getattr(self.optimizer, "store_param_remainders", False):
++                for model_chunk in self.model_chunks:
++                    model_chunk.start_param_sync(force_sync=True)
+
+     def _get_main_param_and_optimizer_states(self, model_param):
+         """Return a dict containing the main param and optimizer states corresponding to the input
+@@ -910,6 +922,11 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+
+                 tensors[k] = self.optimizer.get_unscaled_state(sharded_model_param, k)
+             tensors["param"] = tensors.pop("master_param")
++            if tensors["param"].dtype == torch.int16:
++                remainder = tensors["param"]
++                high = sharded_model_param.view(torch.int16).to(torch.int32)
++                high = high - (remainder < 0).to(torch.int32)
++                tensors["param"] = ((high << 16) | (remainder.to(torch.int32) & 0xFFFF)).view(torch.float32)
+         else:
+             main_param = self.optimizer.param_groups[group_index]["params"][group_order]
+             optim_state = self.optimizer.state[main_param]
+@@ -937,6 +954,12 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                     continue
+
+                 if k == "param":
++                    if self.optimizer.store_param_remainders and sharded_model_param.dtype == torch.bfloat16:
++                        assert v.dtype == torch.float32
++                        bits = v.contiguous().view(torch.int32)
++                        v = bits.to(torch.int16)
++                        high = ((bits >> 16) + (v < 0).to(torch.int32)).to(torch.int16)
++                        sharded_model_param.data.copy_(high.view(torch.bfloat16))
+                     self.optimizer.set_scaled_state(sharded_model_param, "master_param", v)
+                 else:
+                     self.optimizer.set_scaled_state(sharded_model_param, k, v)
+@@ -2276,6 +2299,8 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+         """
+         if self.is_stub_optimizer:
+             return
++        if getattr(self.optimizer, "store_param_remainders", False):
++            raise ValueError("Master remainders require a torch_dist checkpoint with representation metadata.")
+         state_dict = None
+         if self.data_parallel_group.rank() == 0:
+             state_dict = torch.load(filename)

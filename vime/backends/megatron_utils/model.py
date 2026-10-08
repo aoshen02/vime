@@ -957,7 +957,8 @@ def train(
                     and not getattr(args, "use_rollout_routing_replay", False)
                     and "train/kl_loss" in log_dict
                 ):
-                    assert log_dict["train/kl_loss"] < 1e-8, f"{log_dict=}"
+                    initial_kl = log_dict.get("train/model_kl", log_dict["train/kl_loss"])
+                    assert initial_kl < 1e-8, f"{log_dict=}"
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
 

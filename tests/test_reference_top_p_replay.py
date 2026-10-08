@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from megatron.core import mpu
-from vime.backends.megatron_utils.loss import get_log_probs_and_entropy
+from vime.backends.megatron_utils.loss import get_log_probs_and_entropy, policy_loss_function
 
 NUM_GPUS = 0
 
@@ -113,6 +113,57 @@ def test_reference_log_probs_use_full_vocab_while_actor_replays_top_p(monkeypatc
         and keyword.value.value is False
         for keyword in reference_calls[0].keywords
     )
+
+
+@pytest.mark.unit
+def test_initial_model_kl_preserves_masked_training_loss(monkeypatch):
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_group", lambda: None, raising=False)
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+    args = Namespace(
+        rollout_temperature=1.0,
+        rollout_top_p=0.95,
+        allgather_cp=False,
+        log_probs_chunk_size=-1,
+        entropy_coef=0.0,
+        use_rollout_logprobs=False,
+        use_opsm=False,
+        advantage_estimator="grpo",
+        pg_loss_type="reinforce",
+        get_mismatch_metrics=False,
+        use_tis=False,
+        use_kl_loss=True,
+        use_unbiased_kl=False,
+        kl_loss_type="low_var_kl",
+        kl_loss_coef=1.0,
+        ci_test=True,
+    )
+    logits = torch.tensor([[[0.2, 0.2, 0.6], [0.2, 0.2, 0.6]]]).log().requires_grad_()
+    batch = {
+        "advantages": [torch.zeros(1)],
+        "unconcat_tokens": [torch.tensor([0, 0])],
+        "total_lengths": [2],
+        "response_lengths": [1],
+        "loss_masks": [torch.ones(1)],
+        "ref_log_probs": [torch.tensor([math.log(0.2)])],
+        "rollout_top_p_token_ids": [[0, 1]],
+        "rollout_top_p_token_offsets": [[0, 2]],
+    }
+    loss, metrics = policy_loss_function(args, batch, logits, torch.mean)
+    assert metrics["model_kl"].item() == pytest.approx(0.0, abs=1e-8)
+    assert metrics["kl_loss"].item() > 0.1
+    assert not metrics["model_kl"].requires_grad
+    args.ci_test = False
+    regular_loss, regular_metrics = policy_loss_function(args, batch, logits, torch.mean)
+    assert "model_kl" not in regular_metrics
+    torch.testing.assert_close(loss, regular_loss)
+    torch.testing.assert_close(
+        torch.autograd.grad(loss, logits, retain_graph=True)[0],
+        torch.autograd.grad(regular_loss, logits)[0],
+    )
+    args.ci_test = True
+    batch["ref_log_probs"] = [torch.tensor([math.log(0.1)])]
+    _, metrics = policy_loss_function(args, batch, logits, torch.mean)
+    assert metrics["model_kl"].item() > 1e-8
 
 
 if __name__ == "__main__":
