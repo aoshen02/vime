@@ -1346,7 +1346,7 @@ def policy_loss_function(
 
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
-        if args.ci_test and args.rollout_top_p != 1.0:
+        if getattr(args, "ci_test", False) and args.rollout_top_p != 1.0:
             with torch.no_grad():
                 _, unmasked = get_log_probs_and_entropy(
                     logits,
