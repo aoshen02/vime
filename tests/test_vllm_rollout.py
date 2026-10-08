@@ -99,6 +99,8 @@ def _rollout_args(**overrides) -> Namespace:
         hf_checkpoint="/tmp/model",
         vllm_router_ip="127.0.0.1",
         vllm_router_port=8000,
+        rollout_external=False,
+        rollout_health_check_timeout=600,
         partial_rollout=False,
         mask_offpolicy_in_partial_rollout=False,
         group_rm=False,
@@ -305,8 +307,8 @@ def test_inference_generate_tokens_and_logprobs_aligns_partial_content():
             "logprobs": {"content": [{"logprob": -0.1}, {"logprob": -0.2}]},
         }
     )
-    assert token_ids == [11, 12, 13]
-    assert log_probs == [-0.1, -0.2, 0.0]
+    assert token_ids == [11, 12]
+    assert log_probs == [-0.1, -0.2]
 
 
 @pytest.mark.unit
@@ -633,7 +635,7 @@ def test_generate_streaming_rejects_unexpected_eof(patch_generate_state, monkeyp
             return None
 
         async def aiter_lines(self):
-            yield 'data: {"choices": [{"token_ids": [50], "finish_reason": null}]}'
+            yield 'data: {"choices": [{"token_ids": [50], "logprobs": {"content": [{"logprob": -0.1}]}, "finish_reason": null}]}'
             yield "data: [DONE]"
 
     class FakeClient:
@@ -718,7 +720,7 @@ def test_generate_applies_routed_experts(patch_generate_state, monkeypatch):
                     "token_ids": [50, 51],
                     "finish_reason": "stop",
                     "routed_experts": _encode_routed(routed_rows),
-                    "logprobs": {"content": [{}, {}]},
+                    "logprobs": {"content": [{"logprob": 0.0}, {"logprob": 0.0}]},
                 }
             ],
             "usage": {},
@@ -1044,7 +1046,8 @@ def test_eval_rollout_passk_requests_do_not_share_session_ids(patch_generate_sta
 
 
 @pytest.mark.unit
-def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monkeypatch):
+@pytest.mark.parametrize("rollout_external", [False, True])
+def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monkeypatch, rollout_external):
     state = _PatchedGenerateState(_rollout_args())
     state.active_server_generations = 1
     monkeypatch.setattr(mod, "GenerateState", lambda args: state)
@@ -1060,6 +1063,8 @@ def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monke
         aborted.set()
 
     monkeypatch.setattr(mod, "get", fake_get)
+    prune_mock = AsyncMock(return_value=[{"url": "http://w0:9000"}])
+    monkeypatch.setattr(mod, "get_live_router_workers", prune_mock)
     monkeypatch.setattr(mod, "abort_servers_until_idle", abort_servers)
 
     sample = Sample(index=0, prompt="p")
@@ -1072,19 +1077,23 @@ def test_abort_deletes_inflight_without_pause_resume(patch_generate_state, monke
 
     async def run_abort():
         state.pendings = {asyncio.create_task(pending_group())}
-        return await asyncio.wait_for(mod.abort(_rollout_args(), rollout_id=0), timeout=5.0)
+        return await asyncio.wait_for(
+            mod.abort(_rollout_args(rollout_external=rollout_external), rollout_id=0), timeout=5.0
+        )
 
     aborted_samples = asyncio.run(run_abort())
 
     assert aborted_urls == ["http://w0:9000"]
+    assert prune_mock.await_count == (0 if rollout_external else 1)
     assert state.pendings == set()
     # partial_rollout is off by default, so drained groups are discarded, not returned.
     assert aborted_samples == []
 
 
 @pytest.mark.unit
-def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_state, monkeypatch):
-    args = _rollout_args(partial_rollout=True)
+@pytest.mark.parametrize("rollout_external", [False, True])
+def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_state, monkeypatch, rollout_external):
+    args = _rollout_args(partial_rollout=True, rollout_external=rollout_external)
     state = _PatchedGenerateState(args)
     state.active_server_generations = 1
     monkeypatch.setattr(mod, "GenerateState", lambda a: state)
@@ -1098,6 +1107,8 @@ def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_stat
         aborted.set()
 
     monkeypatch.setattr(mod, "get", fake_get)
+    prune_mock = AsyncMock(return_value=[{"url": "http://w0:9000"}])
+    monkeypatch.setattr(mod, "get_live_router_workers", prune_mock)
     monkeypatch.setattr(mod, "abort_servers_until_idle", abort_servers)
 
     sample = Sample(index=0, prompt="p")
@@ -1116,6 +1127,7 @@ def test_abort_collects_partial_samples_when_partial_rollout(patch_generate_stat
     aborted_samples = asyncio.run(run_abort())
 
     assert aborted_samples == [[sample]]
+    assert prune_mock.await_count == (0 if rollout_external else 1)
     assert sample.metadata["start_rollout_id"] == 7
 
 
@@ -1201,6 +1213,8 @@ def test_stream_cancellation_closes_http_and_preserves_prefix(patch_generate_sta
     monkeypatch.setattr(mod, "generate", server_generate)
     get_mock = AsyncMock(return_value={"workers": [{"url": "http://worker:9000"}]})
     monkeypatch.setattr(mod, "get", get_mock)
+    prune_mock = AsyncMock(return_value=[{"url": "http://worker:9000"}])
+    monkeypatch.setattr(mod, "get_live_router_workers", prune_mock)
     monkeypatch.setattr(mod, "abort_servers_until_idle", abort_servers)
     sample = Sample(prompt="abc", generate_function_path="streaming")
 
@@ -1213,6 +1227,7 @@ def test_stream_cancellation_closes_http_and_preserves_prefix(patch_generate_sta
             with pytest.raises(asyncio.CancelledError):
                 await request_task
             get_mock.assert_not_awaited()
+            prune_mock.assert_not_awaited()
         else:
             server_task = asyncio.create_task(mod.generate_and_rm(args, Sample(prompt="abc"), {}))
             await server_started.wait()
@@ -1220,7 +1235,8 @@ def test_stream_cancellation_closes_http_and_preserves_prefix(patch_generate_sta
             result, server_result = await asyncio.gather(request_task, server_task)
             assert result is sample
             assert result.status == server_result.status == Sample.Status.ABORTED
-            get_mock.assert_awaited_once()
+            get_mock.assert_not_awaited()
+            prune_mock.assert_awaited_once()
 
     async def run():
         await asyncio.wait_for(exercise(), timeout=5)

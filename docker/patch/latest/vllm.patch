@@ -1,28 +1,24 @@
-diff --git a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
-index fb2b9387238..c05faefa4c6 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
-@@ -365,6 +365,7 @@ class GenerateStreamResponse(BaseModel):
-     prompt_token_ids: list[int] | None = None
+@@ -469,6 +469,7 @@
+     prompt_token_ids: list[NonNegativeInt] | None = None
      mm_placeholders: dict[str, list[PlaceholderRangeInfo]] | None = None
      metrics: PerRequestMetrics | None = None
 +    weight_version: str | None = None
  
  
- class GenerateResponse(BaseModel):
-@@ -384,6 +385,7 @@ class GenerateResponse(BaseModel):
-     prompt_token_ids: list[int] | None = None
+ class GenerateTokensStreamResponse(GenerateStreamResponseBase):
+@@ -498,6 +499,7 @@
+     prompt_token_ids: list[NonNegativeInt] | None = None
      mm_placeholders: dict[str, list[PlaceholderRangeInfo]] | None = None
      metrics: PerRequestMetrics | None = None
 +    weight_version: str | None = None
  
      kv_transfer_params: dict[str, Any] | None = Field(
          default=None,
-diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
-index 59fda2dbf8c..862413c2da4 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/serving.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
-@@ -394,6 +394,7 @@ class ServingTokens(GenerateBaseServing):
+@@ -504,6 +504,7 @@
              ),
              mm_placeholders=request._response_mm_placeholders,
              metrics=per_request_metrics,
@@ -30,37 +26,23 @@ index 59fda2dbf8c..862413c2da4 100644
              kv_transfer_params=final_res.kv_transfer_params,
              ec_transfer_params=final_res.ec_transfer_params,
          )
-@@ -464,8 +465,6 @@ class ServingTokens(GenerateBaseServing):
-                     # Still emit a terminal empty chunk while prompt metadata
-                     # is pending, so zero-token completions deliver it.
--                    if not delta_token_ids and (
--                        finish_reason is None or prompt_token_ids is None
--                    ):
-+                    if not delta_token_ids and finish_reason is None:
-                         continue
+@@ -630,6 +631,7 @@
+                     if text_mode:
+                         chunk = GenerateTextStreamResponse(
+                             request_id=request_id,
++                            weight_version=res.weight_version,
+                             choices=[
+                                 GenerateTextStreamChoice(
+                                     text=output.text, **choice_fields
+@@ -639,6 +641,7 @@
+                     else:
+                         chunk = GenerateTokensStreamResponse(
+                             request_id=request_id,
++                            weight_version=res.weight_version,
+                             choices=[GenerateTokensStreamChoice(**choice_fields)],
+                         )
  
-                     if sampling_params.logprobs is not None:
-@@ -487,6 +488,7 @@ class ServingTokens(GenerateBaseServing):
- 
-                     chunk = GenerateStreamResponse(
-                         request_id=request_id,
-+                        weight_version=res.weight_version,
-                         choices=[
-                             GenerateResponseStreamChoice(
-                                 index=i,
-@@ -494,6 +496,11 @@ class ServingTokens(GenerateBaseServing):
-                                 finish_reason=finish_reason,
-                                 token_ids=as_list(delta_token_ids),
-                                 routed_experts=routed_experts_b64,
-+                                sampling_mask=(
-+                                    output.sampling_mask.token_ids
-+                                    if output.sampling_mask is not None
-+                                    else None
-+                                ),
-                             )
-                         ],
-                     )
-@@ -511,7 +518,12 @@ class ServingTokens(GenerateBaseServing):
+@@ -656,7 +659,12 @@
                      # Omit fields that are absent from token-bearing chunks.
                      exclude = {
                          name
@@ -74,19 +56,25 @@ index 59fda2dbf8c..862413c2da4 100644
                          if getattr(chunk, name) is None
                      }
                      yield f"data: {chunk.model_dump_json(exclude=exclude)}\n\n"
-@@ -541,6 +553,7 @@ class ServingTokens(GenerateBaseServing):
-                     choices=[],
-                     usage=final_usage_info,
-                     metrics=per_request_metrics,
-+                    weight_version=last_res.weight_version if last_res else None,
-                 )
+@@ -688,6 +696,7 @@
+                         choices=[],
+                         usage=final_usage_info,
+                         metrics=per_request_metrics,
++                        weight_version=last_res.weight_version if last_res else None,
+                     )
+                 else:
+                     final_chunk = GenerateTokensStreamResponse(
+@@ -695,6 +704,7 @@
+                         choices=[],
+                         usage=final_usage_info,
+                         metrics=per_request_metrics,
++                        weight_version=last_res.weight_version if last_res else None,
+                     )
                  yield f"data: {final_chunk.model_dump_json(exclude_none=True)}\n\n"
  
-diff --git a/vllm/outputs.py b/vllm/outputs.py
-index e9a08f7c462..a5c41c99e9a 100644
 --- a/vllm/outputs.py
 +++ b/vllm/outputs.py
-@@ -130,6 +130,7 @@ class RequestOutput:
+@@ -143,6 +143,7 @@
              prefix-cache writes for this request.
          kv_transfer_params: The params for remote K/V transfer.
          ec_transfer_params: The params for remote encoder-cache transfer.
@@ -94,15 +82,15 @@ index e9a08f7c462..a5c41c99e9a 100644
  
      """
  
-@@ -150,6 +151,7 @@ class RequestOutput:
-         *,
+@@ -164,6 +165,7 @@
+         prompt_token_id_logprobs: np.ndarray | None = None,
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
 +        weight_version: str | None = None,
          # Forward compatibility, code that uses args added in new release can
          # still run with older versions of vLLM without breaking.
          **kwargs: Any,
-@@ -172,12 +174,14 @@ class RequestOutput:
+@@ -187,12 +189,14 @@
          self.num_cache_creation_tokens = num_cache_creation_tokens
          self.kv_transfer_params = kv_transfer_params
          self.ec_transfer_params = ec_transfer_params
@@ -117,41 +105,9 @@ index e9a08f7c462..a5c41c99e9a 100644
  
          for next_completion in next_output.outputs:
              for i, completion in enumerate(self.outputs):
-@@ -191,6 +195,17 @@ class RequestOutput:
-                         if next_completion.logprobs:
-                             assert completion.logprobs is not None
-                             completion.logprobs.extend(next_completion.logprobs)  # type: ignore[arg-type]
-+                        if next_completion.sampling_mask is not None:
-+                            if completion.sampling_mask is None:
-+                                completion.sampling_mask = next_completion.sampling_mask
-+                            else:
-+                                completion.sampling_mask.token_ids.extend(
-+                                    next_completion.sampling_mask.token_ids
-+                                )
-+                        if next_completion.spec_decode_metrics is not None:
-+                            completion.spec_decode_metrics = (
-+                                next_completion.spec_decode_metrics
-+                            )
-                         completion.cumulative_logprob = (
-                             next_completion.cumulative_logprob
-                         )
-diff --git a/vllm/v1/core/sched/interface.py b/vllm/v1/core/sched/interface.py
-index c868d249c8a..c9f757042f7 100644
---- a/vllm/v1/core/sched/interface.py
-+++ b/vllm/v1/core/sched/interface.py
-@@ -94,6 +94,7 @@ class SchedulerInterface(ABC):
-         self,
-         scheduler_output: "SchedulerOutput",
-         model_runner_output: "ModelRunnerOutput",
-+        weight_version: str | None = None,
-     ) -> dict[int, "EngineCoreOutputs"]:
-         """Update the scheduler state based on the model runner output.
- 
-diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index 18bbc102830..c81921d8725 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -1907,6 +1907,7 @@ class Scheduler(SchedulerInterface):
+@@ -2003,6 +2003,7 @@
          self,
          scheduler_output: SchedulerOutput,
          model_runner_output: ModelRunnerOutput,
@@ -159,7 +115,7 @@ index 18bbc102830..c81921d8725 100644
      ) -> dict[int, EngineCoreOutputs]:
          sampled_token_ids = model_runner_output.sampled_token_ids
          logprobs = model_runner_output.logprobs
-@@ -2139,6 +2140,7 @@ class Scheduler(SchedulerInterface):
+@@ -2240,6 +2241,7 @@
                      EngineCoreOutput(
                          request_id=req_id,
                          new_token_ids=new_token_ids,
@@ -167,7 +123,7 @@ index 18bbc102830..c81921d8725 100644
                          finish_reason=finish_reason,
                          new_logprobs=new_logprobs,
                          new_sampling_mask=new_sampling_mask,
-@@ -2189,6 +2191,7 @@ class Scheduler(SchedulerInterface):
+@@ -2295,6 +2297,7 @@
                      EngineCoreOutput(
                          request_id=request.request_id,
                          new_token_ids=[],
@@ -175,23 +131,21 @@ index 18bbc102830..c81921d8725 100644
                          finish_reason=request.get_finished_reason(),
                          events=request.take_events(),
                          trace_headers=request.trace_headers,
-diff --git a/vllm/v1/engine/__init__.py b/vllm/v1/engine/__init__.py
-index e5bbb96a9cf..e7a849297ed 100644
 --- a/vllm/v1/engine/__init__.py
 +++ b/vllm/v1/engine/__init__.py
-@@ -235,6 +235,7 @@ class EngineCoreOutput(
-     # Per-request spec-decode acceptance; attached only on the final output.
-     # Appended last so `array_like` positional serialization stays compatible.
-     spec_decode_metrics: RequestSpecDecodeMetrics | None = None
+@@ -238,6 +238,9 @@
+ 
+     # [num_scored_rows, num_token_ids]; appended last for array_like compatibility.
+     prompt_token_id_logprobs: torch.Tensor | None = None
 +    weight_version: str | None = None
++    remote_kv_wait_time: float | None = None
++    kv_transfer_metrics: dict[str, float] | None = None
  
      @property
      def finished(self) -> bool:
-diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
-index 9b27f50edc0..3a35a40e4e1 100644
 --- a/vllm/v1/engine/core.py
 +++ b/vllm/v1/engine/core.py
-@@ -655,7 +655,7 @@ class EngineCore:
+@@ -652,7 +652,7 @@
          # during the model execution.
          self._process_aborts_queue()
          engine_core_outputs = self.scheduler.update_from_output(
@@ -200,7 +154,7 @@ index 9b27f50edc0..3a35a40e4e1 100644
          )
          self._attach_iteration_details(engine_core_outputs, iteration_details)
  
-@@ -756,7 +756,7 @@ class EngineCore:
+@@ -753,7 +753,7 @@
          # during the model execution.
          self._process_aborts_queue()
          engine_core_outputs = self.scheduler.update_from_output(
@@ -209,7 +163,7 @@ index 9b27f50edc0..3a35a40e4e1 100644
          )
          self._attach_iteration_details(engine_core_outputs, iteration_details)
  
-@@ -2036,7 +2036,12 @@ class EngineCoreProc(EngineCore):
+@@ -2050,7 +2050,12 @@
          self, req_ids: list[str], client_index: int, finish_reason: FinishReason
      ) -> None:
          outputs = [
@@ -223,28 +177,9 @@ index 9b27f50edc0..3a35a40e4e1 100644
              for req_id in req_ids
          ]
          eco = EngineCoreOutputs(finished_requests=req_ids, outputs=outputs)
-diff --git a/vllm/v1/engine/input_processor.py b/vllm/v1/engine/input_processor.py
-index cb7d3d47183..09618d7eb66 100644
---- a/vllm/v1/engine/input_processor.py
-+++ b/vllm/v1/engine/input_processor.py
-@@ -150,12 +150,6 @@ class InputProcessor:
-                     raise ValueError(
-                         "sampling distribution replay requires temperature > 0"
-                     )
--                if params.top_k <= 0:
--                    raise ValueError(
--                        "sampling distribution replay requires top_k > 0 to "
--                        "bound sampling mask size, reduce transfer overhead, "
--                        "and avoid potential OOMs"
--                    )
-             if params.thinking_token_budget is not None and (
-                 self.vllm_config.reasoning_config is None
-                 or not self.vllm_config.reasoning_config.enabled
-diff --git a/vllm/v1/engine/output_processor.py b/vllm/v1/engine/output_processor.py
-index b4f7338048c..f712c9b4962 100644
 --- a/vllm/v1/engine/output_processor.py
 +++ b/vllm/v1/engine/output_processor.py
-@@ -183,6 +183,7 @@ class RequestState:
+@@ -184,6 +184,7 @@
          # Per-sequence spec-decode accumulator; arrives once (on finish) via
          # EngineCoreOutput, then attached to this sequence's CompletionOutput.
          self.spec_decode_metrics: RequestSpecDecodeMetrics | None = None
@@ -252,31 +187,31 @@ index b4f7338048c..f712c9b4962 100644
  
          self.stats = RequestStateStats(arrival_time=arrival_time) if log_stats else None
  
-@@ -304,6 +305,7 @@ class RequestState:
-         stop_reason: int | str | None,
+@@ -306,6 +307,7 @@
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
+         error: RequestError | None = None,
 +        weight_version: str | None = None,
      ) -> RequestOutput | PoolingRequestOutput | None:
          finished = finish_reason is not None
          final_only = self.output_kind == RequestOutputKind.FINAL_ONLY
-@@ -360,6 +362,7 @@ class RequestState:
+@@ -363,6 +365,7 @@
              finished,
              kv_transfer_params,
              ec_transfer_params,
-+            weight_version,
++            weight_version=weight_version,
          )
  
      def _new_request_output(
-@@ -369,6 +372,7 @@ class RequestState:
-         finished: bool,
+@@ -373,6 +377,7 @@
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
+         error: RequestError | None = None,
 +        weight_version: str | None = None,
      ) -> RequestOutput | PoolingRequestOutput:
          # If prompt embeds were used, put placeholder prompt token ids
          prompt_token_ids = self.prompt_token_ids
-@@ -403,6 +407,7 @@ class RequestState:
+@@ -413,6 +418,7 @@
              finished=finished,
              kv_transfer_params=kv_transfer_params,
              ec_transfer_params=ec_transfer_params,
@@ -284,26 +219,7 @@ index b4f7338048c..f712c9b4962 100644
              num_cached_tokens=self.num_cached_tokens,
              num_cache_creation_tokens=self.num_cache_creation_tokens,
              metrics=self.stats,
-@@ -434,10 +439,16 @@ class RequestState:
-             logprobs = logprobs[-num_new_tokens:] if num_new_tokens else logprobs[:0]
- 
-         sampling_mask = None
--        if finished and self.sampling_mask_chunks:
-+        if self.sampling_mask_chunks and (delta or finished):
-             sampling_mask = SamplingMask(
--                [chunk.token_ids.tolist() for chunk in self.sampling_mask_chunks]
-+                [
-+                    mask
-+                    for chunk in self.sampling_mask_chunks
-+                    for mask in chunk.to_nested_list()
-+                ][: len(token_ids)]
-             )
-+            if delta:
-+                self.sampling_mask_chunks.clear()
- 
-         # Concatenate routed experts on finish
-         routed_experts = None
-@@ -560,6 +571,7 @@ class OutputProcessor:
+@@ -576,6 +582,7 @@
                          stop_reason=None,
                          kv_transfer_params=None,
                          ec_transfer_params=None,
@@ -311,7 +227,7 @@ index b4f7338048c..f712c9b4962 100644
                      )
                  ):
                      req_state.queue.put(request_output)
-@@ -724,6 +736,7 @@ class OutputProcessor:
+@@ -753,6 +760,7 @@
                  req_state.logprobs_processor.update_from_output(engine_core_output)
  
              # 4) Create and handle RequestOutput objects.
@@ -319,11 +235,21 @@ index b4f7338048c..f712c9b4962 100644
              if request_output := req_state.make_request_output(
                  new_token_ids,
                  pooling_output,
-@@ -731,6 +744,7 @@ class OutputProcessor:
-                 stop_reason,
+@@ -761,6 +769,7 @@
                  kv_transfer_params,
                  ec_transfer_params,
-+                engine_core_output.weight_version,
+                 error=request_error,
++                weight_version=engine_core_output.weight_version,
              ):
                  if req_state.streaming_input:
                      request_output.finished = False
+--- a/vllm/v1/core/sched/interface.py
++++ b/vllm/v1/core/sched/interface.py
+@@ -94,6 +94,7 @@
+         self,
+         scheduler_output: "SchedulerOutput",
+         model_runner_output: "ModelRunnerOutput",
++        weight_version: str | None = None,
+     ) -> dict[int, "EngineCoreOutputs"]:
+         """Update the scheduler state based on the model runner output.
+ 

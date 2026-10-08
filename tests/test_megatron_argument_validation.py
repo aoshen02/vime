@@ -211,16 +211,17 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
     args = make_vime_validate_args(update_weight_transport="disk", update_weight_disk_dir=None)
 
     with pytest.raises(ValueError, match="update-weight-disk-dir"):
-        module.vime_validate_args(args)
+        args, _ = module.vime_validate_args(args)
 
 
 def make_vime_validate_args(**overrides):
     values = dict(
+        ckpt_format="torch_dist",
         flush_cache_interval=1,
         rollout_data_transport="object-store",
         rollout_data_dir=None,
         rollout_queue_lease_seconds=300,
-        rollout_queue_segment_mib=256,
+        rollout_queue_segment_mib=None,
         rollout_io_concurrency=4,
         use_distributed_post=False,
         data_source_path=None,
@@ -307,6 +308,41 @@ def make_vime_validate_args(**overrides):
     return types.SimpleNamespace(**values)
 
 
+def test_trainer_fault_tolerance_saves_reshardable_optimizer(monkeypatch, tmp_path):
+    module = load_vime_arguments_module(monkeypatch)
+    args = make_vime_validate_args(
+        use_fault_tolerance=True,
+        save_debug_rollout_data=str(tmp_path / "rollout_{rollout_id}.pt"),
+        ckpt_format="torch_dist",
+        ckpt_fully_parallel_save=False,
+        dist_ckpt_optim_fully_reshardable=False,
+    )
+    args, _ = module.vime_validate_args(args)
+    assert args.ckpt_fully_parallel_save
+    assert args.dist_ckpt_optim_fully_reshardable
+
+
+@pytest.mark.parametrize(
+    "options,match",
+    [
+        ({"no_save_optim": True}, "optimizer and RNG"),
+        ({"no_save_rng": True}, "optimizer and RNG"),
+        ({"ckpt_format": "torch"}, "torch_dist"),
+        ({"save_debug_rollout_data": "one-file.pt"}, "unique"),
+    ],
+)
+def test_trainer_fault_tolerance_rejects_unrecoverable_checkpoints(monkeypatch, tmp_path, options, match):
+    module = load_vime_arguments_module(monkeypatch)
+    values = dict(
+        use_fault_tolerance=True,
+        save_debug_rollout_data=str(tmp_path / "rollout_{rollout_id}.pt"),
+        ckpt_format="torch_dist",
+    )
+    values.update(options)
+    with pytest.raises(ValueError, match=match):
+        module.vime_validate_args(make_vime_validate_args(**values))
+
+
 @pytest.mark.parametrize(
     "rollout_path",
     [
@@ -318,7 +354,7 @@ def make_vime_validate_args(**overrides):
 def test_pipeline_rl_defaults_to_fully_async_with_separate_eval(monkeypatch, rollout_path):
     module = load_vime_arguments_module(monkeypatch)
     args = make_vime_validate_args(flush_cache_interval=0, rollout_function_path=rollout_path)
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
     expected = (
         "vime.rollout.fully_async_rollout.generate_rollout_fully_async"
         if "vllm_rollout" in rollout_path
@@ -344,7 +380,7 @@ def test_flush_cache_interval_defaults_to_existing_behavior(monkeypatch):
     assert parser.parse_args(["--rollout-batch-size", "1"]).flush_cache_interval == 1
     assert parser.parse_args(["--rollout-batch-size", "1", "--flush-cache-interval", "0"]).flush_cache_interval == 0
     args = make_vime_validate_args(rollout_function_path="vime.rollout.vllm_rollout.generate_rollout")
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
     assert args.rollout_function_path == args.eval_function_path == "vime.rollout.vllm_rollout.generate_rollout"
 
 
@@ -354,7 +390,7 @@ def test_negative_flush_cache_interval_disables_training_flush(monkeypatch, inte
     args = make_vime_validate_args(
         flush_cache_interval=interval, rollout_function_path="vime.rollout.vllm_rollout.generate_rollout"
     )
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
     assert args.rollout_function_path == "vime.rollout.fully_async_rollout.generate_rollout_fully_async"
 
 
@@ -367,6 +403,8 @@ def test_distributed_fully_async_is_opt_in(monkeypatch):
     assert defaults.rollout_data_transport == "object-store"
     assert defaults.rollout_data_dir is None
     assert not defaults.rollout_queue_online_gc
+    assert defaults.rollout_health_check_timeout == defaults.rollout_health_check_first_wait == 600
+    assert defaults.rollout_cleanup_timeout == 60
     path = "vime.data.queue_data_source.QueueDataSource"
     enabled = parser.parse_args(["--rollout-batch-size", "1", "--data-source-path", path])
     assert enabled.data_source_path == path
@@ -380,9 +418,9 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
     args = make_vime_validate_args(rollout_data_transport=parsed.rollout_data_transport)
     if transport == "straw":
         with pytest.raises(ValueError, match="--rollout-data-dir or --save"):
-            module.vime_validate_args(args)
+            args, _ = module.vime_validate_args(args)
         args.save = str(tmp_path)
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
     if transport == "straw":
         assert args.data_source_path == "vime.data.queue_data_source.QueueDataSource"
         assert args.rollout_data_dir == str(tmp_path / "rollout_data")
@@ -390,6 +428,27 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
         assert args.data_source_path == "vime.data.data_source.RolloutDataSourceWithBuffer"
         assert args.rollout_data_dir is None
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("segment_mib", [None, 1, 1024, 0, -1])
+def test_straw_pack_size_is_optional_but_explicit_values_must_be_positive(monkeypatch, tmp_path, segment_mib):
+    module = load_vime_arguments_module(monkeypatch)
+    parser = module.get_vime_extra_args_provider()(argparse.ArgumentParser())
+    options = ["--rollout-batch-size", "1"]
+    if segment_mib is not None:
+        options += ["--rollout-queue-segment-mib", str(segment_mib)]
+    parsed = parser.parse_args(options)
+    assert parsed.rollout_queue_segment_mib == segment_mib
+    args = make_vime_validate_args(
+        rollout_data_transport="straw",
+        rollout_data_dir=str(tmp_path),
+        rollout_queue_segment_mib=parsed.rollout_queue_segment_mib,
+    )
+    if segment_mib is not None and segment_mib <= 0:
+        with pytest.raises(ValueError, match="rollout-queue-segment-mib.*positive"):
+            args, _ = module.vime_validate_args(args)
+    else:
+        args, _ = module.vime_validate_args(args)
 
 
 @pytest.mark.parametrize(
@@ -428,8 +487,8 @@ def test_global_dataset_flag_is_removed(monkeypatch):
 def test_removed_queue_flags_are_rejected(monkeypatch, flag):
     module = load_vime_arguments_module(monkeypatch)
     parser = module.get_vime_extra_args_provider()(argparse.ArgumentParser())
-    args = parser.parse_args(["--rollout-batch-size", "1"])
-    assert not hasattr(args, "rollout_queue_resume")
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert not hasattr(defaults, flag[2:].replace("-", "_"))
     with pytest.raises(SystemExit):
         parser.parse_args(["--rollout-batch-size", "1", flag])
 
@@ -443,7 +502,7 @@ def test_vime_validate_args_preserves_explicit_start_rollout_id(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
     args = make_vime_validate_args(start_rollout_id=100)
 
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
 
     assert args.start_rollout_id == 100
 
@@ -453,7 +512,7 @@ def test_vime_validate_args_defaults_start_rollout_id_to_zero(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
     args = make_vime_validate_args(start_rollout_id=None)
 
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
 
     assert args.start_rollout_id == 0
 
@@ -463,7 +522,7 @@ def test_vime_validate_args_derives_dspark_from_speculative_method(monkeypatch):
     module = load_vime_arguments_module(monkeypatch)
     args = make_vime_validate_args(vllm_speculative_config={"method": "dspark"})
 
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
 
     assert args.dspark_enabled is True
 
@@ -477,7 +536,7 @@ def test_vime_validate_args_rejects_equal_debug_data_paths(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="--save-debug-train-data must not be equal"):
-        module.vime_validate_args(args)
+        args, _ = module.vime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -487,7 +546,7 @@ def test_vime_validate_args_rejects_non_positive_rollout_temperature(monkeypatch
     args = make_vime_validate_args(rollout_temperature=temperature)
 
     with pytest.raises(ValueError, match="--rollout-temperature must be > 0"):
-        module.vime_validate_args(args)
+        args, _ = module.vime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -495,7 +554,7 @@ def test_vime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypat
     module = load_vime_arguments_module(monkeypatch)
     args = make_vime_validate_args(colocate=True, rollout_num_gpus=0)
 
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
 
     assert args.rollout_num_gpus == 0
     assert args.offload_train is True
@@ -512,7 +571,7 @@ def test_vime_validate_args_preserves_larger_rollout_gpus_under_colocate(monkeyp
         rollout_num_gpus=12,
     )
 
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
 
     assert args.rollout_num_gpus == 12
     assert args.offload_train is True
@@ -524,7 +583,7 @@ def test_vime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkeyp
     module = load_vime_arguments_module(monkeypatch)
     args = make_vime_validate_args(colocate=False, rollout_num_gpus=0)
 
-    module.vime_validate_args(args)
+    args, _ = module.vime_validate_args(args)
 
     assert args.rollout_num_gpus == 0
     assert args.actor_num_gpus_per_node == 8
@@ -556,7 +615,7 @@ def test_update_weight_delta_requires_disk_transport(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-transport=disk"):
-        module.vime_validate_args(args)
+        args, _ = module.vime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -571,7 +630,7 @@ def test_update_weight_delta_rejects_colocate(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="not supported with --colocate"):
-        module.vime_validate_args(args)
+        args, _ = module.vime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -584,7 +643,7 @@ def test_update_weight_delta_requires_local_checkpoint_dir(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-local-checkpoint-dir"):
-        module.vime_validate_args(args)
+        args, _ = module.vime_validate_args(args)
 
 
 @pytest.mark.unit

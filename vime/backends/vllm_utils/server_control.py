@@ -1,6 +1,10 @@
 import asyncio
 import logging
 from typing import Any
+from urllib.parse import quote
+
+import httpx
+import requests
 
 from vime.utils.http_utils import get, post
 
@@ -11,7 +15,52 @@ DEFAULT_ABORT_TIMEOUT_SECONDS = 180.0
 DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 10.0
 
 
+def unregister_worker(router_url: str, worker_url: str, *, timeout: float) -> None:
+    """Remove a worker even when its engine actor can no longer answer RPCs."""
+    with requests.Session() as client:
+        client.trust_env = False
+        response = client.get(f"{router_url}/workers", timeout=timeout)
+        response.raise_for_status()
+        for worker in response.json()["workers"]:
+            if worker["url"] == worker_url:
+                response = client.delete(f"{router_url}/workers/{quote(worker_url, safe='')}", timeout=timeout)
+                # Another health check may already have removed this worker.
+                if response.status_code != 404:
+                    response.raise_for_status()
+
+
+async def get_live_router_workers(router_url: str, *, timeout: float) -> list[dict]:
+    """Prune failed workers before rollout drains requests through the router.
+
+    This precedes the manager's end-of-rollout check: the rollout function itself
+    must finish abort/drain before it can return to that manager. Probe HTTP
+    directly so cleanup never waits for a dead engine actor to answer an RPC.
+    """
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        response = await client.get(f"{router_url}/workers")
+        response.raise_for_status()
+
+        async def check(worker):
+            try:
+                response = await client.get(f"{worker['url']}/health_generate")
+                response.raise_for_status()
+            except httpx.HTTPError as error:
+                # A registered URL is not proof of a live server. Remove it
+                # before abort/drain can wait on requests the server cannot finish.
+                logger.warning("Removing failed rollout worker %s: %s", worker["url"], error)
+                response = await client.delete(f"{router_url}/workers/{quote(worker['url'], safe='')}")
+                if response.status_code != 404:
+                    response.raise_for_status()
+                return None
+            return worker
+
+        # Probe concurrently so multiple failed servers do not multiply the wait.
+        workers = await asyncio.gather(*(check(worker) for worker in response.json()["workers"]))
+        return [worker for worker in workers if worker is not None]
+
+
 def num_requests_from_load(load: Any) -> int:
+    """Return request counts or a nonzero busy marker for scheduler-owned work."""
     if isinstance(load, list):
         return sum(num_requests_from_load(item) for item in load)
     if not isinstance(load, dict):
@@ -22,7 +71,7 @@ def num_requests_from_load(load: Any) -> int:
     core_requests = load.get("server_load", 0)
     if not isinstance(core_requests, int) or isinstance(core_requests, bool):
         core_requests = 0
-    detailed_counts = [core_requests]
+    detailed_counts = [core_requests, int(load.get("has_pending_work") is True)]
     for key in ("inflight", "queues"):
         if key in load:
             detailed_counts.append(num_requests_from_load(load[key]))
@@ -93,6 +142,8 @@ async def abort_server_until_idle(
         raise ValueError("abort and control-request timeouts must be positive")
 
     loop = asyncio.get_running_loop()
+    # Abort acknowledgements do not prove the scheduler is idle. Bound retries
+    # with one overall deadline while checking all outstanding request queues.
     deadline = loop.time() + timeout
     attempt = 1
     last_error: Exception | None = None
@@ -102,7 +153,7 @@ async def abort_server_until_idle(
         remaining = deadline - loop.time()
         if remaining <= 0:
             detail = (
-                f"last observed request count={last_num_requests}"
+                f"last observed pending activity (count/busy marker)={last_num_requests}"
                 if last_num_requests is not None
                 else f"last error={last_error!r}"
             )
@@ -111,9 +162,12 @@ async def abort_server_until_idle(
             raise TimeoutError(f"Timed out draining vLLM server {url} after {timeout:.1f}s ({detail})")
 
         per_request_timeout = min(request_timeout, remaining)
+        logger.info(f"Abort request for vLLM server {url}")
         try:
             await _abort_server_once(url, per_request_timeout)
         except Exception as error:
+            # Retry within the deadline; a transient abort failure does not
+            # prove that the server is either busy or already idle.
             last_error = error
             logger.warning(f"Failed to abort vLLM server at {url}: {error}")
 
@@ -125,6 +179,7 @@ async def abort_server_until_idle(
             num_requests = num_requests_from_load(load)
         except Exception as error:
             last_error = error
+            # An unavailable load response cannot be treated as zero requests.
             logger.warning(f"Failed to get vLLM server load from {url}: {error}")
         else:
             last_load = load
@@ -132,7 +187,7 @@ async def abort_server_until_idle(
             if num_requests <= 0:
                 return
             logger.info(
-                "vLLM server %s still has %d requests after abort attempt %d; "
+                "vLLM server %s still has pending activity (count/busy marker=%d) after abort attempt %d; "
                 "non-idle queues=%r; retrying in %s seconds.",
                 url,
                 num_requests,
@@ -153,6 +208,8 @@ async def abort_servers_until_idle(
     timeout: float = DEFAULT_ABORT_TIMEOUT_SECONDS,
     request_timeout: float = DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS,
 ) -> None:
+    # Let every server finish its own bounded drain, then report all failures.
+    # Proceeding after only some servers became idle would make controls unsafe.
     results = await asyncio.gather(
         *(abort_server_until_idle(url, timeout=timeout, request_timeout=request_timeout) for url in urls),
         return_exceptions=True,

@@ -5,8 +5,8 @@ import logging
 import multiprocessing
 import os
 import time
+from threading import Thread
 from typing import Any
-from urllib.parse import quote
 
 import cloudpickle
 import requests
@@ -14,6 +14,7 @@ from urllib3.exceptions import NewConnectionError
 from vllm.utils.system_utils import kill_process_tree
 
 from vime.backends.vllm_utils.external import get_server_info
+from vime.backends.vllm_utils.server_control import unregister_worker
 from vime.ray.ray_actor import RayActor
 from vime.utils.http_utils import _wrap_ipv6, get_host_info
 
@@ -38,6 +39,8 @@ def get_base_gpu_id(args, rank):
 
 
 def launch_server_process(server_args_dict: dict) -> multiprocessing.Process:
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    os.environ.pop("PYTORCH_ALLOC_CONF", None)
     env = _build_subprocess_env(server_args_dict)
     kwargs = {k: v for k, v in server_args_dict.items() if not k.startswith("_")}
     host = _wrap_ipv6(kwargs.get("host") or "127.0.0.1")
@@ -62,8 +65,6 @@ def launch_server_process(server_args_dict: dict) -> multiprocessing.Process:
 def _build_subprocess_env(server_args_dict: dict[str, Any]) -> dict[str, str]:
     args = server_args_dict["_args"]
     env = os.environ.copy()
-    env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
-    env.pop("PYTORCH_ALLOC_CONF", None)
     env.setdefault("NCCL_CUMEM_ENABLE", "0")
     env["CUDA_VISIBLE_DEVICES"] = server_args_dict["_visible_devices"]
     # ROCm: keep HIP visibility in sync with CUDA (no-op on CUDA).
@@ -93,6 +94,17 @@ def _build_subprocess_env(server_args_dict: dict[str, Any]) -> dict[str, str]:
 def _run_vllm_server(kwargs: dict, env: dict) -> None:
     os.environ.update(env)
 
+    parent = multiprocessing.parent_process()
+    if parent is not None:
+
+        def stop_when_parent_exits():
+            parent.join()
+            kill_process_tree(os.getpid())
+
+        Thread(target=stop_when_parent_exits, daemon=True).start()
+        if not parent.is_alive():
+            return
+
     from vllm.entrypoints.cli.serve import ServeSubcommand
     from vllm.entrypoints.launchers.cli_args import make_arg_parser, validate_parsed_serve_args
     from vllm.utils.argparse_utils import FlexibleArgumentParser
@@ -107,7 +119,7 @@ def _run_vllm_server(kwargs: dict, env: dict) -> None:
 def _wait_server_healthy(base_url, is_process_alive):
     while True:
         try:
-            response = requests.get(f"{base_url}/health")
+            response = requests.get(f"{base_url}/health_generate", timeout=5)
             if response.status_code == 200:
                 break
         except requests.RequestException:
@@ -230,7 +242,7 @@ class VLLMEngine(RayActor):
             )
             response.raise_for_status()
 
-    def _make_request(self, endpoint: str, payload: dict | None = None):
+    def _make_request(self, endpoint: str, payload: dict | None = None, *, timeout=None):
         """Make a POST request to the specified endpoint with the given payload.
 
         Args:
@@ -244,7 +256,7 @@ class VLLMEngine(RayActor):
             return
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
-        response = requests.post(url, json=payload or {})
+        response = requests.post(url, json=payload or {}, timeout=timeout)
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
@@ -259,7 +271,7 @@ class VLLMEngine(RayActor):
             return True
 
         response = requests.get(
-            f"http://{self.server_host}:{self.server_port}/health",
+            f"http://{self.server_host}:{self.server_port}/health_generate",
             timeout=timeout,
         )
         response.raise_for_status()
@@ -312,23 +324,21 @@ class VLLMEngine(RayActor):
 
     def shutdown(self):
         if self.args.rollout_external:
+            # The external cluster owns its processes; vime must not kill them.
             return
 
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
             try:
-                all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
-                for worker in all_workers:
-                    if worker["url"] == worker_url:
-                        response = requests.delete(
-                            f"http://{self.router_ip}:{self.router_port}/workers/{quote(worker_url, safe='')}",
-                        )
-                        response.raise_for_status()
-                        break
-                else:
-                    logger.warning(f"Worker {worker_url} not found in vllm-router during shutdown.")
+                unregister_worker(
+                    f"http://{self.router_ip}:{self.router_port}",
+                    worker_url,
+                    timeout=self.args.rollout_health_check_timeout,
+                )
             except Exception as e:
+                # Even if router cleanup fails, terminate the local process.
+                # Owner-side cleanup keeps the URL outside this actor for retry.
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
 
         kill_process_tree(self.process.pid)
@@ -336,7 +346,9 @@ class VLLMEngine(RayActor):
     def get_weight_version(self):
         if self.node_rank != 0:
             return
-        response = requests.get(f"http://{self.server_host}:{self.server_port}/weight_info")
+        response = requests.get(
+            f"http://{self.server_host}:{self.server_port}/weight_info", timeout=self.args.rollout_health_check_timeout
+        )
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as error:
@@ -446,7 +458,15 @@ class VLLMEngine(RayActor):
 
     def destroy_weights_update_group(self, group_name):
         del group_name
-        return None
+        return self.reset_weights_update_groups()
+
+    def reset_weights_update_groups(self):
+        """Remove dead trainer peers while retaining the serving process."""
+        return self._make_request(
+            "collective_rpc",
+            {"method": "shutdown_weight_transfer_engine"},
+            timeout=self.args.rollout_health_check_timeout,
+        )
 
     def update_weights_from_distributed(
         self,

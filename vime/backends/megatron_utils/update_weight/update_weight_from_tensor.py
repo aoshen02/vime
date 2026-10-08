@@ -222,8 +222,8 @@ class UpdateWeightFromTensor:
             if not self._expert_transfer_plan:
                 return
 
-        # Rank-local expert routing is the one case the generic IPC API cannot
-        # express: each rollout EP rank receives a different expert subset.
+        # Expert routing supplies per-worker payloads instead of using the
+        # generic trainer's shared weight source.
         if self._ipc_gather_group is None:
             for index in range(colocate_engine_nums):
                 group_ranks = list(

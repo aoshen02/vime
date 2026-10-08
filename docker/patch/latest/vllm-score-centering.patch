@@ -1,8 +1,6 @@
-diff --git a/vllm/config/model.py b/vllm/config/model.py
-index 8f7fb671525..3cdf929306b 100644
 --- a/vllm/config/model.py
 +++ b/vllm/config/model.py
-@@ -253,6 +253,8 @@ class ModelConfig:
+@@ -279,6 +279,8 @@
      equivalent to setting `-cc.mode=none -cc.cudagraph_mode=none`."""
      return_sampling_mask: bool = False
      """Whether to return the post-processing token support for each sample."""
@@ -11,7 +9,7 @@ index 8f7fb671525..3cdf929306b 100644
      max_logprobs: int = Field(default=20, ge=-1)
      """Maximum number of log probabilities to return when `logprobs` is
      specified in `SamplingParams`. The default value comes the default for the
-@@ -448,6 +450,7 @@ class ModelConfig:
+@@ -477,6 +479,7 @@
              "spec_target_max_model_len",
              "enforce_eager",
              "return_sampling_mask",
@@ -19,7 +17,7 @@ index 8f7fb671525..3cdf929306b 100644
              "logprobs_mode",
              "use_fp64_gumbel",
              "enable_trace_replay",
-@@ -1014,6 +1017,10 @@ class ModelConfig:
+@@ -1048,6 +1051,10 @@
      @model_validator(mode="after")
      def validate_model_config_after(self: "ModelConfig") -> "ModelConfig":
          """Called after __post_init__."""
@@ -30,11 +28,9 @@ index 8f7fb671525..3cdf929306b 100644
          if not isinstance(self.tokenizer, str):
              raise ValueError(
                  f"tokenizer must be a string, got "
-diff --git a/vllm/engine/arg_utils.py b/vllm/engine/arg_utils.py
-index 7369989bb78..a1f801cc66c 100644
 --- a/vllm/engine/arg_utils.py
 +++ b/vllm/engine/arg_utils.py
-@@ -452,6 +452,7 @@ class EngineArgs:
+@@ -470,6 +470,7 @@
      # AuxOutputConfig.
      enable_return_routed_experts: bool = False
      return_sampling_mask: bool = ModelConfig.return_sampling_mask
@@ -42,7 +38,7 @@ index 7369989bb78..a1f801cc66c 100644
      model_weights: str = ModelConfig.model_weights
      served_model_name: str | list[str] | None = ModelConfig.served_model_name
      tokenizer: str | None = ModelConfig.tokenizer
-@@ -944,6 +945,10 @@ class EngineArgs:
+@@ -974,6 +975,10 @@
              "--return-sampling-mask",
              **model_kwargs["return_sampling_mask"],
          )
@@ -53,7 +49,7 @@ index 7369989bb78..a1f801cc66c 100644
          model_group.add_argument("--max-logprobs", **model_kwargs["max_logprobs"])
          model_group.add_argument("--logprobs-mode", **model_kwargs["logprobs_mode"])
          model_group.add_argument("--use-fp64-gumbel", **model_kwargs["use_fp64_gumbel"])
-@@ -1886,6 +1891,7 @@ class EngineArgs:
+@@ -1964,6 +1969,7 @@
              allow_deprecated_quantization=self.allow_deprecated_quantization,
              enforce_eager=self.enforce_eager,
              return_sampling_mask=self.return_sampling_mask,
@@ -61,31 +57,27 @@ index 7369989bb78..a1f801cc66c 100644
              max_logprobs=self.max_logprobs,
              logprobs_mode=self.logprobs_mode,
              use_fp64_gumbel=self.use_fp64_gumbel,
-diff --git a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
-index eb4000c7e29..b2be4c2c663 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
-@@ -333,6 +333,7 @@ class GenerateResponseChoice(BaseModel):
-     # or (b) ``enable_return_routed_experts`` is off server-side.
+@@ -411,6 +411,7 @@
+     # or (b) `enable_return_routed_experts` is off server-side.
      routed_experts: str | None = None
      sampling_mask: list[list[int]] | None = None
 +    sampling_mask_logprobs: list[list[float]] | None = None
  
      @field_validator("token_ids")
      @classmethod
-@@ -349,6 +350,7 @@ class GenerateResponseStreamChoice(BaseModel):
+@@ -443,6 +444,7 @@
      token_ids: list[int] | None = None
      routed_experts: str | None = None
      sampling_mask: list[list[int]] | None = None
 +    sampling_mask_logprobs: list[list[float]] | None = None
  
  
- class GenerateStreamResponse(BaseModel):
-diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
-index 6e86ac83417..397902ddca1 100644
+ class GenerateTokensStreamChoice(GenerateStreamChoiceBase):
 --- a/vllm/entrypoints/scale_out/token_in_token_out/serving.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
-@@ -349,8 +349,10 @@ class ServingTokens(GenerateBaseServing):
+@@ -443,8 +443,10 @@
              )
  
              sampling_mask = None
@@ -94,33 +86,31 @@ index 6e86ac83417..397902ddca1 100644
                  sampling_mask = output.sampling_mask.token_ids
 +                sampling_mask_logprobs = output.sampling_mask.logprobs
  
-             choice_data = GenerateResponseChoice(
+             choice_fields: dict[str, Any] = dict(
                  index=output.index,
-@@ -359,6 +361,7 @@ class ServingTokens(GenerateBaseServing):
+@@ -453,6 +455,7 @@
                  token_ids=as_list(output.token_ids),
                  routed_experts=routed_experts_b64,
                  sampling_mask=sampling_mask,
 +                sampling_mask_logprobs=sampling_mask_logprobs,
              )
- 
-             choices.append(choice_data)
-@@ -510,6 +513,11 @@ class ServingTokens(GenerateBaseServing):
-                                     if output.sampling_mask is not None
-                                     else None
-                                 ),
-+                                sampling_mask_logprobs=(
-+                                    output.sampling_mask.logprobs
-+                                    if output.sampling_mask is not None
-+                                    else None
-+                                ),
-                             )
-                         ],
+             if text_mode:
+                 text_choices.append(
+@@ -626,6 +629,11 @@
+                         token_ids=as_list(delta_token_ids),
+                         routed_experts=routed_experts_b64,
+                         sampling_mask=sampling_mask,
++                        sampling_mask_logprobs=(
++                            output.sampling_mask.logprobs
++                            if output.sampling_mask is not None
++                            else None
++                        ),
                      )
-diff --git a/vllm/outputs.py b/vllm/outputs.py
-index 0507f2555df..814fa16d86b 100644
+                     chunk: GenerateTokensStreamResponse | GenerateTextStreamResponse
+                     if text_mode:
 --- a/vllm/outputs.py
 +++ b/vllm/outputs.py
-@@ -27,6 +27,7 @@ class SamplingMask:
+@@ -36,6 +36,7 @@
      """
  
      token_ids: list[list[int]]
@@ -128,10 +118,19 @@ index 0507f2555df..814fa16d86b 100644
  
  
  @dataclass
-@@ -202,6 +203,11 @@ class RequestOutput:
-                                 completion.sampling_mask.token_ids.extend(
-                                     next_completion.sampling_mask.token_ids
-                                 )
+@@ -212,10 +213,16 @@
+                             completion.logprobs.extend(next_completion.logprobs)  # type: ignore[arg-type]
+                         if next_completion.sampling_mask is not None:
+                             if completion.sampling_mask is None:
+-                                completion.sampling_mask = SamplingMask([])
+-                            completion.sampling_mask.token_ids.extend(
+-                                next_completion.sampling_mask.token_ids
+-                            )
++                                completion.sampling_mask = next_completion.sampling_mask
++                            else:
++                                completion.sampling_mask.token_ids.extend(
++                                    next_completion.sampling_mask.token_ids
++                                )
 +                                if next_completion.sampling_mask.logprobs is not None:
 +                                    assert completion.sampling_mask.logprobs is not None
 +                                    completion.sampling_mask.logprobs.extend(
@@ -140,77 +139,102 @@ index 0507f2555df..814fa16d86b 100644
                          if next_completion.spec_decode_metrics is not None:
                              completion.spec_decode_metrics = (
                                  next_completion.spec_decode_metrics
-diff --git a/vllm/v1/engine/input_processor.py b/vllm/v1/engine/input_processor.py
-index 09618d7eb66..92ad049f5dc 100644
 --- a/vllm/v1/engine/input_processor.py
 +++ b/vllm/v1/engine/input_processor.py
-@@ -146,6 +146,13 @@ class InputProcessor:
+@@ -189,17 +189,10 @@
+                     vocab_size=self.model_config.get_vocab_size(),
                  )
  
-             if self.model_config.return_sampling_mask:
-+                if (
-+                    self.model_config.return_sampling_mask_logprobs
-+                    and self.vllm_config.speculative_config is not None
-+                ):
-+                    raise ValueError(
-+                        "sampling-mask logprobs do not support speculative decoding"
-+                    )
-                 if params.temperature <= 0:
-                     raise ValueError(
-                         "sampling distribution replay requires temperature > 0"
-diff --git a/vllm/v1/engine/output_processor.py b/vllm/v1/engine/output_processor.py
-index e739e83b1c8..41ad126c67d 100644
+-            if self.model_config.return_sampling_mask:
+-                if params.temperature <= 0:
+-                    raise ValueError(
+-                        "sampling distribution replay requires temperature > 0"
+-                    )
+-                if params.top_k <= 0:
+-                    raise ValueError(
+-                        "sampling distribution replay requires top_k > 0 to "
+-                        "bound sampling mask size, reduce transfer overhead, "
+-                        "and avoid potential OOMs"
+-                    )
++            if self.model_config.return_sampling_mask and params.temperature <= 0:
++                raise ValueError(
++                    "sampling distribution replay requires temperature > 0"
++                )
+             if params.thinking_token_budget is not None and (
+                 self.vllm_config.reasoning_config is None
+                 or not self.vllm_config.reasoning_config.enabled
 --- a/vllm/v1/engine/output_processor.py
 +++ b/vllm/v1/engine/output_processor.py
-@@ -435,12 +435,18 @@ class RequestState:
+@@ -449,13 +449,21 @@
+             logprobs = logprobs[-num_new_tokens:] if num_new_tokens else logprobs[:0]
  
          sampling_mask = None
-         if self.sampling_mask_chunks and (delta or finished):
-+            chunks = self.sampling_mask_chunks[: len(token_ids)]
+-        if (delta or finished) and self.sampling_mask_chunks:
++        if self.sampling_mask_chunks and (delta or finished):
++            chunks = self.sampling_mask_chunks
              sampling_mask = SamplingMask(
-                 [
-                     mask
+-                [
+-                    position
 -                    for chunk in self.sampling_mask_chunks
-+                    for chunk in chunks
-                     for mask in chunk.to_nested_list()
--                ][: len(token_ids)]
+-                    for position in chunk.to_nested_list()
+-                ]
++                [mask for chunk in chunks for mask in chunk.to_nested_list()][
++                    : len(token_ids)
 +                ],
 +                (
-+                    [chunk.logprobs.tolist() for chunk in chunks]
-+                    if chunks and chunks[0].logprobs is not None
++                    [
++                        scores
++                        for chunk in chunks
++                        for scores in chunk.to_nested_logprobs()
++                    ][: len(token_ids)]
++                    if chunks[0].logprobs is not None
 +                    else None
 +                ),
              )
              if delta:
                  self.sampling_mask_chunks.clear()
-diff --git a/vllm/v1/outputs.py b/vllm/v1/outputs.py
-index c38eafa4a48..933a0e1e116 100644
 --- a/vllm/v1/outputs.py
 +++ b/vllm/v1/outputs.py
-@@ -65,11 +65,17 @@ class SamplingMaskLists(NamedTuple):
+@@ -65,6 +65,7 @@
      offsets: np.ndarray | None = None
-     # Unused with one position per request; kept for the wire layout.
+     # [num_requests + 1] for multi-position request batches.
      cu_num_generated_tokens: list[int] | None = None
 +    logprobs: np.ndarray | None = None
  
      def slice_request(self, req_idx: int, num_positions: int) -> "SamplingMaskLists":
-         assert num_positions == 1 and self.offsets is not None
+         assert self.offsets is not None
+@@ -72,10 +73,11 @@
+         start = req_idx if cu is None else cu[req_idx]
+         end = start + num_positions
+         lo, hi = self.offsets[start], self.offsets[end]
++        scores = self.logprobs[lo:hi] if self.logprobs is not None else None
+         if num_positions == 1:
+-            return SamplingMaskLists(self.token_ids[lo:hi])
++            return SamplingMaskLists(self.token_ids[lo:hi], logprobs=scores)
          return SamplingMaskLists(
--            self.token_ids[self.offsets[req_idx] : self.offsets[req_idx + 1]]
-+            self.token_ids[self.offsets[req_idx] : self.offsets[req_idx + 1]],
-+            logprobs=(
-+                self.logprobs[self.offsets[req_idx] : self.offsets[req_idx + 1]]
-+                if self.logprobs is not None
-+                else None
-+            ),
+-            self.token_ids[lo:hi], self.offsets[start : end + 1] - lo
++            self.token_ids[lo:hi], self.offsets[start : end + 1] - lo, logprobs=scores
          )
  
      def to_nested_list(self) -> list[list[int]]:
-diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index 57f0180edc9..3a4d262210d 100644
+@@ -84,6 +86,14 @@
+             return [token_ids]
+         offsets = self.offsets.tolist()
+         return [token_ids[offsets[i] : offsets[i + 1]] for i in range(len(offsets) - 1)]
++
++    def to_nested_logprobs(self) -> list[list[float]]:
++        assert self.logprobs is not None
++        logprobs = self.logprobs.tolist()
++        if self.offsets is None:
++            return [logprobs]
++        offsets = self.offsets.tolist()
++        return [logprobs[offsets[i] : offsets[i + 1]] for i in range(len(offsets) - 1)]
+ 
+ 
+ class LogprobsTensors(NamedTuple):
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -453,6 +453,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -468,6 +468,9 @@
                  "use_fp64_gumbel": self.model_config.use_fp64_gumbel,
                  "enable_trace_replay": self.model_config.enable_trace_replay,
                  "return_sampling_mask": self.model_config.return_sampling_mask,
@@ -220,10 +244,9 @@ index 57f0180edc9..3a4d262210d 100644
                  "custom_logits_processors": custom_logits_processors,
              }
              if self.vllm_config.watermark_config is None:
-diff --git a/vllm/v1/worker/gpu/sample/output.py b/vllm/v1/worker/gpu/sample/output.py
 --- a/vllm/v1/worker/gpu/sample/output.py
 +++ b/vllm/v1/worker/gpu/sample/output.py
-@@ -10,6 +10,7 @@ import torch
+@@ -11,6 +11,7 @@
  
  from vllm.triton_utils import tl, triton
  from vllm.v1.outputs import LogprobsTensors, SamplingMaskLists
@@ -231,22 +254,22 @@ diff --git a/vllm/v1/worker/gpu/sample/output.py b/vllm/v1/worker/gpu/sample/out
  
  
  @dataclass
-@@ -36,6 +37,7 @@ def _compact_sampling_mask_kernel(
-     vocab_size,
+@@ -39,6 +40,7 @@
      max_num_kept,
+     ROWS_PER_REQUEST: tl.constexpr,
      BLOCK_SIZE: tl.constexpr,
 +    WRITE_PACKED_MASK: tl.constexpr,
  ):
      """Per row: first ``max_num_kept`` finite-logit ids, the full count, the bitmask."""
-     req_idx = tl.program_id(0)
-@@ -59,24 +61,30 @@ def _compact_sampling_mask_kernel(
+     output_row = tl.program_id(0)
+@@ -68,13 +70,16 @@
          )
          count += tl.sum(keep_i32)
  
 -        bits = tl.reshape(keep_i32, (BLOCK_SIZE // 8, 8)) << tl.arange(0, 8)[None, :]
 -        byte_offsets = start_idx // 8 + tl.arange(0, BLOCK_SIZE // 8)
 -        tl.store(
--            packed_mask_ptr + req_idx * packed_mask_row_stride + byte_offsets,
+-            packed_mask_ptr + output_row * packed_mask_row_stride + byte_offsets,
 -            tl.sum(bits, axis=1).to(tl.uint8),
 -            mask=byte_offsets < tl.cdiv(vocab_size, 8),
 -        )
@@ -256,45 +279,30 @@ diff --git a/vllm/v1/worker/gpu/sample/output.py b/vllm/v1/worker/gpu/sample/out
 +            )
 +            byte_offsets = start_idx // 8 + tl.arange(0, BLOCK_SIZE // 8)
 +            tl.store(
-+                packed_mask_ptr + req_idx * packed_mask_row_stride + byte_offsets,
++                packed_mask_ptr + output_row * packed_mask_row_stride + byte_offsets,
 +                tl.sum(bits, axis=1).to(tl.uint8),
 +                mask=byte_offsets < tl.cdiv(vocab_size, 8),
 +            )
  
-     tl.store(counts_ptr + req_idx, count)
+     tl.store(counts_ptr + output_row, count)
  
- 
--# Bounds the [num_reqs, width] int32 buffer; wider rows use the bitmask instead.
- MAX_COMPACT_SUPPORT = 2048
- 
- 
- class SamplingMaskTensors(NamedTuple):
-     """Device-side masks pending async D2H: compact ids, plus the bitmask as
--    the exact fallback for rows wider than ``max_num_kept``."""
-+    the exact fallback for rows wider than ``max_num_kept``.
-+
-+    With ``logprobs``, full-vocabulary buffers preserve pure top-p support
-+    without synchronizing the device.
-+    """
- 
-     # [num_requests, max_num_kept]
-     token_ids: torch.Tensor
-@@ -85,6 +93,7 @@ class SamplingMaskTensors(NamedTuple):
-     # [num_requests]
-     counts: torch.Tensor
+@@ -96,6 +101,7 @@
      vocab_size: int
+     # Fixed request-major output slots. Ordinary sampling has one slot.
+     rows_per_request: int = 1
 +    logprobs: torch.Tensor | None = None
  
      @classmethod
      def from_logits(
-@@ -92,18 +101,33 @@ class SamplingMaskTensors(NamedTuple):
-         logits: torch.Tensor,
+@@ -105,19 +111,29 @@
          num_sampled_tokens: torch.Tensor,
          max_num_kept: int,
+         rows_per_request: int = 1,
 +        return_logprobs: bool = False,
      ) -> SamplingMaskTensors:
-         """Capture the finite-logit support of every row with a sampled token."""
-         num_reqs, vocab_size = logits.shape
+         """Capture committed target supports in fixed request-major slots."""
+         num_reqs = num_sampled_tokens.shape[0]
+         vocab_size = logits.shape[1]
 -        max_num_kept = min(max_num_kept, vocab_size, MAX_COMPACT_SUPPORT)
 +        max_num_kept = (
 +            vocab_size
@@ -305,82 +313,83 @@ diff --git a/vllm/v1/worker/gpu/sample/output.py b/vllm/v1/worker/gpu/sample/out
 +                MAX_COMPACT_SUPPORT,
 +            )
 +        )
+         num_output_rows = num_reqs * rows_per_request
          device = logits.device
  
 -        token_ids = torch.empty(
--            (num_reqs, max_num_kept), dtype=torch.int32, device=device
--        )
--        packed_mask = torch.empty(
--            (num_reqs, (vocab_size + 7) // 8), dtype=torch.uint8, device=device
--        )
-+        if return_logprobs:
-+            token_ids = torch.zeros(
-+                (num_reqs, max_num_kept), dtype=torch.int32, device=device
-+            )
-+            packed_mask = torch.empty((num_reqs, 0), dtype=torch.uint8, device=device)
-+        else:
-+            token_ids = torch.empty(
-+                (num_reqs, max_num_kept), dtype=torch.int32, device=device
-+            )
-+            packed_mask = torch.empty(
-+                (num_reqs, (vocab_size + 7) // 8), dtype=torch.uint8, device=device
-+            )
-         counts = torch.empty(num_reqs, dtype=torch.int32, device=device)
-         _compact_sampling_mask_kernel[(num_reqs,)](
-             logits,
-@@ -118,26 +142,45 @@ class SamplingMaskTensors(NamedTuple):
-             vocab_size,
-             max_num_kept,
-             BLOCK_SIZE=8192,
-+            WRITE_PACKED_MASK=not return_logprobs,
++        allocate = torch.zeros if return_logprobs else torch.empty
++        token_ids = allocate(
+             (num_output_rows, max_num_kept), dtype=torch.int32, device=device
          )
--        return cls(token_ids, packed_mask, counts, vocab_size)
+         packed_mask = torch.empty(
+-            (num_output_rows, (vocab_size + 7) // 8),
++            (num_output_rows, 0 if return_logprobs else (vocab_size + 7) // 8),
+             dtype=torch.uint8,
+             device=device,
+         )
+@@ -137,8 +153,19 @@
+             max_num_kept,
+             ROWS_PER_REQUEST=rows_per_request,
+             BLOCK_SIZE=8192,
+-        )
+-        return cls(token_ids, packed_mask, counts, vocab_size, rows_per_request)
++            WRITE_PACKED_MASK=not return_logprobs,
++        )
 +        logprobs = None
 +        if return_logprobs:
-+            logprobs = compute_token_logprobs(logits, token_ids)
-+        return cls(token_ids, packed_mask, counts, vocab_size, logprobs)
++            slots = torch.arange(rows_per_request, device=device)
++            source_rows = cu_num_logits[:-1, None] + slots
++            source_rows = torch.where(
++                slots < num_sampled_tokens[:, None], source_rows, 0
++            ).flatten()
++            logprobs = compute_token_logprobs(logits[source_rows], token_ids)
++        return cls(
++            token_ids, packed_mask, counts, vocab_size, rows_per_request, logprobs
++        )
  
-     def to_cpu_nonblocking(self) -> SamplingMaskTensors:
-         if self.token_ids.device.type == "cpu":
-             return self
-+        logprobs = self.logprobs
-+        if logprobs is not None:
-+            logprobs = logprobs.to("cpu", non_blocking=True)
-         return SamplingMaskTensors(
-             self.token_ids.to("cpu", non_blocking=True),
-             self.packed_mask.to("cpu", non_blocking=True),
-             self.counts.to("cpu", non_blocking=True),
-             self.vocab_size,
-+            logprobs,
+     @classmethod
+     def cat(cls, chunks: Sequence[SamplingMaskTensors]) -> SamplingMaskTensors:
+@@ -151,6 +178,9 @@
+             torch.cat([chunk.counts for chunk in chunks]),
+             first.vocab_size,
+             first.rows_per_request,
++            torch.cat([chunk.logprobs for chunk in chunks])
++            if first.logprobs is not None
++            else None,
          )
  
-     def tolists(self) -> SamplingMaskLists:
-         """CSR over all requests; rows without a sampled token are empty."""
-         counts = self.counts.cpu().numpy()
-         token_ids = self.token_ids.cpu().numpy()
--        packed_mask = self.packed_mask.cpu().numpy()
-         width = token_ids.shape[1]
+     def to_cpu_nonblocking(self) -> SamplingMaskTensors:
+@@ -162,6 +192,9 @@
+             self.counts.to("cpu", non_blocking=True),
+             self.vocab_size,
+             self.rows_per_request,
++            self.logprobs.to("cpu", non_blocking=True)
++            if self.logprobs is not None
++            else None,
+         )
+ 
+     def tolists(
+@@ -186,6 +219,17 @@
+                 np.concatenate(([0], num_sampled_tokens))
+             ).tolist()
  
 +        if self.logprobs is not None:
-+            valid = np.arange(width)[None, :] < counts[:, None]
-+            offsets = np.zeros(len(counts) + 1, dtype=np.int64)
-+            np.cumsum(counts, out=offsets[1:])
++            valid = np.arange(width)[None, :] < counts[sampled_rows, None]
++            offsets = np.zeros(len(sampled_rows) + 1, dtype=np.int64)
++            np.cumsum(counts[sampled_rows], out=offsets[1:])
 +            return SamplingMaskLists(
-+                token_ids[valid],
++                token_ids[sampled_rows][valid],
 +                offsets,
-+                logprobs=self.logprobs.cpu().numpy()[valid],
++                cu_num_generated_tokens,
++                self.logprobs.cpu().numpy()[sampled_rows][valid],
 +            )
-+
-+        packed_mask = self.packed_mask.cpu().numpy()
 +
          def support(row: int) -> np.ndarray:
              if counts[row] <= width:
                  return token_ids[row, : counts[row]]
-diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
-index 802adb6f642..0deb66ec5a2 100644
 --- a/vllm/v1/worker/gpu/sample/sampler.py
 +++ b/vllm/v1/worker/gpu/sample/sampler.py
-@@ -52,6 +52,7 @@ class Sampler:
+@@ -52,6 +52,7 @@
          use_fp64_gumbel: bool = False,
          enable_trace_replay: bool = False,
          return_sampling_mask: bool = False,
@@ -388,7 +397,7 @@ index 802adb6f642..0deb66ec5a2 100644
          custom_logits_processors: Sequence[LogitsProcessor] = (),
      ):
          self.logprobs_mode = logprobs_mode
-@@ -85,6 +86,7 @@ class Sampler:
+@@ -85,6 +86,7 @@
          self.needs_logits_processing = np.zeros(max_num_reqs, dtype=bool)
          self.num_speculative_tokens = num_speculative_tokens
          self.return_sampling_mask = return_sampling_mask
@@ -396,15 +405,21 @@ index 802adb6f642..0deb66ec5a2 100644
          self.use_flashinfer = (
              not return_sampling_mask and flashinfer_sampler_supported()
          )
-@@ -203,7 +205,10 @@ class Sampler:
-             # Size by the validated top_k batch max; wider supports use the bitmask.
-             max_num_kept = int(np.max(self.sampling_states.top_k.np[idx_mapping_np]))
-             sampling_mask_tensors = SamplingMaskTensors.from_logits(
--                processed_logits, num_sampled, max_num_kept
-+                processed_logits,
-+                num_sampled,
-+                max_num_kept,
+@@ -207,6 +209,7 @@
+                 input_batch.cu_num_logits,
+                 num_sampled,
+                 max_num_kept,
 +                return_logprobs=self.return_sampling_mask_logprobs,
              )
  
          # These are GPU tensors.
+--- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler.py
++++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler.py
+@@ -367,6 +367,7 @@
+                         num_sampled,
+                         max_num_kept,
+                         self.num_speculative_steps + 1,
++                        return_logprobs=self.sampler.return_sampling_mask_logprobs,
+                     )
+                 )
+             del processed_logits

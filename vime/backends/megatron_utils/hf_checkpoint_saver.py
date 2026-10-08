@@ -106,12 +106,10 @@ def save_hf_model_to_path(
         hf_weight_iterator.get_hf_weight_chunks(
             megatron_local_weights,
             progress_desc=progress_desc,
-            # Megatron-to-HF conversion is stateful for some parameters.  For
-            # example, q_a_proj and kv_a_proj can land in adjacent chunks but
-            # must be emitted together for VLLM compatibility.  Every node
-            # writer therefore has to observe every chunk so that pairs can
-            # cross chunk boundaries.  Writers still only persist their
-            # modulo-assigned shards below; non-writer ranks skip conversion.
+            # Preserve Slime's stateful Megatron-to-HF iterator contract:
+            # every node writer observes every chunk, including across chunk
+            # boundaries. Writers still only persist their modulo-assigned
+            # shards below; non-writer ranks skip conversion.
             should_convert_chunk=lambda _idx: is_writer_rank,
         )
     ):

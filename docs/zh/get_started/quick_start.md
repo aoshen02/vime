@@ -96,6 +96,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 ```
 
 对于更大的模型，可以使用 `torchrun` 来启动转换脚本，从而使用多张 GPU 甚至多机进行权重转换。
+注意：kimi-k2模型权重转换时，需打开模型路径中的config.json，将"model_type": "kimi_k2"修改为"model_type": "deepseek_v3"。
 
 ### Megatron 格式 转换为 Hugging Face 格式
 
@@ -296,7 +297,7 @@ OPTIMIZER_ARGS=(
 ### VLLM_ARGS: vLLM 服务参数
 
 这部分参数用于配置 vLLM 推理服务。
-- `--rollout-num-gpus-per-engine`：单个 rollout engine 使用的 worker GPU 总数；只有 data parallel 和 pipeline parallel 都为 1 时，它才等于 vLLM 的 `tensor_parallel_size`。
+- `--rollout-num-gpus-per-engine`：单个 rollout engine 使用的 worker GPU 总数；只有 data parallel、pipeline parallel 和 prefill context parallel 都为 1 时，它才等于 vLLM 的 `tensor_parallel_size`。
 - 其他 vLLM 参数可以通过添加 `--vllm-` 前缀传递给 vime，vime 会自动透传给 vLLM。例如，要设置 vLLM 的 `--uvicorn-log-level info` 参数，只需使用 `--vllm-uvicorn-log-level info`。
 
 > ⚠️ **注意**：
@@ -397,6 +398,35 @@ def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) ->
 > 💡 **提示**：
 > 每条 partial rollout sample 的 `sample.metadata` 中存储了第一次进行生成的 rollout id，可以用于数据过滤。
 
+
+
+### bf16 训练 fp8 推理
+
+vime 直接支持 bf16 训练，fp8 推理。对于 Qwen3-4B 模型，只需要下载如下模型：
+
+```bash
+hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
+```
+
+并将 `--hf-checkpoint` 替换为：
+
+```bash
+   # 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数
+   --hf-checkpoint /root/Qwen3-4B-FP8
+
+   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP8 rollout 而去做修改。
+   --ref-load /root/Qwen3-4B_torch_dist
+```
+
+即可触发 fp8 推理。目前我们会将 bf16 权重直接 cast 为 fp8，后续会逐渐添加对精度影响更小的量化方案。
+
+对于 long-context rollout，也可以开启 vLLM FP8 KV cache 来提升有效 KV cache 容量：
+
+```bash
+--vllm-kv-cache-dtype fp8_e4m3
+```
+
+⚠️  训练的 megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的。
 
 
 ## Multiturn 适配

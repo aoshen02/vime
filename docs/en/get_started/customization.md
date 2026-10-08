@@ -506,10 +506,12 @@ publish the writes on a non-POSIX shared filesystem — e.g. upload pending writ
 backing object store — where another host cannot see the files without an explicit sync. The hook is called
 on every rank and must gate itself (e.g. once per container).
 
-The post-write hook must make the completed version directory visible before it
-returns. Host-local full-checkpoint copies then use that published directory as
-their source. See [Delta Weight Sync](../advanced/delta-weight-sync.md) for the
-delta mechanism.
+The read-side counterpart runs inside the inference engine, on every host it spans, and is
+therefore a vLLM server argument rather than a vime hook: pass
+`--vllm-custom-pull-weights-pre-read-hook <import.path>` with signature
+`hook(source_dir: str, target_version: int)` — called before `pull_weights` reads the
+published weights (e.g. refresh the mount's view). See
+[Delta Weight Sync](../advanced/delta-weight-sync.md) for the full mechanism.
 
 ## Testing Custom Function Paths
 

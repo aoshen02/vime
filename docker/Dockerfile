@@ -1,9 +1,26 @@
-ARG BASE_IMAGE=vllm/vllm-openai:nightly
+ARG BASE_IMAGE=vllm/vllm-openai@sha256:f8696a5176c1fb61e025b0772505674a3e092c25597eb26117003945b5121e8d
+FROM rust:1.95-bookworm AS vllm-rust-frontend
+ENV CARGO_BUILD_JOBS=4
+ARG PATCH_VERSION=latest
+ARG VLLM_COMMIT=43b4aaea3e40e20ef53ce2bfecfa1b72060bf2b5
+ARG VLLM_RS_BUILD_VERSION=0.31.1rc1.dev23+g43b4aaea3
+COPY docker/patch/${PATCH_VERSION}/vllm-rust-frontend.patch /tmp/vllm-rust-frontend.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-rust-observability.patch /tmp/vllm-rust-observability.patch
+RUN git init /build && cd /build && \
+    git remote add origin https://github.com/vllm-project/vllm.git && \
+    git fetch --depth 1 origin ${VLLM_COMMIT} && git checkout FETCH_HEAD && \
+    git apply /tmp/vllm-rust-frontend.patch && \
+    git apply /tmp/vllm-rust-observability.patch
+RUN cd /build && VLLM_RS_BUILD_VERSION=${VLLM_RS_BUILD_VERSION} \
+    cargo build --locked --release --manifest-path rust/Cargo.toml \
+    -p vllm-cmd --bin vllm-rs --features native-tls-vendored
+
 FROM ${BASE_IMAGE}
 
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
+ARG VLLM_COMMIT=43b4aaea3e40e20ef53ce2bfecfa1b72060bf2b5
 ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
 ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
@@ -20,6 +37,7 @@ ARG FA2_MAX_JOBS=64
 # ======================================== Setup =============================================
 
 WORKDIR /root/
+RUN python3 -c 'import os, vllm; assert os.environ["VLLM_COMMIT"][:9] in vllm.__version__, (os.environ["VLLM_COMMIT"], vllm.__version__)'
 
 # ======================================== Apt dependencies =============================================
 
@@ -42,7 +60,8 @@ RUN apt-get update && apt-get install -y \
     rm -rf /var/lib/apt/lists/*
 
 # vllm/vllm-openai base only ships python3; subsequent source builds invoke `python`.
-RUN ln -sf /usr/bin/python3 /usr/local/bin/python
+RUN uv pip install --system pip && ln -sf /usr/bin/python3 /usr/local/bin/python
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # ====================================== Python dependencies ============================================
 
@@ -131,8 +150,7 @@ RUN if [ "${ENABLE_CUDA_13}" != "1" ]; then \
       pip install nvidia-cudnn-cu12==9.16.0.29; \
     fi
 
-# Megatron requires NumPy 1.x, while SciPy 1.18+ requires NumPy 2.x.
-RUN pip install "numpy==1.26.4" "scipy==1.17.1"
+RUN pip install "scipy==1.17.1"
 
 RUN rm -rf /root/.cache/pip /root/flash-attention
 
@@ -156,7 +174,10 @@ COPY docker/patch/${PATCH_VERSION}/vllm.patch /tmp/vllm.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-score-centering.patch /tmp/vllm-score-centering.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-pd-request-metrics.patch /tmp/vllm-pd-request-metrics.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vllm-inflight-queue-diagnostics.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-aux-output-reset.patch /tmp/vllm-aux-output-reset.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-retained-serving.patch /tmp/vllm-retained-serving.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-generation-health.patch /tmp/vllm-generation-health.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-tensor-dump.patch /tmp/vllm-tensor-dump.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
@@ -164,14 +185,21 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-score-centering.patch && \
     git apply -v /tmp/vllm-pd-request-metrics.patch && \
     git apply -v /tmp/vllm-inflight-queue-diagnostics.patch && \
-    git apply -v /tmp/vllm-aux-output-reset.patch && \
+    git apply -v /tmp/vllm-retained-serving.patch && \
+    git apply -v /tmp/vllm-generation-health.patch && \
+    git apply -v /tmp/vllm-tensor-dump.patch && \
+    git apply -v /tmp/vllm-fine-grained-tracing.patch && \
     rm /tmp/vllm-pull_weights.patch /tmp/vllm.patch \
        /tmp/vllm-score-centering.patch \
        /tmp/vllm-pd-request-metrics.patch \
        /tmp/vllm-inflight-queue-diagnostics.patch \
-       /tmp/vllm-aux-output-reset.patch
+       /tmp/vllm-retained-serving.patch \
+       /tmp/vllm-generation-health.patch \
+       /tmp/vllm-tensor-dump.patch \
+       /tmp/vllm-fine-grained-tracing.patch
 
 # ====================================== Install main package ============================================
+COPY --from=vllm-rust-frontend /build/rust/target/release/vllm-rs /usr/local/lib/python3.12/dist-packages/vllm/vllm-rs
 
 ARG VIME_REPO=https://github.com/vllm-project/vime.git
 ARG VIME_COMMIT=main

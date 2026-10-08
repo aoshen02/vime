@@ -40,7 +40,7 @@ def execute(top_p=1.0):
             "--tensor-model-parallel-size 2 --sequence-parallel --pipeline-model-parallel-size 1 "
             "--context-parallel-size 1 --expert-model-parallel-size 1 --expert-tensor-parallel-size 1 "
             "--use-dynamic-batch-size --max-tokens-per-gpu 4096 --log-probs-chunk-size 128 "
-            "--rollout-num-gpus-per-engine 1 --vllm-mem-fraction-static 0.6 --vllm-cuda-graph-max-bs 8 "
+            "--rollout-num-gpus-per-engine 1 --vllm-gpu-memory-utilization 0.6 --vllm-max-cudagraph-capture-size 8 "
             "--attention-dropout 0 --hidden-dropout 0 --attention-backend flash "
             "--accumulate-allreduce-grads-in-fp32 --attention-softmax-in-fp32 "
             "--actor-num-nodes 1 --actor-num-gpus-per-node 2 --colocate --ci-test "

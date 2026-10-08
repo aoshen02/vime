@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from vime.backends.vllm_utils.server_control import abort_servers_until_idle
+from vime.backends.vllm_utils.server_control import abort_servers_until_idle, get_live_router_workers
 from vime.data.transport import discard_rollout_group, inherit_queue_context, publish_rollout_async
 from vime.observability.trace_utils import build_vllm_meta_trace_attrs, trace_function, trace_span
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, finalize_rollout_groups
@@ -249,11 +249,8 @@ def _inference_generate_tokens_and_logprobs(choice: dict[str, Any]) -> tuple[lis
     logprobs = choice.get("logprobs")
     content = logprobs.get("content") if isinstance(logprobs, dict) else []
     content = content or []
-    log_probs = [
-        float(content[index].get("logprob", 0.0)) if index < len(content) and isinstance(content[index], dict) else 0.0
-        for index in range(len(token_ids))
-    ]
-    return token_ids, log_probs
+    pairs = list(zip(token_ids, content, strict=False))
+    return [token_id for token_id, _ in pairs], [float(item["logprob"]) for _, item in pairs]
 
 
 def _score_centering_metadata(
@@ -266,11 +263,7 @@ def _score_centering_metadata(
     if top_p == 1.0:
         rows = []
         for item in content:
-            row = {}
-            for entry in item.get("top_logprobs") or []:
-                token = entry.get("token", "")
-                if token.startswith("token_id:"):
-                    row[int(token.removeprefix("token_id:"))] = float(entry["logprob"])
+            row = {entry["token_id"]: float(entry["logprob"]) for entry in item.get("top_logprobs") or []}
             rows.append(row)
         heads = [sorted(row.items(), key=lambda item: item[1], reverse=True)[:top_k] for row in rows]
         if any(len(head) != top_k for head in heads):
@@ -623,7 +616,7 @@ async def generate_and_rm(
                 "generate_function": sample.generate_function_path or args.custom_generate_function_path,
                 "input_index": sample.index,
                 "input_group_index": sample.group_index,
-                "branch": getattr(args, "_rollout_queue_branch", None),
+                "branch": getattr(sample, "_queue_branch", None),
             }
         ]
 
@@ -737,10 +730,15 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     for task in cancellable_tasks:
         task.cancel()
 
-    if state.active_server_generations > 0:
-        base = f"http://{args.vllm_router_ip}:{args.vllm_router_port}"
-        response = await get(f"{base}/workers")
-        urls = [worker["url"] for worker in response["workers"]]
+    if state.active_server_generations:
+        router_url = f"http://{args.vllm_router_ip}:{args.vllm_router_port}"
+        if args.rollout_external:
+            workers = (await get(f"{router_url}/workers"))["workers"]
+        else:
+            # The manager's final health check runs only after this function
+            # returns. Prune dead URLs now so abort/drain itself can finish.
+            workers = await get_live_router_workers(router_url, timeout=args.rollout_health_check_timeout)
+        urls = [worker["url"] for worker in workers]
         await abort_servers_until_idle(urls)
 
     await asyncio.gather(*cancellable_tasks, return_exceptions=True)
@@ -787,7 +785,8 @@ async def generate_rollout_async(
     """
 
     state = GenerateState(args)
-    controller = getattr(getattr(data_source, "__self__", None), "controller", None)
+    reader = getattr(data_source, "__self__", None)
+    controller = getattr(reader, "controller", None)
 
     # instantiate data filters
     dynamic_filter = (
@@ -801,13 +800,14 @@ async def generate_rollout_async(
 
     data = []
     all_data = []
+    # The legacy all-samples hook can mutate selected and rejected groups.
+    # Preserve those objects until it runs; otherwise keep only stored refs.
     keep_all_samples = args.rollout_all_samples_process_path is not None
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
-            reader = getattr(data_source, "__self__", None)
             if hasattr(reader, "get_samples_async"):
                 samples = await reader.get_samples_async(args.over_sampling_batch_size)
             else:
@@ -883,9 +883,12 @@ async def generate_rollout_async(
             data = await publish_rollout_async(data, args, rollout_id)
         output = RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect())
     elif args.rollout_sample_filter_path is not None:
-        output = finalize_rollout_groups(args, rollout_id, data, metric_gatherer.collect())
+        # Preserve the calling thread/context of custom batch hooks.
+        output = finalize_rollout_groups(args, rollout_id, data, metric_gatherer.collect(), controller=controller)
     else:
-        output = await asyncio.to_thread(finalize_rollout_groups, args, rollout_id, data, metric_gatherer.collect())
+        output = await asyncio.to_thread(
+            finalize_rollout_groups, args, rollout_id, data, metric_gatherer.collect(), controller=controller
+        )
     return output, aborted_samples
 
 

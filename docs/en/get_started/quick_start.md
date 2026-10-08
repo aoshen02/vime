@@ -46,7 +46,7 @@ docker run --rm --gpus all --ipc=host --shm-size=16g \
 
 ### Install vime
 
-vime is already installed in the docker image. To update to the latest verison, please execute the following command:
+vime is already installed in the docker image. To update to the latest version, please execute the following command:
 
 ```bash
 # Path can be adjusted according to actual situation
@@ -97,6 +97,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 ```
 
 For larger models, you can use `torchrun` to start the conversion script to convert with multi-gpus or even multi-nodes.
+Note: When converting the kimi-k2 model weights, you need to open config.json in the model path and change "model_type": "kimi_k2" to "model_type": "deepseek_v3".
 
 ### Convert from Megatron Format to Hugging Face Format
 
@@ -297,7 +298,7 @@ OPTIMIZER_ARGS=(
 ### VLLM_ARGS: vLLM Service Parameters
 
 This part of parameters is used to configure the vLLM inference service.
-- `--rollout-num-gpus-per-engine`: Total worker GPUs used by one rollout engine. It equals vLLM's `tensor_parallel_size` only when data and pipeline parallelism are both 1.
+- `--rollout-num-gpus-per-engine`: Total worker GPUs used by one rollout engine. It equals vLLM's `tensor_parallel_size` only when data, pipeline, and prefill context parallelism are all 1.
 - Other vLLM parameters can be passed to vime by adding the `--vllm-` prefix, and vime will automatically forward them to vLLM. For example, to set vLLM's `--uvicorn-log-level info` parameter, use `--vllm-uvicorn-log-level info`.
 
 > ⚠️ **Note**:
@@ -394,6 +395,34 @@ That is, take out the first `num_samples` prompts corresponding to `num_samples 
 
 > 💡 **Tip**:
 > The `sample.metadata` of each partial rollout sample stores the rollout id of the first generation, which can be used for data filtering.
+
+### bf16 Training fp8 Inference
+
+vime directly supports bf16 training and fp8 inference. For Qwen3-4B model, you only need to download the following model:
+
+```bash
+hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
+```
+
+And replace `--hf-checkpoint` with:
+
+```bash
+   # Used to load tokenizer and other information, actually won't use model weight parameters from hf path
+   --hf-checkpoint /root/Qwen3-4B-FP8
+
+   # The megatron checkpoint still needs to be the dist weights converted from bf16 huggingface at the beginning, not modified because of FP8 rollout.
+   --ref-load /root/Qwen3-4B_torch_dist
+```
+
+This will trigger fp8 inference. Currently, we will directly cast bf16 weights to fp8, and we will gradually add quantization schemes with less impact on accuracy in the future.
+
+For long-context rollout, you can also enable FP8 KV cache in vLLM to increase effective KV cache capacity:
+
+```bash
+--vllm-kv-cache-dtype fp8_e4m3
+```
+
+⚠️ The training megatron checkpoint still needs to be the one converted from bf16 huggingface at the beginning.
 
 ## Multiturn Adaptation
 

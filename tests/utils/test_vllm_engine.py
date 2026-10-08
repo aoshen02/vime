@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +51,7 @@ def vllm_args() -> SimpleNamespace:
         offload_rollout=False,
         use_rollout_routing_replay=False,
         rollout_top_p=1.0,
+        rollout_health_check_timeout=600.0,
         vllm_pipeline_parallel_size=1,
         vllm_prefill_context_parallel_size=1,
         vllm_data_parallel_size=1,
@@ -366,14 +368,20 @@ def test_build_vllm_subprocess_env_colocate(vllm_args, monkeypatch):
 
 
 @pytest.mark.unit
-def test_build_vllm_subprocess_env_drops_trainer_allocator_config(vllm_args, monkeypatch):
+def test_launch_server_process_drops_trainer_allocator_config(vllm_args, monkeypatch):
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     monkeypatch.setenv("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-    env = mod._build_subprocess_env({"_args": vllm_args, "_visible_devices": "0"})
+    env = {}
+    process = SimpleNamespace(start=lambda: None)
+    monkeypatch.setattr(mod.multiprocessing, "set_start_method", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mod.multiprocessing, "Process", lambda *, target, args: env.update(args[1]) or process)
+    mod.launch_server_process({"_args": vllm_args, "_visible_devices": "0", "node_rank": 1})
 
     assert "PYTORCH_CUDA_ALLOC_CONF" not in env
     assert "PYTORCH_ALLOC_CONF" not in env
+    assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
+    assert "PYTORCH_ALLOC_CONF" not in os.environ
 
 
 @pytest.mark.unit
@@ -853,7 +861,8 @@ def test_update_weights_from_disk_posts_collective_rpc(vllm_engine, monkeypatch)
 def test_pipeline_rl_pause_and_disk_reload(vllm_engine, monkeypatch, flush_cache):
     calls = []
 
-    def post(url, *, json, params=None):
+    def post(url, *, json, params=None, timeout=None):
+        assert timeout is None
         calls.append((url, json, params))
         return _MockResponse(json_data={"success": True})
 

@@ -488,18 +488,9 @@ def _tokens_and_logprobs_from_choice(choice: dict) -> tuple[list[int], list[floa
         return [], []
     tids = [int(x) for x in tids_raw]
     lp = choice.get("logprobs")
-    if not isinstance(lp, dict):
-        return tids, [0.0] * len(tids)
-    content = lp.get("content")
-    if isinstance(content, list) and content:
-        lps: list[float] = []
-        for i in range(len(tids)):
-            if i < len(content) and isinstance(content[i], dict):
-                lps.append(float(content[i].get("logprob", 0.0)))
-            else:
-                lps.append(0.0)
-        return tids, lps
-    return tids, [0.0] * len(tids)
+    content = (lp.get("content") or []) if isinstance(lp, dict) else []
+    pairs = list(zip(tids, content, strict=False))
+    return [token_id for token_id, _ in pairs], [float(item["logprob"]) for _, item in pairs]
 
 
 async def call_vllm_generate(
@@ -561,8 +552,8 @@ async def call_vllm_generate(
         fr = choice.get("finish_reason")
         finish = fr if isinstance(fr, str) and fr else "stop"
     except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError) as e:
-        # vLLM has no per-request abort endpoint. Closing this router request also
-        # closes its selected worker request, so vLLM cancels the engine request.
+        # Close the HTTP request context on cancellation; do not issue a
+        # separate worker-broadcast abort here.
         logger.debug("[%s] sid=%s turn aborted: %s", adapter.log_prefix, session_id, type(e).__name__)
         raise
 

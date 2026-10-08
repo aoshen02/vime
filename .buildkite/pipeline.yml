@@ -152,6 +152,7 @@ steps:
             tests/test_cuda_stack_offload.py \
             tests/test_deep_ep_tms_patch.py \
             tests/test_distributed_rollout.py \
+            tests/test_disk_delta_recovery.py \
             tests/test_discounted_returns.py \
             tests/test_eval_config.py \
             tests/test_filter_long_prompt.py \
@@ -187,6 +188,8 @@ steps:
             tests/test_vllm_rollout.py \
             tests/test_agent/test_sandbox_exec_and_wait.py \
             tests/test_stateless_adam.py \
+            tests/test_training_recovery.py \
+            tests/test_rollout_manager_recovery.py \
             tests/test_tau_bench_token_delta.py \
             tests/test_train_data_utils.py \
             tests/test_update_weight_factory.py \
@@ -239,7 +242,7 @@ steps:
             value: short
           - label: "run-ci-vllm-config — 8 GPU, 4 tests"
             value: vllm-config
-          - label: "run-ci-megatron — up to 8 GPU, 26 runs"
+          - label: "run-ci-megatron — up to 8 GPU, 35 runs"
             value: megatron
           - label: "run-ci-vime-customized — 1–8 GPU, 5 tests"
             value: vime-customized

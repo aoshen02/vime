@@ -48,6 +48,7 @@ from vime.rollout.vllm_rollout import (
     _coerce_flat_int_token_ids,
     _inference_generate_meta_info,
     _inference_generate_metrics,
+    _inference_generate_tokens_and_logprobs,
     _mm_render_response_to_generate_body,
     _prepare_prompt_ids,
     prime_encoder,
@@ -196,15 +197,10 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
 
                 # Each chunk carries only its delta tokens + logprobs; accumulate.
                 delta_tokens = choice.get("token_ids") or []
-                delta_log_probs = []
-                lp = choice.get("logprobs")
-                if isinstance(lp, dict):
-                    content_items = lp.get("content") or []
-                    delta_log_probs = [
-                        float(it.get("logprob", 0.0)) if isinstance(it, dict) else 0.0 for it in content_items
-                    ]
-                if len(delta_log_probs) != len(delta_tokens):
-                    delta_log_probs = (delta_log_probs + [0.0] * len(delta_tokens))[: len(delta_tokens)]
+                content = (choice.get("logprobs") or {}).get("content") or []
+                if len(content) != len(delta_tokens):
+                    raise ValueError("Streaming token IDs and logprob pairs must have matching lengths.")
+                delta_tokens, delta_log_probs = _inference_generate_tokens_and_logprobs(choice)
                 if delta_tokens:
                     call_tokens += delta_tokens
                     call_log_probs += delta_log_probs
@@ -236,12 +232,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
 
     if finish_reason and last_choice is not None:
         new_response_tokens = call_tokens
-        if len(call_log_probs) == len(call_tokens):
-            new_response_log_probs = [float(x) for x in call_log_probs]
-        else:
-            new_response_log_probs = ([float(x) for x in call_log_probs] + [0.0] * len(call_tokens))[
-                : len(call_tokens)
-            ]
+        new_response_log_probs = [float(x) for x in call_log_probs]
 
         # Build meta_info from the terminal choice + usage, mirroring generate().
         fr = last_choice.get("finish_reason") or "stop"

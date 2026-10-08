@@ -13,6 +13,7 @@ NUM_GPUS = 0
 )
 def test_flush_schedule_counts_training_updates_and_handles_restored_versions(interval, expected):
     assert [version for version in range(1, 8) if should_flush_cache(interval, version)] == expected
+    # Restoring a nonzero serving version keeps the same phase.
     assert [version for version in range(5, 8) if should_flush_cache(interval, version)] == [
         version for version in expected if version >= 5
     ]
