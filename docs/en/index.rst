@@ -1,3 +1,5 @@
+.. _lab:
+
 Vime Documentation
 ===================
 
@@ -85,13 +87,14 @@ Start by Use Case
    examples/qwen3-4b-base-openhermes.md
    _examples_synced/fully_async/README.md
    _examples_synced/multi_agent/README.md
+   _examples_synced/dspark/README.md
+   _examples_synced/mem_agent/README.md
    _examples_synced/coding_agent_rl/README.md
    _examples_synced/delta_weight_sync/README.md
    _examples_synced/eval_multi_task/README.md
    _examples_synced/geo3k_vlm/README.md
    _examples_synced/geo3k_vlm_multi_turn/README.md
    _examples_synced/on_policy_distillation/README.md
-   _examples_synced/strands_vllm/README.md
    _examples_synced/tau-bench/README.md
    _examples_synced/train_infer_mismatch_helper/README.md
 
@@ -110,3 +113,8 @@ Start by Use Case
    :caption: Hardware Platforms
 
    platform_support/amd_tutorial.md
+
+.. toctree::
+   :maxdepth: 2
+
+   library

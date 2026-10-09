@@ -184,6 +184,11 @@ COPY docker/patch/${PATCH_VERSION}/vllm-generation-health.patch /tmp/vllm-genera
 COPY docker/patch/${PATCH_VERSION}/vllm-tensor-dump.patch /tmp/vllm-tensor-dump.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-nixl-peer-retirement.patch /tmp/vllm-nixl-peer-retirement.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-mooncake-prom-metrics.patch /tmp/vllm-mooncake-prom-metrics.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-host-cache-ratio.patch /tmp/vllm-host-cache-ratio.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-deepgemm-bf16.patch /tmp/vllm-deepgemm-bf16.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-deepep-optional-shrink.patch /tmp/vllm-deepep-optional-shrink.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-deepep-auto.patch /tmp/vllm-deepep-auto.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
@@ -196,6 +201,11 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-tensor-dump.patch && \
     git apply -v /tmp/vllm-fine-grained-tracing.patch && \
     git apply -v /tmp/vllm-nixl-peer-retirement.patch && \
+    git apply -v /tmp/vllm-mooncake-prom-metrics.patch && \
+    git apply -v /tmp/vllm-host-cache-ratio.patch && \
+    git apply -v /tmp/vllm-deepgemm-bf16.patch && \
+    git apply -v /tmp/vllm-deepep-optional-shrink.patch && \
+    git apply -v /tmp/vllm-deepep-auto.patch && \
     rm /tmp/vllm-pull_weights.patch /tmp/vllm.patch \
        /tmp/vllm-score-centering.patch \
        /tmp/vllm-pd-request-metrics.patch \
@@ -204,7 +214,12 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
        /tmp/vllm-generation-health.patch \
        /tmp/vllm-tensor-dump.patch \
        /tmp/vllm-fine-grained-tracing.patch \
-       /tmp/vllm-nixl-peer-retirement.patch
+       /tmp/vllm-nixl-peer-retirement.patch \
+       /tmp/vllm-mooncake-prom-metrics.patch \
+       /tmp/vllm-host-cache-ratio.patch \
+       /tmp/vllm-deepgemm-bf16.patch \
+       /tmp/vllm-deepep-optional-shrink.patch \
+       /tmp/vllm-deepep-auto.patch
 
 # ====================================== Install main package ============================================
 COPY --from=vllm-rust-frontend /build/rust/target/release/vllm-rs /usr/local/lib/python3.12/dist-packages/vllm/vllm-rs

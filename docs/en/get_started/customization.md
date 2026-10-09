@@ -44,7 +44,7 @@ For most agentic use cases, **start with `--custom-generate-function-path` plus 
 | Attach custom loss masks, metadata, or convert agentic outputs into training data | [`--rollout-data-postprocess-path`](#rollout-data-postprocess-path), [`--custom-convert-samples-to-train-data-path`](#custom-convert-samples-to-train-data-path) |
 | Debug long-running custom generation, verifier calls, tool calls, or sandbox steps | trace utilities in [`vime.observability.trace_utils`](../developer_guide/trace.md) |
 
-Native examples of this pattern: [`examples/multi_agent`](../../../examples/multi_agent/README.md) (a `--rollout-function-path`-based multi-agent pattern) and [`examples/fully_async`](../../../examples/fully_async/README.md) (long-tail agentic generation), both keeping vime's default `vllm_rollout` outer loop.
+Native examples of this pattern: [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) (a `--rollout-function-path`-based multi-agent pattern) and [`examples/fully_async`](../_examples_synced/fully_async/README.md) (long-tail agentic generation), both keeping vime's default `vllm_rollout` outer loop.
 
 ## Detailed Interface Reference
 

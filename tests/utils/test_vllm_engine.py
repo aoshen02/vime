@@ -115,7 +115,11 @@ def test_flush_cache_retries(vllm_engine, monkeypatch, caplog, first_response, e
     with caplog.at_level("INFO", logger=mod.__name__):
         vllm_engine.flush_cache()
 
-    assert calls == [("http://127.0.0.1:8765/reset_prefix_cache", {"reset_running_requests": True})] * 2
+    assert (
+        calls
+        == [("http://127.0.0.1:8765/reset_prefix_cache", {"reset_running_requests": "true", "reset_external": "true"})]
+        * 2
+    )
     assert sleeps == [1]
     assert expected_log in caplog.text
 

@@ -53,12 +53,12 @@ The test checks that healthy vLLM processes, routers, and GPU placements are reu
 
 | Data storage | RolloutManager state | Checks |
 |---|---|---|
-| Straw with online GC | Remains alive | Reconnect trainers and replay completed training batches that were not checkpointed. |
-| Straw with online GC | Killed after failure | Reconnect a new manager to the original serving cluster and replay the same batches. |
-| Straw with a model/optimizer checkpoint and Megatron YAML configuration | Killed during training | Restore from the checkpoint and check configuration and recovery state. |
+| straw with online GC | Remains alive | Reconnect trainers and replay completed training batches that were not checkpointed. |
+| straw with online GC | Killed after failure | Reconnect a new manager to the original serving cluster and replay the same batches. |
+| straw with a model/optimizer checkpoint and Megatron YAML configuration | Killed during training | Restore from the checkpoint and check configuration and recovery state. |
 | Rollout debug files | Killed after failure | Restore data from debug files and reconnect a new manager to the original serving cluster. |
-| Straw with disk-delta weight synchronization | Killed after failure | Publish restored weights as a new full baseline, then continue delta updates. |
-| Straw with PD/NIXL serving | Killed after failure | Wedge the prefill actor, replace it within the reset timeout, and retain the healthy decode actor. |
+| straw with disk-delta weight synchronization | Killed after failure | Publish restored weights as a new full baseline, then continue delta updates. |
+| straw with PD/NIXL serving | Killed after failure | Wedge the prefill actor, replace it within the reset timeout, and retain the healthy decode actor. |
 
 `test_qwen3_30B_A3B_training_recovery.py` uses 8 GPUs for the same OOM/checkpoint/manager-loss workflow with a MoE model, R3, and stateless Adam. It omits optimizer tensors while checking scheduler progress, compares persisted routing bytes across the TP/DP change, and completes training after recovery. The dense cases cover ordinary Adam with optimizer checkpoints.
 

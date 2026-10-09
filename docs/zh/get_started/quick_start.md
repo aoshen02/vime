@@ -27,7 +27,7 @@
 
 **AMD GPU**：
 
-请参考 [AMD 使用教程](../../en/platform_support/amd_tutorial.md)。
+请参考 [AMD 使用教程](../platform_support/amd_tutorial.md)。
 
 ### 拉取并启动 Docker 容器
 

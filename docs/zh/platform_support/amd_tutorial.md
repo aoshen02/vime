@@ -1,6 +1,6 @@
 # AMD ROCm
 
-本教程使用 ROCm 镜像。完整的启动脚本说明见[英文教程](../../en/platform_support/amd_tutorial.md)。
+本教程使用 ROCm 镜像。完整的启动脚本说明见[英文教程](https://github.com/vllm-project/vime/blob/main/docs/en/platform_support/amd_tutorial.md)。
 
 ## 环境准备
 
