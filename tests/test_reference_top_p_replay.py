@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from megatron.core import mpu
-from vime.backends.megatron_utils.loss import get_log_probs_and_entropy, policy_loss_function
+from vime.backends.megatron_utils.loss import get_log_probs_and_entropy
 
 NUM_GPUS = 0
 
@@ -115,55 +115,84 @@ def test_reference_log_probs_use_full_vocab_while_actor_replays_top_p(monkeypatc
     )
 
 
-@pytest.mark.unit
-def test_initial_model_kl_preserves_masked_training_loss(monkeypatch):
-    monkeypatch.setattr(mpu, "get_tensor_model_parallel_group", lambda: None, raising=False)
-    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+@pytest.mark.parametrize("top_p", [1.0, 0.95])
+def test_initial_kl_check_respects_policy_support(top_p):
+    source = Path(__file__).resolve().parents[1] / "vime/backends/megatron_utils/model.py"
+    train = next(
+        node
+        for node in ast.parse(source.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == "train"
+    )
+    checks = [
+        node
+        for node in ast.walk(train)
+        if isinstance(node, ast.If) and ast.unparse(node.test).startswith("args.ci_test and")
+    ]
+    program = compile(ast.fix_missing_locations(ast.Module(body=checks, type_ignores=[])), "model.py", "exec")
     args = Namespace(
-        rollout_temperature=1.0,
-        rollout_top_p=0.95,
-        allgather_cp=False,
-        log_probs_chunk_size=-1,
-        entropy_coef=0.0,
-        use_rollout_logprobs=False,
-        use_opsm=False,
-        advantage_estimator="grpo",
-        pg_loss_type="reinforce",
-        get_mismatch_metrics=False,
-        use_tis=False,
-        use_kl_loss=True,
-        use_unbiased_kl=False,
-        kl_loss_type="low_var_kl",
-        kl_loss_coef=1.0,
         ci_test=True,
+        ci_disable_kl_checker=False,
+        ci_train_rollout_logprob_abs_diff_threshold=0.1,
+        rollout_top_p=top_p,
+        use_rollout_routing_replay=False,
     )
-    logits = torch.tensor([[[0.2, 0.2, 0.6], [0.2, 0.2, 0.6]]]).log().requires_grad_()
-    batch = {
-        "advantages": [torch.zeros(1)],
-        "unconcat_tokens": [torch.tensor([0, 0])],
-        "total_lengths": [2],
-        "response_lengths": [1],
-        "loss_masks": [torch.ones(1)],
-        "ref_log_probs": [torch.tensor([math.log(0.2)])],
-        "rollout_top_p_token_ids": [[0, 1]],
-        "rollout_top_p_token_offsets": [[0, 2]],
+    log_dict = {
+        "train/train_rollout_logprob_abs_diff": 0.0072,
+        "train/ppo_kl": 0.0,
+        "train/pg_clipfrac": 0.0,
+        "train/kl_loss": 0.000169,
     }
-    loss, metrics = policy_loss_function(args, batch, logits, torch.mean)
-    assert metrics["model_kl"].item() == pytest.approx(0.0, abs=1e-8)
-    assert metrics["kl_loss"].item() > 0.1
-    assert not metrics["model_kl"].requires_grad
-    args.ci_test = False
-    regular_loss, regular_metrics = policy_loss_function(args, batch, logits, torch.mean)
-    assert "model_kl" not in regular_metrics
-    torch.testing.assert_close(loss, regular_loss)
-    torch.testing.assert_close(
-        torch.autograd.grad(loss, logits, retain_graph=True)[0],
-        torch.autograd.grad(regular_loss, logits)[0],
+    namespace = {"args": args, "log_dict": log_dict, "step_id": 0, "accumulated_step_id": 0}
+    if top_p == 1.0:
+        with pytest.raises(AssertionError):
+            exec(program, namespace)
+        log_dict["train/kl_loss"] = 0.0
+    exec(program, namespace)
+    for key, value in [("train/ppo_kl", 0.001), ("train/train_rollout_logprob_abs_diff", 0.2)]:
+        previous = log_dict[key]
+        log_dict[key] = value
+        with pytest.raises(AssertionError):
+            exec(program, namespace)
+        log_dict[key] = previous
+
+
+@pytest.mark.parametrize("tag", ["ref", "teacher", "actor"])
+@pytest.mark.parametrize("step", [None, 0, 3])
+@pytest.mark.parametrize("fail", [False, True])
+def test_reference_checkpoint_owns_its_step_and_restores_actor_args(tag, step, fail):
+    method = _actor_methods()["load_other_checkpoint"]
+    args = Namespace(
+        load="actor-checkpoint",
+        no_load_optim=False,
+        no_load_rng=False,
+        finetune=False,
+        ckpt_step=7,
+        ref_ckpt_step=step,
+        opd_teacher_ckpt_step=step,
     )
-    args.ci_test = True
-    batch["ref_log_probs"] = [torch.tensor([math.log(0.1)])]
-    _, metrics = policy_loss_function(args, batch, logits, torch.mean)
-    assert metrics["model_kl"].item() > 1e-8
+    original = vars(args).copy()
+    backups = []
+    actor = SimpleNamespace(
+        args=args, model=object(), weights_backuper=SimpleNamespace(backup=backups.append), _active_model_tag="actor"
+    )
+
+    def load_checkpoint(model, optimizer, scheduler, **kwargs):
+        assert args.load == "other-checkpoint" and args.ckpt_step == (7 if tag == "actor" else step)
+        assert args.finetune and args.no_load_optim and args.no_load_rng
+        if fail:
+            raise ValueError("invalid checkpoint")
+        return 0, 0
+
+    namespace = {"load_checkpoint": load_checkpoint}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])), "actor.py", "exec"), namespace)
+    if fail:
+        with pytest.raises(ValueError, match="invalid checkpoint"):
+            namespace["load_other_checkpoint"](actor, tag, "other-checkpoint")
+        assert backups == [] and actor._active_model_tag == "actor"
+    else:
+        namespace["load_other_checkpoint"](actor, tag, "other-checkpoint")
+        assert backups == [tag] and actor._active_model_tag == tag
+    assert vars(args) == original
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ There are four main parameters for cluster resource allocation:
   - `--actor-num-gpus-per-node`: The number of GPUs per node for RL actor training.
   - `--rollout-num-gpus`: The total number of GPUs required for rollout (inference). Set it to `0` to still parse vLLM arguments and launch the router without launching local vLLM servers.
   - `--rollout-num-gpus-per-engine`: The total worker GPU count for one inference engine. It equals vLLM's `tensor_parallel_size` only when data, pipeline, and prefill context parallelism are all 1. For example, if one model is served across 2 nodes and 16 GPUs, this value should be 16.
+    vLLM receives data, pipeline, and prefill context parallel sizes separately. By default, its TP size is the engine GPU count divided by these sizes; a vLLM config can override the parallel settings for a server group.
 
 With the default configuration, we use these parameters to allocate `actor_num_nodes * actor_num_gpus_per_node` GPUs for training and `rollout_num_gpus` GPUs for inference via Ray, thus achieving a separation of training and inference resources.
 
@@ -73,7 +74,7 @@ MODEL_ARGS=(
 )
 ```
 
-We provide configurations for common models in [scripts/models](../../../scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
+We provide configurations for common models in [scripts/models](https://github.com/vllm-project/vime/tree/main/scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
 
 Note:
 
@@ -105,7 +106,7 @@ Megatron supports several of its custom checkpoint formats. Here are two of the 
 
 The `torch` format is Megatron's older storage format. Its structure consists of directories like `mp_rank_xxx`, where each directory corresponds to the checkpoint stored by each rank under a specific parallel partitioning. Because of this, when loading a `torch` format checkpoint, you must ensure that the checkpoint's parallelism strategy matches that of the training task.
 
-We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](../../../README.md).
+We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](https://github.com/vllm-project/vime/blob/main/README.md).
 
 In terms of storage structure, a Megatron checkpoint typically looks like this, assuming the storage path is `/ckpt/`:
 
@@ -460,7 +461,7 @@ bounds the lifetime of shared KV without introducing weight-version cache namesp
 
 vime runs vLLM in server mode and talks to it over HTTP.
 
-### Parameter Configuration
+### vLLM Arguments
 
 vime incorporates almost all vLLM parameters by forwarding vLLM's `EngineArgs` CLI flags. When setting a vLLM parameter, you need to add the `--vllm-` prefix. For example:
 
@@ -517,7 +518,7 @@ Each model gets its own router. The per-model router info is accessible via `arg
 
 vime supports different and lightly modified versions of Megatron by reusing common functions from the `megatron.training` directory, such as `parse_args`, `save_checkpoint`, and `load_checkpoint`. Therefore, when using it, you must ensure that Megatron is accessible in the `PYTHONPATH`, for example, by adding `export PYTHONPATH=/root/Megatron-LM` at runtime.
 
-### Parameter Configuration
+### Megatron Arguments
 
 vime directly imports all parameters of the Megatron in the current environment by using `from megatron.training.arguments import parse_args`. If the version of Megatron you are using has parameters defined outside of `parse_args`, you can configure them by passing them in, similar to how it's done in [train.py](https://github.com/vllm-project/vime/blob/main/train.py), for example:
 

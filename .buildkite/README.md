@@ -62,8 +62,7 @@ The block uses `blocked_state: passed`, so a build whose CPU steps are green
 reports a passing commit status even if nobody unblocks the GPU gate.
 
 For sync validation, always select all six suites.  The REST unblock payload
-passes the selection directly, for example `{"gpu-suites": "short\nvllm-config\nmegatron\nvime-customized\nprecision\nckpt"}`;
-do not wrap it in a second `fields` object.
+wraps the selection in `fields`, for example `{"fields": {"gpu-suites": "short\nvllm-config\nmegatron\nvime-customized\nprecision\nckpt"}}`.
 
 GPU jobs run on the shared **`mithril-h100-pool`** queue, following the same
 pattern vllm-omni uses for it: each job is a Kubernetes pod (agent-stack-k8s

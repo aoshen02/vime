@@ -22,6 +22,7 @@
 - `--rollout-num-gpus`：rollout （inference）一共需要多少卡。设置为 `0` 时，vime 仍会解析 vLLM 参数并启动 router，但不会启动本地 vLLM server；
 
 - `--rollout-num-gpus-per-engine`：单个 inference engine 使用的 worker GPU 总数；只有 data parallel、pipeline parallel 和 prefill context parallel 都为 1 时，它才等于 vLLM 的 `tensor_parallel_size`。例如用 2 机 16 卡 serving 一个模型时，这里的值应为 16。
+  vLLM 分别接收 data、pipeline 和 prefill context parallel 大小。默认 TP 大小为 engine GPU 总数除以这些并行大小；vLLM config 可以为 server group 覆盖并行配置。
 
 在默认的配置下，我们会根据这些参数，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也就是实现了训推分离。
 
@@ -75,7 +76,7 @@ MODEL_ARGS=(
 )
 ```
 
-我们在 [scripts/models](../../../scripts/models) 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。
+我们在 [scripts/models](https://github.com/vllm-project/vime/tree/main/scripts/models) 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。
 
 注意：
 
@@ -108,7 +109,7 @@ megatron 支持多种其自定义的 ckpt 格式，这里介绍 2 种比较主�
 
 torch 格式是 megatron 的老存储格式，里面的结构大约是一些 `mp_rank_xxx` 的文件夹，每个文件夹对应了在对应的并行划分下，每个 rank 存储的 ckpt。也是因为如此，在加载 torch 格式的 ckpt 的时候，需要保证 ckpt 的并行策略和训练任务的并行策略是相同的。
 
-我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 `.distcp` 文件。在使用 torch_dist 时，可以使用 [README](../../../README_zh.md) 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。
+我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 `.distcp` 文件。在使用 torch_dist 时，可以使用 [README](https://github.com/vllm-project/vime/blob/main/README_zh.md) 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。
 
 在存储结构上，megatron 的 ckpt 一般是这样的结构，这里假设存储的路径为 `/ckpt/`：
 
@@ -442,7 +443,7 @@ rollout offload 或 `--release-train`。默认评估仍使用标准 vLLM rollout
 
 vime 以 server 模式运行 vLLM，通过 HTTP 与之通信。
 
-### 参数配置
+### vLLM 参数
 
 vime 通过转发 vLLM 的 `EngineArgs` CLI 参数，引入了几乎所有的 vLLM 参数。在设置一个 vLLM 参数的时候，需要在参数前加上 `--vllm-` 的前缀，例如：
 
@@ -499,7 +500,7 @@ vllm:
 
 vime 通过复用 `megatron.training` 目录下的常规函数，如 `parse_args`， `save_checkpoint`，`load_checkpoint`，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 `PYTHONPATH` 中能访问到 megatron，例如在运行时加入 `export PYTHONPATH=/root/Megatron-LM`。
 
-### 参数配置
+### Megatron 参数
 
 vime 通过直接引入 `from megatron.training.arguments import parse_args` 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 `parse_args` 之外的参数，可以通过像 [train.py](https://github.com/vllm-project/vime/blob/main/train.py) 中传入参数来进行配置，例如：
 

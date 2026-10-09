@@ -1,16 +1,20 @@
-vime Documentation
-====================
+Vime Documentation
+===================
 
-vime is an LLM post-training framework for RL scaling, providing two core capabilities:
+Vime is built on `slime <https://github.com/THUDM/slime>`_, retaining its training stack and data-generation design while using vLLM rollout. It provides custom interfaces for data generation and rewards.
 
-- High-Performance Training: Supports efficient training in various modes by connecting Megatron with vLLM;
-- Flexible Data Generation: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
+Training, rollout, the data buffer, and environment feedback share one dataflow, supporting math, code, tools, sandboxes, and long-horizon agent workflows.
 
-vime is built on `slime <https://github.com/THUDM/slime>`_, the RL framework behind GLM-4.7, GLM-4.6 and GLM-4.5. vime keeps slime's training stack and data-generation design while using vLLM as the default rollout backend, and inherits broad model support from slime, including:
+Design and Production Experience
+--------------------------------
 
-- Qwen3 series (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 series;
-- DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
-- Llama 3.
+- slime is the RL framework behind `GLM-5.3-Flash <https://z.ai/blog/glm-5.3-flash>`_, `GLM-5.3 <https://z.ai/blog/glm-5.3>`_, `GLM-5.2 <https://z.ai/blog/glm-5.2>`_, `GLM-5.1 <https://z.ai/blog/glm-5.1>`_, `GLM-5 <https://z.ai/blog/glm-5>`_, `GLM-4.7 <https://z.ai/blog/glm-4.7>`_, `GLM-4.6 <https://z.ai/blog/glm-4.6>`_, `GLM-4.5 <https://z.ai/blog/glm-4.5>`_.
+- Megatron arguments are available directly; installed vLLM arguments use the ``--vllm-`` prefix.
+- Generation functions, reward functions, verifiers, and environments connect through documented customization interfaces.
+- CPU correctness tests and GPU end-to-end tests cover training, rollout, checkpointing, precision, asynchronous generation, and debug replay. See :doc:`developer_guide/ci`.
+- Large MoE recipes combine BF16 training with FP8 rollout; ``--vllm-kv-cache-dtype fp8`` can increase effective KV cache capacity.
+
+Alongside GLM, supported model families include Qwen (Qwen3.6, Qwen3.5, Qwen3-Next, Qwen3 MoE, Qwen3, Qwen2.5), DeepSeek (V3, V3.1, R1), and Llama 3. Start with the recipes below and the model configurations in ``scripts/models/``.
 
 Start by Use Case
 -----------------
@@ -51,6 +55,7 @@ Start by Use Case
 
    examples/glm4.7-30B-A3B.md
    examples/qwen3-30B-A3B.md
+   examples/qwen3-next-80B-A3B.md
    examples/glm5.2-744B-A40B.md
    examples/glm4.7-355B-A32B.md
    examples/deepseek-r1.md
@@ -81,6 +86,14 @@ Start by Use Case
    _examples_synced/fully_async/README.md
    _examples_synced/multi_agent/README.md
    _examples_synced/coding_agent_rl/README.md
+   _examples_synced/delta_weight_sync/README.md
+   _examples_synced/eval_multi_task/README.md
+   _examples_synced/geo3k_vlm/README.md
+   _examples_synced/geo3k_vlm_multi_turn/README.md
+   _examples_synced/on_policy_distillation/README.md
+   _examples_synced/strands_vllm/README.md
+   _examples_synced/tau-bench/README.md
+   _examples_synced/train_infer_mismatch_helper/README.md
 
 .. toctree::
    :maxdepth: 1
@@ -90,6 +103,7 @@ Start by Use Case
    developer_guide/debug.md
    developer_guide/trace.md
    developer_guide/profiling.md
+   developer_guide/install_flashqla.md
 
 .. toctree::
    :maxdepth: 1

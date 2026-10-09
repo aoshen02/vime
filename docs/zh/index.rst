@@ -1,32 +1,36 @@
-vime 文档
-====================
+Vime 文档
+===================
 
-vime 是一个面向 RL Scaling 的 LLM 后训练框架，提供两大核心能力：
+Vime 基于 `slime <https://github.com/THUDM/slime>`_，保留其训练栈和数据生成设计，采用 vLLM rollout，并提供自定义数据生成和奖励接口。
 
-- 高性能训练：通过连接 Megatron 与 vLLM，支持多种模式下的高效训练；
-- 灵活的数据生成：通过自定义数据生成接口与基于服务器的引擎，实现任意训练数据生成流程。
+训练、rollout、数据缓冲区和环境反馈共享同一条数据流，可以接入数学、代码、工具调用、沙盒和长程智能体任务。
 
-vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 GLM-4.7、GLM-4.6、GLM-4.5 背后的 RL 训练框架。vime 沿用了 slime 的训练栈与数据生成设计，并默认采用 vLLM 作为 rollout 后端，同时继承了 slime 广泛的模型支持，包括：
+设计与生产实践
+-------------------
 
-- Qwen3 系列 (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 系列；
-- DeepSeek V3 系列 (DeepSeek V3, V3.1, DeepSeek R1)；
-- Llama 3。
+- slime 是 `GLM-5.3-Flash <https://z.ai/blog/glm-5.3-flash>`_、`GLM-5.3 <https://z.ai/blog/glm-5.3>`_、`GLM-5.2 <https://z.ai/blog/glm-5.2>`_、`GLM-5.1 <https://z.ai/blog/glm-5.1>`_、`GLM-5 <https://z.ai/blog/glm-5>`_、`GLM-4.7 <https://z.ai/blog/glm-4.7>`_、`GLM-4.6 <https://z.ai/blog/glm-4.6>`_、`GLM-4.5 <https://z.ai/blog/glm-4.5>`_ 背后的 RL 训练框架。
+- 直接使用 Megatron 参数，通过 ``--vllm-`` 前缀传入当前安装版本的 vLLM 参数。
+- 通过自定义接口接入生成函数、奖励函数、验证器和交互环境。
+- CPU 正确性测试和 GPU 端到端测试覆盖训练、rollout、checkpoint、精度、异步生成与调试回放。详见 :doc:`developer_guide/ci`。
+- 大规模 MoE 配方结合 BF16 训练与 FP8 rollout；``--vllm-kv-cache-dtype fp8`` 可提升有效 KV cache 容量。
+
+除 GLM 外，支持的模型系列还包括 Qwen（Qwen3.6、Qwen3.5、Qwen3-Next、Qwen3 MoE、Qwen3、Qwen2.5）、DeepSeek（V3、V3.1、R1）和 Llama 3。可以从下方训练示例和 ``scripts/models/`` 中的模型配置开始。
 
 按使用场景开始
 --------------
 
-- 第一次使用 vime：:doc:`get_started/quick_start`
-- 配置 training 和 rollout 参数：:doc:`get_started/usage`
-- 添加 custom generation、reward 或 rollout function：:doc:`get_started/customization`
-- 构建 agentic RL workflow：:doc:`get_started/agent`
-- 配置生产级 vLLM rollout topology：:doc:`advanced/vllm-config`
-- 接入 external rollout engines：:doc:`advanced/external-rollout-engines`
+- 第一次使用 slime：:doc:`get_started/quick_start`
+- 配置训练与 rollout 参数：:doc:`get_started/usage`
+- 添加自定义生成、奖励或 rollout 函数：:doc:`get_started/customization`
+- 构建智能体 RL 工作流：:doc:`get_started/agent`
+- 配置 SGLang rollout 部署拓扑：:doc:`advanced/vllm-config`
+- 接入外部 rollout 引擎：:doc:`advanced/external-rollout-engines`
 - 使用 straw 持久化分布式 rollout 与共享张量：:doc:`advanced/straw`
-- 以字节级 delta 同步权重：:doc:`advanced/delta-weight-sync`
+- 以字节增量同步权重：:doc:`advanced/delta-weight-sync`
 - 使用 PD disaggregation：:doc:`advanced/pd-disaggregation`
 - 使用 BF16 训练 + FP8 rollout 或 FP8 KV cache：:doc:`advanced/low-precision`
 - 了解 CI 和可靠性覆盖：:doc:`developer_guide/ci`
-- 调试、trace 和 profiling 长时间任务：:doc:`developer_guide/debug`、:doc:`developer_guide/trace`、:doc:`developer_guide/profiling`
+- 调试、追踪和分析长时间运行的任务：:doc:`developer_guide/debug`、:doc:`developer_guide/trace`、:doc:`developer_guide/profiling`
 
 .. toctree::
    :maxdepth: 1
@@ -51,6 +55,7 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
 
    examples/glm4.7-30B-A3B.md
    examples/qwen3-30B-A3B.md
+   examples/qwen3-next-80B-A3B.md
    examples/glm5.2-744B-A40B.md
    examples/glm4.7-355B-A32B.md
    examples/deepseek-r1.md
@@ -81,6 +86,14 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
    _examples_synced/fully_async/README.md
    _examples_synced/multi_agent/README.md
    _examples_synced/coding_agent_rl/README.md
+   _examples_synced/delta_weight_sync/README.md
+   _examples_synced/eval_multi_task/README.md
+   _examples_synced/geo3k_vlm/README.md
+   _examples_synced/geo3k_vlm_multi_turn/README.md
+   _examples_synced/on_policy_distillation/README.md
+   _examples_synced/strands_vllm/README.md
+   _examples_synced/tau-bench/README.md
+   _examples_synced/train_infer_mismatch_helper/README.md
 
 .. toctree::
    :maxdepth: 1
@@ -90,6 +103,13 @@ vime 构建于 `slime <https://github.com/THUDM/slime>`_ 之上，slime 正是 G
    developer_guide/debug.md
    developer_guide/trace.md
    developer_guide/profiling.md
+   developer_guide/install_flashqla.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: 硬件平台
+
+   platform_support/amd_tutorial.md
 
 .. toctree::
    :maxdepth: 1

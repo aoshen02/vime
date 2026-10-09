@@ -136,7 +136,7 @@ class GenerationProbe:
         }
 
 
-def start_probes(urls, model):
+def start_probes(urls, model, *, pause=False):
     _probes.clear()
     for url in urls:
         probe = GenerationProbe(url, model)
@@ -144,6 +144,11 @@ def start_probes(urls, model):
         probe.thread.start()
     for probe in _probes:
         probe.wait(lambda events: bool(events) and events[-1]["tokens"] >= 16)
+        if pause:
+            # Keep the live request across slow first-step compilation. The
+            # first weight update resumes it without flushing the cache.
+            response = requests.post(f"{probe.url}/pause", params={"mode": "keep", "clear_cache": "false"}, timeout=10)
+            response.raise_for_status()
 
 
 def before_train_step(args, rollout_id, step_id, model, optimizer, opt_param_scheduler):
@@ -157,7 +162,7 @@ def before_train_step(args, rollout_id, step_id, model, optimizer, opt_param_sch
         path = Path(os.environ["VIME_PIPELINE_RL_PROBE_FILE"]).with_suffix(".workers.json")
         urls = json.loads(path.read_text())
         assert urls
-        start_probes(urls, args.hf_checkpoint)
+        start_probes(urls, args.hf_checkpoint, pause=True)
     elif rollout_id == 1 and step_id == 0:
         assert _probes
         name, initial = _initial_weights

@@ -102,12 +102,11 @@ def execute():
         f"{misc_args} "
     )
 
-    rollout_data_pattern = "parallel-check-rollout-data-{rollout_id}.pt"
-    rollout_data_path = rollout_data_pattern.format(rollout_id=0)
+    rollout_data_path = "parallel-check-rollout-data_{rollout_id}.pt"
     for i, calculate_per_token_loss in enumerate((False, True)):
         loss_args = "--calculate-per-token-loss " if calculate_per_token_loss else ""
         rollout_data_args = (
-            f"--save-debug-rollout-data {rollout_data_pattern} "
+            f"--save-debug-rollout-data {rollout_data_path} "
             if i == 0
             else f"--load-debug-rollout-data {rollout_data_path} "
         )

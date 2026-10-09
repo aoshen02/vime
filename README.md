@@ -10,6 +10,8 @@
 1. **High-performance training**: Efficient training in various modes by connecting Megatron with vLLM;
 2. **Flexible data generation**: Arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
+Training, rollout, the data buffer, and environment feedback share one dataflow. This supports math, code, search, tool use, and long-horizon agent workflows within the same training loop.
+
 Vime inherits broad model support from slime, including:
 
 - Qwen series (Qwen3.6, Qwen3.5, Qwen3Next, Qwen3MoE, Qwen3, Qwen2.5);

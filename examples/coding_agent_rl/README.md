@@ -29,7 +29,7 @@ The vime training stack itself follows the standard setup. On top of that you ne
 
 Standard vime JSONL with three keys:
 
-```jsonc
+```javascript
 {
   "prompt": "<falls back here if metadata.problem_statement is missing>",
   "label": "<instance_id or grader label>",

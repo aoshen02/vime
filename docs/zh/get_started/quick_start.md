@@ -77,7 +77,7 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 
 当使用 Megatron 作为训练后端时，需要先将 Hugging Face 格式的模型权重转换为 Megatron `torch_dist` 格式。
 
-首先，加载目标模型的配置文件。`vime/scripts/models` 目录下包含了支持模型的配置文件。需要 `source` 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 Qwen3-4B 模型为例子。
+首先，加载目标模型的配置文件。`scripts/models` 目录下包含了支持模型的配置文件。需要 `source` 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 Qwen3-4B 模型为例子。
 
 ```bash
 cd /root/vime

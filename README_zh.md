@@ -10,6 +10,8 @@
 1. **高性能训练**：通过连接 Megatron 与 vLLM，支持各种模式的高效训练；
 2. **灵活的数据生成**：通过自定义数据生成接口以及 server based engine，实现任意的训练数据生成流程。
 
+训练、rollout、数据 buffer 和环境反馈共享同一条数据流，在同一个训练循环中支持数学、代码、搜索、工具调用和长程 agent 工作流。
+
 Vime 继承了 slime 广泛的模型支持，包括：
 
 - Qwen 系列（Qwen3.6、Qwen3.5、Qwen3Next、Qwen3MoE、Qwen3、Qwen2.5）；

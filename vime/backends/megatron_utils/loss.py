@@ -1346,21 +1346,6 @@ def policy_loss_function(
 
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
-        if getattr(args, "ci_test", False) and args.rollout_top_p != 1.0:
-            with torch.no_grad():
-                _, unmasked = get_log_probs_and_entropy(
-                    logits,
-                    args=args,
-                    unconcat_tokens=batch["unconcat_tokens"],
-                    total_lengths=total_lengths,
-                    response_lengths=response_lengths,
-                )
-                model_kl = compute_approx_kl(
-                    torch.cat(unmasked["log_probs"]),
-                    ref_log_probs,
-                    kl_loss_type=args.kl_loss_type,
-                )
-                reported_loss["model_kl"] = sum_of_sample_mean(model_kl)
 
     if args.get_mismatch_metrics or args.use_tis:
         # Aggregate mismatch/TIS/RS related metrics with the *pre-RS* masks.

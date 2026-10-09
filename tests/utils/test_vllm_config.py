@@ -324,7 +324,10 @@ class TestZeroGpuRolloutConfig:
 
     def test_vllm_server_args_derive_tp_from_overridden_pp(self, monkeypatch):
         from vime.backends.vllm_utils import vllm_engine
+        from vime.utils import accelerator
 
+        # Device mapping is tested separately; building server args needs no GPU.
+        monkeypatch.setattr(accelerator, "resolve_visible_device_id", lambda device_id: device_id)
         monkeypatch.setattr(vllm_engine, "_VLLM_SERVER_FIELDS", frozenset())
 
         args = Namespace(
@@ -361,7 +364,9 @@ class TestZeroGpuRolloutConfig:
 
     def test_offload_rollout_enables_vllm_sleep_mode(self, monkeypatch):
         from vime.backends.vllm_utils import vllm_engine
+        from vime.utils import accelerator
 
+        monkeypatch.setattr(accelerator, "resolve_visible_device_id", lambda device_id: device_id)
         monkeypatch.setattr(vllm_engine, "_VLLM_SERVER_FIELDS", frozenset())
 
         args = Namespace(

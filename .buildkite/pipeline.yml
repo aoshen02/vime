@@ -67,6 +67,8 @@ steps:
           pip install -q pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil wandb "straw-queue>=0.1.2"
           pip install -q -e . --no-deps
           python tests/test_megatron_argument_validation.py
+          python tests/test_megatron_tokenizer_init.py
+          python tests/test_megatron_checkpoint.py
           python tests/test_optional_straw.py
           python tests/test_value_temperature.py
           python tests/test_docs_consistency.py
@@ -153,6 +155,7 @@ steps:
             tests/test_deep_ep_tms_patch.py \
             tests/test_distributed_rollout.py \
             tests/test_disk_delta_recovery.py \
+            tests/test_disk_delta_checkpoint_index.py \
             tests/test_discounted_returns.py \
             tests/test_eval_config.py \
             tests/test_filter_long_prompt.py \
