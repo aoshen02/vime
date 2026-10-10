@@ -15,6 +15,19 @@ RUN cd /build && VLLM_RS_BUILD_VERSION=${VLLM_RS_BUILD_VERSION} \
     cargo build --locked --release --manifest-path rust/Cargo.toml \
     -p vllm-cmd --bin vllm-rs --features native-tls-vendored
 
+FROM rust:1.95-bookworm AS sunabako-wheel
+ARG TARGETARCH
+ARG PATCH_VERSION=latest
+COPY docker/patch/${PATCH_VERSION}/sunabako-arm64.patch /tmp/sunabako-arm64.patch
+RUN mkdir /wheels && if [ "${TARGETARCH}" = "arm64" ]; then \
+    apt-get update && apt-get install -y --no-install-recommends python3-venv && \
+    python3 -m venv /opt/sdk-build && /opt/sdk-build/bin/python -m pip install "maturin>=1.8,<2" && \
+    curl -fsSL https://files.pythonhosted.org/packages/cd/16/d9fd84bbf784c19425d9d83d8d98deef6d5f107012e8d50bddeb5c11cf5c/sunabako-0.1.1.tar.gz -o /tmp/sdk.tar.gz && \
+    echo "b4057ea011e61ad942249e8156c54aad38c7f5f73d0075c93f3005f70d66036d  /tmp/sdk.tar.gz" | sha256sum -c - && \
+    mkdir /sdk && tar -xf /tmp/sdk.tar.gz -C /sdk --strip-components=1 && cd /sdk && \
+    git apply /tmp/sunabako-arm64.patch && \
+    /opt/sdk-build/bin/maturin build --locked --release --target aarch64-unknown-linux-gnu --out /wheels; fi
+
 FROM ${BASE_IMAGE}
 
 # ======================================== Arguments =============================================
@@ -146,6 +159,8 @@ RUN git clone https://github.com/zhuzilin/DeepEP.git /root/DeepEP && \
 RUN pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
 
 COPY requirements.txt /tmp/requirements.txt
+COPY --from=sunabako-wheel /wheels/ /tmp/sunabako-wheels/
+RUN if ls /tmp/sunabako-wheels/*.whl >/dev/null 2>&1; then pip install --no-deps /tmp/sunabako-wheels/*.whl; fi
 RUN pip install --ignore-installed PyJWT && \
     pip install -r /tmp/requirements.txt
 
