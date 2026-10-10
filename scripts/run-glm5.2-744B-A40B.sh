@@ -138,7 +138,7 @@ vllm:
           enable_expert_parallel: true
           max_num_batched_tokens: 131072
           max_num_seqs: 512
-          all2all_backend: deepep_auto
+          all2all_backend: deepep_high_throughput
           kv_transfer_config:
             kv_connector: MooncakeConnector
             kv_role: kv_producer

@@ -451,7 +451,7 @@
       {method: 'eagle', model: s.draft, num_speculative_tokens: s.specSteps}
     ))}`);
     if (!s.pd && (s.model === 'deepseek' || s.model === 'glm5'))
-      args.push('--vllm-all2all-backend deepep_auto');
+      args.push('--vllm-all2all-backend deepep_high_throughput');
     if (s.model === 'glm5') args.push('--no-vllm-async-scheduling');
     if (s.kv === 'fp8') args.push('--vllm-kv-cache-dtype fp8_e4m3');
     if (s.deterministic) {
@@ -476,7 +476,7 @@
       const overrides = [`kv_transfer_config: ${JSON.stringify(kvTransferConfig(s, role))}`];
       if (s.hicache && role === 'prefill') overrides.push('enable_prefix_caching: true');
       if (s.model === 'glm5' || s.model === 'deepseek')
-        overrides.push(`all2all_backend: deepep_${role==='decode'?'low_latency':'auto'}`);
+        overrides.push(`all2all_backend: deepep_${role==='decode'?'low_latency':'high_throughput'}`);
       if (s.model === 'glm5' && role === 'decode') overrides.push('kernel_config: {"moe_backend":"deep_gemm"}',
         'async_scheduling: false');
       if (overrides.length) out += '        overrides:\n' + overrides.map(a => '          ' + a).join('\n') + '\n';

@@ -114,12 +114,14 @@ test('PD partitions whole engines and external ownership excludes managed YAML',
   assert.match(generated.files['vllm.yaml'], /"device_name":"mlx5_0"/);
   for (const model of ['deepseek', 'glm5']) {
     const state = E.change(E.defaults, 'model', model);
-    assert.match(shell(state), /--vllm-all2all-backend deepep_auto/);
+    assert.match(shell(state), /--vllm-all2all-backend deepep_high_throughput/);
+    assert.doesNotMatch(shell(state), /deepep_auto/);
     assert.doesNotMatch(shell(state), /--vllm-moe-a2a-backend|--vllm-deepep-mode/);
     const engine = E.models[model].engine;
     const topology = E.generate({...state, pd: true, layout: 'separate',
       rollout: 2 * engine, prefill: engine, ib: 'mlx5_0'});
-    assert.match(topology.files['vllm.yaml'], /all2all_backend: deepep_auto/);
+    assert.match(topology.files['vllm.yaml'], /all2all_backend: deepep_high_throughput/);
+    assert.doesNotMatch(topology.files['vllm.yaml'], /deepep_auto/);
     assert.match(topology.files['vllm.yaml'], /all2all_backend: deepep_low_latency/);
     assert.doesNotMatch(topology.files['experiment.sh'], /--vllm-moe-a2a-backend|--vllm-deepep-mode/);
     assert.doesNotMatch(topology.files['vllm.yaml'], /deepep_mode:/);
