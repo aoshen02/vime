@@ -277,7 +277,13 @@ def _messages_for_render(messages: list[dict]) -> list[dict]:
 
 
 class TrainableTauBenchAgent:
-    """Trainable tau-bench agent using vLLM render + /inference/v1/generate."""
+    """Trainable tau-bench agent using vLLM render + /inference/v1/generate.
+
+    Tokenization logic adapted from:
+    https://verl.readthedocs.io/en/v0.4.1/sglang_multiturn/multiturn.html
+    to calculate the right token count in a multi-turn environment using
+    delta between messages.
+    """
 
     async def asolve(self, args: Any, sample: Sample, sampling_params) -> Sample:
         assert not args.partial_rollout, "Partial rollout is not supported for tau-bench interactions."
