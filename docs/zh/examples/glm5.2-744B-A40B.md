@@ -121,7 +121,7 @@ ROLLOUT_ARGS=(
 
 #### vLLM 配置
 
-rollout 侧采用 **prefill/decode (PD) 分离**:1 个 prefill engine(64 卡)+ 3 个 decode engine(192 卡)= 256 卡(必须等于 colocate 的 `rollout_num_gpus`)。每个 engine 使用 64 卡 data parallel 和 vLLM expert parallel。prefill 使用 DeepEP high-throughput backend，decode 使用 low-latency backend。切分通过 `--vllm-config` YAML 配置:
+rollout 侧采用 **prefill/decode (PD) 分离**:1 个 prefill engine(64 卡)+ 3 个 decode engine(192 卡)= 256 卡(必须等于 colocate 的 `rollout_num_gpus`)。每个 engine 使用 64 卡 data parallel 和 vLLM expert parallel。prefill 自动选择 DeepEP 模式，decode 使用 low-latency backend。切分通过 `--vllm-config` YAML 配置:
 
 ```yaml
 vllm:
@@ -130,7 +130,7 @@ vllm:
       - worker_type: prefill
         num_gpus: 64
         num_gpus_per_engine: 64
-        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_high_throughput, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_producer, ... }, ... }
+        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_auto, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_producer, ... }, ... }
       - worker_type: decode
         num_gpus: 192
         num_gpus_per_engine: 64

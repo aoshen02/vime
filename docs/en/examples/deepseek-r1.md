@@ -4,7 +4,7 @@ This is an example of doing DeepSeek R1 RL training using 128xH100 GPUs.
 
 We will use bf16 for training, and an fp8 format with 128x128 blockwise quantization for inference. The maximum response length is 32k, and dynamic sampling will be used to filter data during training.
 
-Regarding parallelism, for vLLM we will enable expert parallelism (`--vllm-enable-expert-parallel`) and data parallelism (`--vllm-data-parallel-size 8`). DeepEP is disabled by default. For the Megatron part, we will use TP8, PP4, EP32, and CP4.
+Regarding parallelism, for vLLM we will enable expert parallelism (`--vllm-enable-expert-parallel`) and data parallelism (`--vllm-data-parallel-size 8`), with automatic DeepEP prefill/decode selection. For the Megatron part, we will use TP8, PP4, EP32, and CP4.
 
 ⚠️ To save GPU memory, we will use CPU Adam. Each node (8xH100) will occupy 1.4\~1.5TB of host memory. If a single machine's host memory is insufficient, this can be resolved by adding more GPUs to expand the parallelism.
 
@@ -168,7 +168,7 @@ OPTIMIZER_ARGS=(
 
 #### VLLM\_ARGS
 
-These are the parameters required by vLLM. `--rollout-num-gpus-per-engine` is the total worker GPU count for one engine; here it is `tensor_parallel_size * data_parallel_size`, not just the tensor-parallel size. Other vLLM parameters are passed to vime by adding the `--vllm-` prefix. To fully leverage vLLM's large EP inference capabilities, we enable `--vllm-enable-expert-parallel` for expert parallelism and `--vllm-data-parallel-size 8` for data-parallel attention. This recipe does not select a DeepEP backend; it does not reproduce the source recipe's automatic DeepEP mode.
+These are the parameters required by vLLM. `--rollout-num-gpus-per-engine` is the total worker GPU count for one engine; here it is `tensor_parallel_size * data_parallel_size`, not just the tensor-parallel size. Other vLLM parameters are passed to vime by adding the `--vllm-` prefix. To fully leverage vLLM's large EP inference capabilities, we enable `--vllm-enable-expert-parallel` for expert parallelism and `--vllm-data-parallel-size 8` for data-parallel attention. `--vllm-all2all-backend deepep_auto` selects the prefill/decode DeepEP mode automatically.
 
 The final `--vllm-server-concurrency` is a parameter specific to vime. It is used to prevent the vllm server's concurrent requests from becoming too large and crashing the HTTP server. The default is 512. However, since we now have one server for 8 nodes, we have adjusted it to 1024 to ensure that each dp rank can have a concurrency of 128.
 
@@ -182,6 +182,7 @@ VLLM_ARGS=(
    --vllm-data-parallel-size 8
 
     # enable deepep for vllm
+    --vllm-all2all-backend deepep_auto
 
     # mtp
 

@@ -4,7 +4,7 @@
 
 我们会使用 bf16 进行训练，128x128 blockwise quant 的 fp8 格式进行推理，模型最大回复长度为 32k，并训练中会使用 dynamic sampling 对数据进行筛选。
 
-在并行上，vLLM 方面我们会开启专家并行（`--vllm-enable-expert-parallel`）与数据并行（`--vllm-data-parallel-size 8`），DeepEP 默认关闭；megatron 部分我们采用 tp8、pp4、ep32、cp4。
+在并行上，vLLM 方面我们会开启专家并行（`--vllm-enable-expert-parallel`）与数据并行（`--vllm-data-parallel-size 8`），并自动选择 prefill/decode 的 DeepEP 模式；megatron 部分我们采用 tp8、pp4、ep32、cp4。
 
 ⚠️  为了节省 GPU 显存，我们会使用 CPU Adam，每个 node（8xH100）会占用 1.4~1.5B 内存。如果单机的内存不够，可以通过增加 GPU，扩大并行的方式解决。
 
@@ -168,7 +168,7 @@ OPTIMIZER_ARGS=(
 
 #### VLLM_ARGS
 
-这些是 vLLM 所需的参数。`--rollout-num-gpus-per-engine` 表示单个 engine 的 worker GPU 总数；这里它等于 `tensor_parallel_size * data_parallel_size`，而不只是 tensor-parallel size。其他 vLLM 参数通过添加 `--vllm-` 前缀传给 vime。为了充分利用 vLLM 的大 EP 推理能力，我们通过 `--vllm-enable-expert-parallel` 开启专家并行，通过 `--vllm-data-parallel-size 8` 开启 DP attention。该 recipe 没有选择 DeepEP backend，不能复现上游 recipe 的自动 DeepEP 模式。
+这些是 vLLM 所需的参数。`--rollout-num-gpus-per-engine` 表示单个 engine 的 worker GPU 总数；这里它等于 `tensor_parallel_size * data_parallel_size`，而不只是 tensor-parallel size。其他 vLLM 参数通过添加 `--vllm-` 前缀传给 vime。为了充分利用 vLLM 的大 EP 推理能力，我们通过 `--vllm-enable-expert-parallel` 开启专家并行，通过 `--vllm-data-parallel-size 8` 开启 DP attention。`--vllm-all2all-backend deepep_auto` 自动选择 prefill/decode 的 DeepEP 模式。
 
 最后的 `--vllm-server-concurrency` 是 vime 的特有参数，是为了防止同时发给 vllm server 的并发太大打爆 http server，默认为 512。但是我们现在是 8 机一个 server，为了保证每个 dp rank 能有 128 的并发，我们调整为 1024。
 
@@ -182,6 +182,7 @@ VLLM_ARGS=(
    --vllm-data-parallel-size 8
 
     # enable deepep for vllm
+    --vllm-all2all-backend deepep_auto
 
     # mtp
 

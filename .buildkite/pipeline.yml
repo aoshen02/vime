@@ -40,6 +40,40 @@ steps:
           pre-commit run --all-files --show-diff-on-failure --color=always
         '
 
+  - label: ":books: docs lab generator"
+    key: docs-lab-generator
+    depends_on: pre-commit
+    agents:
+      queue: small_cpu_queue_premerge
+    timeout_in_minutes: 10
+    command: |
+      docker run --rm -v "$$PWD:/workspace" -w /workspace \
+        node:22-bookworm bash -c '
+          set -euo pipefail
+          apt-get update
+          apt-get install -y python3 python-is-python3
+          node --test docs/tests/experiment.test.cjs
+        '
+
+  - label: ":books: docs lab browser"
+    key: docs-lab-browser
+    depends_on: pre-commit
+    agents:
+      queue: medium_cpu_queue_premerge
+    timeout_in_minutes: 30
+    command: |
+      docker run --rm --shm-size=1g -e VIME_DOC_LAYOUT=prefix \
+        -v "$$PWD:/workspace" -w /workspace python:3.13-bookworm bash -c '
+          set -euo pipefail
+          apt-get update
+          apt-get install -y pandoc fonts-noto-cjk
+          pip install -r docs/requirements.txt -r docs/tests/requirements.txt
+          python -m playwright install --with-deps chromium
+          bash docs/build.sh en -W --keep-going
+          bash docs/build.sh zh -W --keep-going
+          python docs/tests/test_browser.py
+        '
+
   - label: ":python: plugin contracts & CPU tests"
     key: plugin-contracts
     depends_on: pre-commit

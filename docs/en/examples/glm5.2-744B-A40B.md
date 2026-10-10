@@ -123,7 +123,7 @@ ROLLOUT_ARGS=(
 
 #### vLLM Configuration
 
-The rollout side runs with **prefill/decode (PD) disaggregation**: 1 prefill engine (64 GPU) + 3 decode engines (192 GPU) = 256 GPUs total (which must equal the colocated `rollout_num_gpus`). Each engine spans 64 GPUs with data parallelism and vLLM expert parallelism. Prefill uses the high-throughput DeepEP backend; decode uses the low-latency backend. The split is configured via the `--vllm-config` YAML:
+The rollout side runs with **prefill/decode (PD) disaggregation**: 1 prefill engine (64 GPU) + 3 decode engines (192 GPU) = 256 GPUs total (which must equal the colocated `rollout_num_gpus`). Each engine spans 64 GPUs with data parallelism and vLLM expert parallelism. Prefill selects the DeepEP mode automatically; decode uses the low-latency backend. The split is configured via the `--vllm-config` YAML:
 
 ```yaml
 vllm:
@@ -132,7 +132,7 @@ vllm:
       - worker_type: prefill
         num_gpus: 64
         num_gpus_per_engine: 64
-        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_high_throughput, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_producer, ... }, ... }
+        overrides: { data_parallel_size: 64, enable_expert_parallel: true, all2all_backend: deepep_auto, kv_transfer_config: { kv_connector: MooncakeConnector, kv_role: kv_producer, ... }, ... }
       - worker_type: decode
         num_gpus: 192
         num_gpus_per_engine: 64
