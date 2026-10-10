@@ -14,7 +14,7 @@ Training, rollout, the data buffer, and environment feedback share one dataflow.
 
 Vime inherits broad model support from slime, including:
 
-- Qwen series (Qwen3.6, Qwen3.5, Qwen3Next, Qwen3MoE, Qwen3, Qwen2.5);
+- Qwen series (Qwen3.8, Qwen3.6, Qwen3.5, Qwen3Next, Qwen3MoE, Qwen3, Qwen2.5);
 - DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
 - Llama 3.
 
@@ -71,7 +71,7 @@ Agentic workloads use the standard rollout / Data Buffer loop through Vime's cus
 
 - [`examples/multi_agent`](examples/multi_agent/README.md): Multi-agent generation through `--custom-generate-function-path`.
 - [`examples/fully_async`](examples/fully_async/README.md): Fully asynchronous rollout for long-tail agent generation.
-- [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md): End-to-end coding-agent RL with Claude Code or Codex, sandboxed tool use, test-based rewards, and token-correct trajectory segments.
+- [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md): Qwen3.8-27B coding-agent RL on Xiaomi MiMo SWE data, using sunabako sandboxes, official test rewards, and token-correct trajectories.
 
 See the [Agentic RL Training Roadmap](docs/en/get_started/agent.md) and [Customization Guide](docs/en/get_started/customization.md). The coding-agent example ships an E2B-compatible backend, while the shared `vime.agent.sandbox.Sandbox` contract can be implemented for Docker, Modal, or local VMs.
 

@@ -158,7 +158,7 @@ def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, q
 
     plan = RestorePlan()
     args.debug_train_only = True
-    # Train-only parsing omits SGLang options even when GPU counts remain set
+    # Train-only parsing omits vLLM options even when GPU counts remain set
     # and the serving owner supplies an empty deployment snapshot.
     args.rollout_num_gpus = 8
     args.rollout_num_gpus_per_engine = 1
@@ -878,7 +878,7 @@ def test_debug_archive_replay_rejects_changing_storage(args, tmp_path, different
     manager = object.__new__(RolloutManager.__ray_metadata__.modified_class)
     manager.serving = None
     manager.args = args
-    with pytest.raises(ValueError, match="same Straw storage pool and run"):
+    with pytest.raises(ValueError, match="same straw storage pool and run"):
         manager._get_rollout_data(1)
     assert args.rollout_data_dir == str(tmp_path)
     assert args.rollout_queue_run_id == "rollout"

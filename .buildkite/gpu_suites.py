@@ -111,6 +111,7 @@ SUITES = {
         ("test_qwen2.5_0.5B_score_centering.py", 2, "", {}),
         ("test_qwen2.5_0.5B_debug_train_dump_e2e.py", 8, "", {}),
         ("test_qwen3_4B_external_pd.py", 6, "", {"VIME_TEST_UPDATE_MODE": "delta"}),
+        ("test_agent_sunabako_codex_e2e.py", 8, "", {}),
     ],
     "vime-customized": [
         ("test_qwen2_5_0_5B_non_colocate_pp.py", 4, "", {}),
@@ -150,6 +151,7 @@ def selected_suites() -> list:
 
 
 def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: dict) -> dict:
+    agent_e2e = test_file == "test_agent_sunabako_codex_e2e.py"
     vime_flags = {k: v for k, v in env.items() if k in ("USE_DEEPEP", "USE_FP8_ROLLOUT", "ENABLE_EVAL")}
     pod_env = [
         {"name": "HF_HOME", "value": HF_HOME},
@@ -170,6 +172,11 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
             'ulimit -n "$(ulimit -Hn)"',
             'echo "RLIMIT_NOFILE=$(ulimit -Sn)/$(ulimit -Hn)"',
             "pip install -e . --no-deps --break-system-packages",
+            *(
+                ["export VIME_AGENT_TEST_CACHE=$HF_HOME/agent-e2e/cache", "source tests/ci/setup_agent_e2e.sh"]
+                if agent_e2e
+                else []
+            ),
             f"python tests/ci/gpu_lock_exec.py --count {num_gpus} -- "
             f"python tests/{test_file}{' ' + extra_args if extra_args else ''}",
         ]
@@ -217,6 +224,10 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
             }
         ],
     }
+    if agent_e2e:
+        step["timeout_in_minutes"] = 35
+        step["artifact_paths"] = ".agent-e2e/**/*"
+        step["plugins"][0]["kubernetes"]["podSpec"]["containers"][0]["securityContext"] = {"privileged": True}
     return step
 
 

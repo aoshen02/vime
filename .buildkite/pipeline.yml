@@ -158,6 +158,16 @@ steps:
           python tests/test_agent/test_harness.py
           python tests/test_agent/test_trajectory_manager_branching.py
           python tests/test_agent/test_agent_rollout_cpu.py
+          python tests/test_agent/test_token_contract.py
+          python tests/test_agent/test_prompt_continuity.py
+          python tests/test_agent/test_sampler_replay.py
+          python tests/test_grouped_rewards.py
+          python tests/test_agent/test_responses.py
+          python tests/test_agent/test_sandbox_exec_and_wait.py
+          python tests/test_agent/test_sunabako_provider.py
+          python tests/test_agent/test_e2e_asset_cache.py
+          python tests/test_agent/test_e2e_grpo_contract.py
+          python tests/test_agent/test_swe_workspace_diff.py
         '
 
   - label: ":pytest: synchronized upstream CPU tests"
@@ -218,6 +228,7 @@ steps:
             tests/test_read_file_slicing.py \
             tests/test_reference_top_p_replay.py \
             tests/test_reloadable_process_group_world.py \
+            tests/test_reloadable_process_group_megatron_bindings.py \
             tests/test_rollout_buffer_order.py \
             tests/test_rollout_data_utils.py \
             tests/test_rollout_metrics.py \
