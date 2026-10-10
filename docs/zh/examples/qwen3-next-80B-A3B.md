@@ -2,7 +2,7 @@
 
 ## 环境与数据
 
-按照[快速使用指南](../get_started/quick_start.md)选择 Docker 镜像，并下载 DAPO 训练集和 AIME 评估集。
+按照[运行环境准备](../get_started/quick_start.md)选择 Docker 镜像，并参考 [tutorial 的准备步骤](../get_started/experiment-guide.md)下载 DAPO 训练集和 AIME 评估集。
 
 预置环境包含用于 Gated Delta Net 的 FLA。可选的 [FlashQLA 后端](../developer_guide/install_flashqla.md) 需要显式安装，修改启动脚本时可通过 `--qwen-gdn-backend flashqla` 选择。CUDA 13 环境使用 FLA。
 

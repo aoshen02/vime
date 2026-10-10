@@ -365,7 +365,10 @@ vime 支持不同程度的自定义数据生成（rollout）。
           f"http://{args.vllm_router_ip}:{args.vllm_router_port}/inference/v1/generate",
           {
               "token_ids": prompt_token_ids,
-              "sampling_params": {"max_tokens": sampling_params["max_new_tokens"]},
+              "sampling_params": {
+                  "max_tokens" if key == "max_new_tokens" else key: value
+                  for key, value in sampling_params.items()
+              },
           }
       )
   

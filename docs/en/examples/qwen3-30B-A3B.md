@@ -97,7 +97,7 @@ The following uses **2 nodes × 8 GPUs (16 GPUs total) in colocate mode** as the
 
 1. **Shared storage**: put the model, data, and checkpoints on a location that every node can access at the same path (e.g. NFS).
 
-2. **Start Ray across nodes** (outside the training script, run manually on each node; see [Quick Start — Multi-node training](../get_started/quick_start.md#multi-node-training-for-large-scale-moe-models)):
+2. **Start Ray across nodes** (outside the training script, run manually on each node; see [Tutorial — Preparation and launch](../get_started/experiment-guide.md#5-prepare-once-convert-then-run)):
 
    ```bash
    # Head node (node0); MASTER_ADDR must be a LAN IP, not 127.0.0.1

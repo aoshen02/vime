@@ -2,7 +2,7 @@
 
 ## Environment and Data
 
-Follow the [quick start](../get_started/quick_start.md) to choose a Docker image and download the DAPO training and AIME evaluation datasets.
+Follow the [environment setup](../get_started/quick_start.md) to choose a Docker image, and the [tutorial preparation steps](../get_started/experiment-guide.md#5-prepare-once-convert-then-run) to download the DAPO training and AIME evaluation datasets.
 
 The release environment includes FLA for Gated Delta Net. The optional [FlashQLA backend](../developer_guide/install_flashqla.md) requires explicit installation; select it with `--qwen-gdn-backend flashqla` when adapting the launcher. CUDA 13 uses FLA.
 

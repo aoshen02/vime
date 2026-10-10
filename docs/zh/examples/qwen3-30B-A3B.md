@@ -96,7 +96,7 @@ hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
 
 1. **共享存储**：模型、数据、checkpoint 放在所有节点路径一致且都能访问的位置（如 NFS）。
 
-2. **跨节点启动 Ray**（在训练脚本之外，各节点手动执行；详见 [快速开始 — 多机训练](../get_started/quick_start.md#大规模-moe-模型的多机训练)）：
+2. **跨节点启动 Ray**（在训练脚本之外，各节点手动执行；详见 [Tutorial — 准备与启动](../get_started/experiment-guide.md)）：
 
    ```bash
    # Head 节点（node0）；MASTER_ADDR 用局域网 IP，不能是 127.0.0.1
