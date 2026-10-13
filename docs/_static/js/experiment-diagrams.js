@@ -24,7 +24,7 @@
         `<div class="external-map" data-topology="external"><svg viewBox="0 0 400 280" preserveAspectRatio="none" aria-hidden="true"><path d="M80 140 Q180 10 315 50 M80 140 Q220 100 325 180 M80 140 Q140 280 210 260"/></svg><div class="external-trainer">${trainer}<small>${t('vime training job', 'vime 训练任务')}</small></div><div class="external-cluster cluster-a">${serving(t('Cluster A', '集群 A'))}</div><div class="external-cluster cluster-b">${serving(t('Cluster B', '集群 B'))}</div><div class="external-cluster cluster-c">${serving(t('Cluster …', '集群 …'))}</div></div><p class="diagram-caption">${t('Independently managed fleets, connected by endpoint. Locations are illustrative; external engines may also be in one datacenter.', '通过 endpoint 连接独立管理的 GPU 集群。位置仅为示意；external 引擎也可以位于同一机房。')}</p>`;
     } else {
       topology =
-        `<div data-topology="${s.layout}" class="${s.layout === 'colocate' ? 'world-colocate' : 'managed-pools'}"><div class="world-nodes">${trainer}<div class="flow-arrow">${s.schedule === 'async' ? '⇄' : '⇢'}</div>${serving('Rollout', v.rollout)}</div><span class="pool-label">${s.layout === 'colocate' ? t('one GPU pool · alternating phases', '同一 GPU 池 · 交替工作') : t('slime manages two dedicated GPU pools', 'slime 统一管理 · 两个独立 GPU 池')}</span></div>`;
+        `<div data-topology="${s.layout}" class="${s.layout === 'colocate' ? 'world-colocate' : 'managed-pools'}"><div class="world-nodes">${trainer}<div class="flow-arrow">${s.schedule === 'async' ? '⇄' : '⇢'}</div>${serving('Rollout', v.rollout)}</div><span class="pool-label">${s.layout === 'colocate' ? t('one GPU pool · alternating phases', '同一 GPU 池 · 交替工作') : t('vime manages two dedicated GPU pools', 'vime 统一管理 · 两个独立 GPU 池')}</span></div>`;
     }
     return topology;
   }
