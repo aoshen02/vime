@@ -593,6 +593,9 @@ test('diagrams explain distinct signal paths, ownership, precision and correctio
     layout: 'separate'
   }), /external-map/);
   assert.match(draw({
+    layout: 'separate'
+  }), /vime manages two dedicated GPU pools/);
+  assert.match(draw({
     step: 2,
     precision: 'int4'
   }), /--bits:4/);
