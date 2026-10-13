@@ -52,7 +52,7 @@ adapter.open_session(session_id, sampling_defaults=sampling_params)
 segments = await adapter.finish_session(session_id)
 ```
 
-多轮 agent 应使用稳定的 `session_id`。adapter 会把它作为 `X-SMG-Routing-Key` 传给 vLLM，让同一个 session 尽量落到同一个 worker，复用 prefix cache。
+多轮 agent 应使用稳定的 `session_id`。adapter 会把它作为 `x-session-id` 传给 vLLM，让同一个 session 尽量落到同一个 worker，复用 prefix cache。
 
 ## Agent Serving 与性能配置
 

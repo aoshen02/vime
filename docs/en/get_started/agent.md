@@ -52,7 +52,7 @@ adapter.open_session(session_id, sampling_defaults=sampling_params)
 segments = await adapter.finish_session(session_id)
 ```
 
-For multi-turn agents, use a stable `session_id`. The adapters pass it as `X-SMG-Routing-Key` so vLLM can route one session to the same worker and reuse prefix cache.
+For multi-turn agents, use a stable `session_id`. The adapters pass it as `x-session-id` so vLLM can route one session to the same worker and reuse prefix cache.
 
 ## Agent Serving And Performance
 
