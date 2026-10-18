@@ -44,9 +44,8 @@ ROLLOUT_ARGS=(
    --num-rollout 500
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 4096
-   --rollout-max-context-len 16384
-   --rollout-temperature 0.7
+   --rollout-max-response-len 131072
+   --rollout-temperature 1
    --global-batch-size 256
    --dynamic-sampling-filter-path vime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
    --balance-data
@@ -56,7 +55,7 @@ EVAL_ARGS=(
    --eval-interval 5
    --eval-prompt-data retail-dev /root/tau-bench/retail_dev_tasks.jsonl
    --n-samples-per-eval-prompt 1
-   --eval-max-response-len 4096
+   --eval-max-response-len 131072
    --eval-top-k 1
 )
 
@@ -64,13 +63,14 @@ PERF_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 9216
 )
 
@@ -85,6 +85,9 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 5e-6
    --lr-decay-style constant
@@ -96,7 +99,6 @@ OPTIMIZER_ARGS=(
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 1
    --vllm-gpu-memory-utilization 0.7
-   --vllm-max-model-len 16384
 )
 
 MISC_ARGS=(
