@@ -31,8 +31,12 @@ def vllm_model_config_overrides(path, overrides):
     text = config_dict.get("text_config", config_dict)
     text_override = values.get("text_config", {})
     linear = {**text.get("linear_attn_config", {}), **text_override.get("linear_attn_config", {})}
-    if "safe_gate" not in linear or "gate_lower_bound" in linear:
+    if not linear:
         return overrides
     _normalize_glm5_next_gate({"linear_attn_config": linear})
-    values["text_config"] = {**text_override, "linear_attn_config": linear}
+    values["text_config"] = {
+        "linear_lower_bound": linear.get("gate_lower_bound"),
+        **text_override,
+        "linear_attn_config": linear,
+    }
     return values

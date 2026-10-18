@@ -24,6 +24,7 @@ def test_legacy_kda_gate_config(tmp_path, safe_gate, expected):
         "gate_lower_bound": expected,
     }
     assert result["text_config"]["swiglu_limit"] == 10
+    assert result["text_config"]["linear_lower_bound"] == expected
     assert result["max_position_embeddings"] == 2048
 
 
@@ -32,7 +33,9 @@ def test_explicit_kda_gate_config_takes_precedence(tmp_path, lower_bound):
     config = {"model_type": "glm5_next", "text_config": {"linear_attn_config": {"safe_gate": True}}}
     (tmp_path / "config.json").write_text(json.dumps(config))
     explicit = {"text_config": {"linear_attn_config": {"gate_lower_bound": lower_bound}}}
-    assert vllm_model_config_overrides(tmp_path, explicit) == explicit
+    result = vllm_model_config_overrides(tmp_path, explicit)
+    assert result["text_config"]["linear_lower_bound"] == lower_bound
+    assert result["text_config"]["linear_attn_config"] == {"safe_gate": True, "gate_lower_bound": lower_bound}
 
 
 def test_other_models_keep_server_overrides(tmp_path):
