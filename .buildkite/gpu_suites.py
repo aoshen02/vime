@@ -20,6 +20,7 @@ stdlib only — runs with the agent host's python3.
 
 import json
 import os
+import shlex
 import subprocess
 
 GPU_QUEUE = "mithril-h100-pool"
@@ -229,6 +230,7 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
         ],
     }
     if agent_e2e:
+        step["command"] = "bash -c " + shlex.quote(command)
         step["timeout_in_minutes"] = 35
         step["artifact_paths"] = ".agent-e2e/**/*"
         step["plugins"][0]["kubernetes"]["podSpec"]["containers"][0]["securityContext"] = {"privileged": True}
