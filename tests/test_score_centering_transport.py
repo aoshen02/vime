@@ -29,7 +29,6 @@ def test_score_centering_reads_native_tito_integer_token_ids():
     logprobs = serving._create_tokens_logprobs(
         [42],
         [{42: Logprob(-3.0, 3), 4: Logprob(-0.1, 1), 7: Logprob(-0.2, 2)}],
-        num_output_top_logprobs=3,
     )
     metadata, sampled = _score_centering_metadata({"logprobs": logprobs.model_dump()}, [42], top_p=1.0, top_k=2)
     ids, probabilities = metadata["score_centering_topk"]

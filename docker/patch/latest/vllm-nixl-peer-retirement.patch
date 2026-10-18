@@ -42,50 +42,10 @@ diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py b/
 index 0ada1bb6fe2..81ac2d6b583 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
-@@ -125,6 +125,50 @@ def _share_storage_and_block_stride(caches: list[torch.Tensor]) -> bool:
+@@ -125,6 +125,10 @@ def _share_storage_and_block_stride(caches: list[torch.Tensor]) -> bool:
      return len(block_strides) == len(storage_ptrs) == 1
 
 
-+def _tensor_byte_span_end(cache: torch.Tensor) -> int:
-+    """Return the exclusive end address touched by a nonnegative-stride view."""
-+    if cache.numel() == 0:
-+        return cache.data_ptr()
-+    if any(stride < 0 for stride in cache.stride()):
-+        raise ValueError("NIXL cache views must have nonnegative strides")
-+    max_element_offset = sum(
-+        (size - 1) * stride for size, stride in zip(cache.shape, cache.stride())
-+    )
-+    return cache.data_ptr() + (max_element_offset + 1) * cache.element_size()
-+
-+
-+def _uses_dense_virtual_transfer_pages(
-+    layer_spec: KVCacheSpec,
-+    cache: torch.Tensor,
-+    physical_page_size: int,
-+    num_blocks: int,
-+) -> bool:
-+    """Return whether a compressed kernel view can be split into NIXL pages."""
-+    if not (
-+        isinstance(layer_spec, MLAAttentionSpec)
-+        and layer_spec.tokens_per_state > 1
-+        and cache.ndim == 4
-+        and cache.shape[1] == 1
-+        and cache.is_contiguous()
-+        and physical_page_size > 0
-+        and layer_spec.state_content_size_bytes > 0
-+    ):
-+        return False
-+
-+    block_stride = cache.stride(0) * cache.element_size()
-+    return (
-+        block_stride > physical_page_size
-+        and block_stride % physical_page_size == 0
-+        and physical_page_size % layer_spec.state_content_size_bytes == 0
-+        and cache.shape[0] * (block_stride // physical_page_size) == num_blocks
-+        and cache.nbytes == num_blocks * physical_page_size
-+    )
-+
-+
 +def _is_remote_disconnect(error: Exception) -> bool:
 +    return type(error).__name__ == "nixlRemoteDisconnectError"
 +
