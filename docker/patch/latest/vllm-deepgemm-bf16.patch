@@ -613,6 +613,18 @@ index 2f05074c643..5d2a12e0296 100644
      }
      if backend := mapping.get(runner_backend):
          return backend
+@@ -288,6 +298,11 @@ def select_unquantized_moe_backend(
+         activation_format: mk.FusedMoEActivationFormat,
+     ) -> tuple[UnquantizedMoeBackend, type[mk.FusedMoEExperts] | None]:
++        if (
++            backend == UnquantizedMoeBackend.DEEP_GEMM
++            and config.in_dtype != torch.bfloat16
++        ):
++            raise ValueError("DeepGEMM BF16 requires bfloat16 activations and weights")
+         reason = None
+         for k_cls in backend_to_kernel_cls(backend):
+             supported, reason = k_cls.is_supported_config(
+                 k_cls, config, None, None, activation_format
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
 index b995d19d893..61c28f2fca7 100644
 --- a/vllm/utils/deep_gemm.py
