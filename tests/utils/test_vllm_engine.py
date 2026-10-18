@@ -376,7 +376,22 @@ def test_build_vllm_subprocess_env_colocate(vllm_args, monkeypatch):
 
 
 @pytest.mark.unit
-def test_launch_server_process_drops_trainer_allocator_config(vllm_args, monkeypatch):
+@pytest.mark.parametrize(
+    "rpc_range",
+    [
+        {},
+        {"MC_MIN_RPC_PORT": "31000", "MC_MAX_RPC_PORT": "32000"},
+        {"MC_MIN_PRC_PORT": "31000", "MC_MAX_PRC_PORT": "32000"},
+        {"MC_MIN_RPC_PORT": "16000"},
+        {"MC_MAX_PRC_PORT": "25000"},
+    ],
+)
+def test_launch_server_process_drops_trainer_allocator_config(vllm_args, monkeypatch, rpc_range):
+    for bound in ("MIN", "MAX"):
+        for spelling in ("RPC", "PRC"):
+            monkeypatch.delenv(f"MC_{bound}_{spelling}_PORT", raising=False)
+    for name, value in rpc_range.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     monkeypatch.setenv("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
@@ -390,6 +405,9 @@ def test_launch_server_process_drops_trainer_allocator_config(vllm_args, monkeyp
     assert "PYTORCH_ALLOC_CONF" not in env
     assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
     assert "PYTORCH_ALLOC_CONF" not in os.environ
+    assert {name: value for name, value in env.items() if name.startswith(("MC_MIN_", "MC_MAX_"))} == (
+        rpc_range or {"MC_MIN_PRC_PORT": "27000", "MC_MAX_PRC_PORT": "28000"}
+    )
 
 
 @pytest.mark.unit
@@ -518,6 +536,27 @@ def test_finish_weight_update_commits_version(vllm_engine, monkeypatch):
     assert vllm_engine.finish_weight_update(weight_version="42") == {"done": True}
     assert calls == [("finish_weight_update", {"weight_version": "42"})]
     assert vllm_engine._weight_version == "42"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status_code", [200, 400, 500])
+def test_finish_weight_update_http_result_controls_version(vllm_engine, monkeypatch, status_code):
+    calls = []
+    vllm_engine._weight_version = "41"
+
+    def fake_post(url, *, json, timeout):
+        calls.append((url, json, timeout))
+        return _MockResponse(json_data={"done": status_code == 200}, status_code=status_code)
+
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+    if status_code == 200:
+        assert vllm_engine.finish_weight_update(weight_version="42") == {"done": True}
+        assert vllm_engine._weight_version == "42"
+    else:
+        with pytest.raises(requests.exceptions.HTTPError):
+            vllm_engine.finish_weight_update(weight_version="42")
+        assert vllm_engine._weight_version == "41"
+    assert calls == [("http://127.0.0.1:8765/finish_weight_update", {"weight_version": "42"}, None)]
 
 
 @pytest.mark.unit
@@ -738,6 +777,34 @@ def test_launch_server_process_brackets_ipv6_health_url(vllm_args, monkeypatch):
     assert launched_process is process
     assert subprocess_args["host"] == "2001:db8::1"
     assert base_urls == ["http://[2001:db8::1]:8000"]
+
+
+@pytest.mark.parametrize("encoder_only", [False, True])
+@pytest.mark.parametrize("parent_alive", [False, True])
+def test_spawned_server_selects_current_entrypoint(monkeypatch, encoder_only, parent_alive):
+    from vllm.entrypoints.cli.serve import ServeSubcommand
+    from vllm.entrypoints.launchers import cli_args
+
+    calls = []
+    watchers = []
+    parent = SimpleNamespace(is_alive=lambda: parent_alive, join=lambda: calls.append("joined"))
+    monkeypatch.setattr(mod.multiprocessing, "parent_process", lambda: parent)
+    monkeypatch.setattr(
+        mod, "Thread", lambda *, target, daemon: SimpleNamespace(start=lambda: watchers.append(target))
+    )
+    monkeypatch.setattr(mod, "kill_process_tree", lambda pid: calls.append(pid))
+    monkeypatch.setattr(mod.os, "getpid", lambda: 123)
+    monkeypatch.setattr(
+        cli_args, "make_arg_parser", lambda _: SimpleNamespace(parse_args=lambda *, args, namespace: namespace)
+    )
+    monkeypatch.setattr(cli_args, "validate_parsed_serve_args", lambda args: None)
+    monkeypatch.setattr(ServeSubcommand, "cmd", lambda args: calls.append(vars(args)), raising=False)
+    kwargs = {"ec_transfer_config": {"ec_role": "ec_producer"}} if encoder_only else {}
+    mod._run_vllm_server(kwargs, {})
+    assert calls == ([kwargs] if parent_alive else [])
+    assert len(watchers) == 1
+    watchers[0]()
+    assert calls[-2:] == ["joined", 123]
 
 
 @pytest.mark.unit

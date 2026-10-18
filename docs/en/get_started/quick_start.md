@@ -13,7 +13,7 @@ Use the provided Docker images to get a compatible vLLM, Megatron, and patch sta
 | H100/H200 | `vllm/vime:latest` | 13.0 |
 | B200/B300 (Blackwell, x86) | `vllm/vime:latest` | 13.0 |
 
-Vime uses a CUDA 13 image for both hardware groups. See the [Docker guide](https://github.com/vllm-project/vime/blob/main/docker/README.md) for source pins and build options.
+New builds use the same CUDA 13 image for Hopper and Blackwell. On supported data-center GPUs, the image automatically enables CUDA 13 forward-compatibility libraries for older drivers, including 535 and 570, without replacing the host driver. See the [Docker guide](https://github.com/vllm-project/vime/blob/main/docker/README.md) for build options and driver compatibility.
 
 GPU CI primarily covers H100/H200. Check each recipe's hardware and parallelism requirements before running it on other platforms.
 

@@ -22,14 +22,14 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-source "/root/vime/scripts/models/qwen3-8B.sh"
+source "/root/vime/scripts/models/qwen3-4B-Instruct-2507.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-8B
-   --ref-load /root/Qwen3-8B_torch_dist
-   --load /root/Qwen3-8B_torch_dist
-   --save /root/Qwen3-8B_vime/
-   --save-interval 10
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507
+   --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist
+   --load /root/Qwen3-4B-Instruct-2507_vime/
+   --save /root/Qwen3-4B-Instruct-2507_vime/
+   --save-interval 20
 )
 
 ROLLOUT_ARGS=(
@@ -41,7 +41,7 @@ ROLLOUT_ARGS=(
    --num-rollout 300
    --rollout-batch-size 16
    --n-samples-per-prompt 4
-   --rollout-max-response-len 16384
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 64
@@ -56,15 +56,14 @@ EVAL_ARGS=(
    # --eval-interval 20
    # --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    # --n-samples-per-eval-prompt 16
-   # --eval-max-response-len 16384
+   # --eval-max-response-len 131072
    # --eval-top-p 1
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 4
-   --sequence-parallel
+   --tensor-model-parallel-size 1
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 4
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
@@ -73,17 +72,19 @@ PERF_ARGS=(
    --recompute-num-layers 36
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 8192
+   --log-probs-chunk-size 1024
+   --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
    --advantage-estimator grpo
    # OPD Configuration
-   --use-opd
-   --opd-type megatron
-   --opd-kl-coef 1.0
-   # CHANGE THIS to a stronger teacher checkpoint in practice
-   --opd-teacher-load /root/Qwen3-8B_torch_dist
+   --use-opd                                          # Enable on-policy distillation
+   --opd-type megatron                                # Use Megatron forward for teacher
+   --opd-kl-coef 1.0                                  # CHANGE THIS: KL penalty coefficient
+   # Teacher model configuration (CHANGE THIS to a stronger model!)
+   --opd-teacher-load /root/Qwen3-4B-Instruct-2507_torch_dist      # Teacher model path
+
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
@@ -91,6 +92,9 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
@@ -140,7 +144,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 4 \
    --rollout-num-gpus 4 \
-   --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

@@ -13,7 +13,7 @@
 | H100/H200 | `vllm/vime:latest` | 13.0 |
 | B200/B300（Blackwell，x86） | `vllm/vime:latest` | 13.0 |
 
-Vime 对这两类硬件使用 CUDA 13 镜像；依赖版本和构建选项见 [Docker 指南](https://github.com/vllm-project/vime/blob/main/docker/README.md)。
+新构建的 Hopper 和 Blackwell 环境统一使用 CUDA 13 镜像。在受支持的数据中心 GPU 上，镜像会为 535、570 等旧驱动自动启用 CUDA 13 向前兼容库，不替换宿主机驱动。构建选项及驱动兼容说明见 [Docker 指南](https://github.com/vllm-project/vime/blob/main/docker/README.md)。
 
 GPU CI 主要覆盖 H100/H200。使用其他平台时，请先核对具体训练配方的硬件和并行配置要求。
 

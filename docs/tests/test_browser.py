@@ -217,15 +217,19 @@ def exercise_homepage_review(page, context, base, lang):
         {
             "name": "old.json",
             "mimeType": "application/json",
-            "buffer": json.dumps({"schema": 1, "choices": {"model": "dense"}}).encode(),
+            "buffer": json.dumps({"schema": 1, "choices": {"model": "qwen38"}}).encode(),
         }
     )
-    expect(page.locator('[name="model"][value="dense"]')).to_be_checked()
+    expect(page.locator('[name="model"][value="qwen38"]')).to_be_checked()
     page.locator("#undo").click()
     expect(page.locator('[name="pd"]')).to_be_checked()
     before = page.evaluate("localStorage.getItem('vime-experiment-v1')")
     page.locator("#import-experiment").set_input_files(
-        {"name": "future.json", "mimeType": "application/json", "buffer": b'{"schema":99,"choices":{"model":"dense"}}'}
+        {
+            "name": "future.json",
+            "mimeType": "application/json",
+            "buffer": b'{"schema":99,"choices":{"model":"qwen38"}}',
+        }
     )
     expect(page.locator("#toast")).to_contain_text("schema 1")
     assert page.evaluate("localStorage.getItem('vime-experiment-v1')") == before
@@ -254,16 +258,13 @@ def run():
                 exercise_homepage_review(page, context, base, lang)
                 expect(page.locator("#install-docker")).to_be_visible()
                 expect(page.locator("#install-conda")).to_have_count(0)
-                for selected_hardware in ("blackwell", "hopper"):
-                    page.locator("#install-image").select_option(selected_hardware)
-                    hardware = json.loads(page.evaluate("localStorage.getItem('vime-experiment-v1')"))["hardware"]
-                    assert hardware == selected_hardware
-                    page.locator('[data-install-copy="install-docker-host"]').click()
-                    commands = page.evaluate("navigator.clipboard.readText()")
-                    assert commands.startswith("VIME_IMAGE=vllm/vime:latest\n")
-                    assert 'docker pull "$VIME_IMAGE"' in commands
-                    assert '-v "$PWD:/root/vime" -v "$PWD/../vime-data:/data"' in commands
-                    subprocess.run(["bash", "-n"], input=commands, text=True, check=True)
+                expect(page.locator("#install")).not_to_contain_text("CUDA 12")
+                page.locator('[data-install-copy="install-docker-host"]').click()
+                commands = page.evaluate("navigator.clipboard.readText()")
+                assert commands.startswith("VIME_IMAGE=vllm/vime:latest\n")
+                assert 'docker pull "$VIME_IMAGE"' in commands
+                assert '-v "$PWD:/root/vime" -v "$PWD/../vime-data:/data"' in commands
+                subprocess.run(["bash", "-n"], input=commands, text=True, check=True)
                 for width in (1440, 390, 320):
                     page.set_viewport_size({"width": width, "height": 1000})
                     for method in ("docker",):
@@ -287,7 +288,7 @@ def run():
                 expect(no_js.locator("#install-conda")).to_have_count(0)
                 expect(no_js.locator("#install-methods")).to_have_count(0)
                 no_js.close()
-                expect(page.locator('[name="model"]')).to_have_count(6)
+                expect(page.locator('[name="model"]')).to_have_count(4)
                 expect(page.locator(".hero-description")).to_contain_text("vime")
                 expect(page.locator(".core-capabilities article")).to_have_count(2)
                 expect(page.locator(".glm-lineage")).to_contain_text("GLM-5.3-Flash")
@@ -631,7 +632,7 @@ def run():
                     page = context.new_page()
                     page.goto(f"https://vllm-project.github.io{prefix}#lab", wait_until="networkidle")
                     expect_share_metadata(page, "en", check_image=prefix == "/vime/")
-                    expect(page.locator('[name="model"]')).to_have_count(6)
+                    expect(page.locator('[name="model"]')).to_have_count(4)
                     page.locator('[data-learn="grpo"]').click()
                     expect_rendered_math(page)
                     page.keyboard.press("Escape")

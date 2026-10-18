@@ -1,9 +1,9 @@
-ARG BASE_IMAGE=vllm/vllm-openai@sha256:f8696a5176c1fb61e025b0772505674a3e092c25597eb26117003945b5121e8d
+ARG BASE_IMAGE=vllm/vllm-openai@sha256:a3bc7f09c1e2e72e068021feb75118c92e98c538706caa0c5d1acc0bb9252623
 FROM rust:1.95-bookworm AS vllm-rust-frontend
 ENV CARGO_BUILD_JOBS=4
 ARG PATCH_VERSION=latest
-ARG VLLM_COMMIT=43b4aaea3e40e20ef53ce2bfecfa1b72060bf2b5
-ARG VLLM_RS_BUILD_VERSION=0.31.1rc1.dev23+g43b4aaea3
+ARG VLLM_COMMIT=39983a5e7a5a575a7829f5d5ada50a33d9337ec1
+ARG VLLM_RS_BUILD_VERSION=0.32.0rc1.dev329+g39983a5e7
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-frontend.patch /tmp/vllm-rust-frontend.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-observability.patch /tmp/vllm-rust-observability.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-multimodal.patch /tmp/vllm-rust-multimodal.patch
@@ -30,8 +30,8 @@ COPY docker/patch/${PATCH_VERSION}/sunabako-arm64.patch /tmp/sunabako-arm64.patc
 RUN mkdir /wheels && if [ "${TARGETARCH}" = "arm64" ]; then \
     apt-get update && apt-get install -y --no-install-recommends python3-venv && \
     python3 -m venv /opt/sdk-build && /opt/sdk-build/bin/python -m pip install "maturin>=1.8,<2" && \
-    curl -fsSL https://files.pythonhosted.org/packages/cd/16/d9fd84bbf784c19425d9d83d8d98deef6d5f107012e8d50bddeb5c11cf5c/sunabako-0.1.1.tar.gz -o /tmp/sdk.tar.gz && \
-    echo "b4057ea011e61ad942249e8156c54aad38c7f5f73d0075c93f3005f70d66036d  /tmp/sdk.tar.gz" | sha256sum -c - && \
+    curl -fsSL https://files.pythonhosted.org/packages/32/04/17067354c37b23f7fe00e70c131c863f85acaac86874baa36e32426fb8b1/sunabako-0.1.2.tar.gz -o /tmp/sdk.tar.gz && \
+    echo "c7d8f67f165ed570cb7a28dc44813a9a15e097ca15ba915abd7db7834cfbf1cf  /tmp/sdk.tar.gz" | sha256sum -c - && \
     mkdir /sdk && tar -xf /tmp/sdk.tar.gz -C /sdk --strip-components=1 && cd /sdk && \
     git apply /tmp/sunabako-arm64.patch && \
     /opt/sdk-build/bin/maturin build --locked --release --target aarch64-unknown-linux-gnu --out /wheels; fi
@@ -56,18 +56,19 @@ FROM ${BASE_IMAGE}
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG VLLM_COMMIT=43b4aaea3e40e20ef53ce2bfecfa1b72060bf2b5
+ARG VLLM_COMMIT=39983a5e7a5a575a7829f5d5ada50a33d9337ec1
 ARG MEGATRON_COMMIT=4b4acac9a1d28ea6829c8d4f566d75698a21249d
-ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
+ARG DEEPGEMM_COMMIT=8965e4a5cded4041c8dbbe8d35b0be31fd8da90b
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
 ARG DEEPEP_CUDA_ARCH_LIST=9.0;10.0;10.3
 ARG FLASH_QLA_COMMIT=821fd9d37ede18fdc2a4e707fefe3770bfc32e58
 ARG TRANSFORMER_ENGINE_VERSION=2.18.0
 ARG TRANSFORMER_ENGINE_COMMIT=27486e03cfc1fa41f6932dcecdc47c71c47eac3e
 ARG TRANSFORMER_ENGINE_CUDA_ARCHS=90;100a;103a
-ARG TMS_COMMIT=4d525cf378fdbfe7eb044909b8e66e112a508624
+ARG TMS_COMMIT=bdab8c55f490a00a746ec34e301391617f5ca878
 ARG TMS_CUDA_MAJOR=
 ARG NCCL_VERSION=2.30.7
+ARG MOONCAKE_VERSION=0.3.11.post1
 ARG MAX_JOBS=16
 ENV MAX_JOBS=${MAX_JOBS} CMAKE_BUILD_PARALLEL_LEVEL=${MAX_JOBS}
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH}
@@ -106,8 +107,10 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # ====================================== Python dependencies ============================================
 
+RUN mkdir -p /opt/vime && python -c 'import importlib.metadata as m; packages = ("vllm", "torch", "torchvision", "torchaudio", "cuda-python", "cuda-bindings", "flashinfer-python", "flashinfer-cubin", "transformers"); open("/opt/vime/constraints.txt", "w").write("".join(f"{p}=={m.version(p)}\n" for p in packages) + "pyarrow==25.0.1\n")'
+ENV PIP_CONSTRAINT=/opt/vime/constraints.txt
+
 # The training context-parallel stack uses FA2 + FA3.
-RUN pip uninstall -y flash-attn-4 flash_attn_4 || true
 RUN MAX_JOBS=${FA2_MAX_JOBS} pip -v install flash-attn==2.8.3 --no-build-isolation
 
 # This FA3 commit provides the window_size_left/window_size_right API used by TE.
@@ -117,7 +120,7 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
     FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=96 pip -v install . --no-build-isolation && \
     cd /root/ && rm -rf flash-attention/
 
-RUN pip install flash-linear-attention==0.5.2
+RUN pip install flash-linear-attention==0.5.2 tilelang==0.1.12 scikit-build-core
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 ARG INSTALL_FLASHQLA=0
 RUN if [ "${INSTALL_FLASHQLA}" = "1" ]; then \
@@ -186,6 +189,7 @@ COPY --from=sunabako-wheel /wheels/ /tmp/sunabako-wheels/
 RUN if ls /tmp/sunabako-wheels/*.whl >/dev/null 2>&1; then pip install --no-deps /tmp/sunabako-wheels/*.whl; fi
 RUN pip install --ignore-installed PyJWT && \
     pip install -r /tmp/requirements.txt
+RUN pip install --no-deps --force-reinstall "mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION}"
 COPY --from=vllm-router-wheel /wheels/ /tmp/router-wheels/
 RUN pip install --no-deps --force-reinstall /tmp/router-wheels/*.whl && rm -rf /tmp/router-wheels
 
@@ -219,7 +223,6 @@ COPY docker/patch/${PATCH_VERSION}/vllm.patch /tmp/vllm.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-score-centering.patch /tmp/vllm-score-centering.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-pd-request-metrics.patch /tmp/vllm-pd-request-metrics.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vllm-inflight-queue-diagnostics.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-retained-serving.patch /tmp/vllm-retained-serving.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-generation-health.patch /tmp/vllm-generation-health.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-tensor-dump.patch /tmp/vllm-tensor-dump.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
@@ -231,7 +234,6 @@ COPY docker/patch/${PATCH_VERSION}/vllm-mm-decoder-only.patch /tmp/vllm-mm-decod
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-server-info.patch /tmp/vllm-rust-server-info.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepgemm-bf16.patch /tmp/vllm-deepgemm-bf16.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepep-optional-shrink.patch /tmp/vllm-deepep-optional-shrink.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-draft-weights-cpu-backup.patch /tmp/vllm-draft-weights-cpu-backup.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
@@ -239,7 +241,6 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-score-centering.patch && \
     git apply -v /tmp/vllm-pd-request-metrics.patch && \
     git apply -v /tmp/vllm-inflight-queue-diagnostics.patch && \
-    git apply -v /tmp/vllm-retained-serving.patch && \
     git apply -v /tmp/vllm-generation-health.patch && \
     git apply -v /tmp/vllm-tensor-dump.patch && \
     git apply -v /tmp/vllm-fine-grained-tracing.patch && \
@@ -251,12 +252,10 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v --exclude='rust/*' /tmp/vllm-rust-server-info.patch && \
     git apply -v /tmp/vllm-deepgemm-bf16.patch && \
     git apply -v /tmp/vllm-deepep-optional-shrink.patch && \
-    git apply -v /tmp/vllm-draft-weights-cpu-backup.patch && \
     rm /tmp/vllm-pull_weights.patch /tmp/vllm.patch \
        /tmp/vllm-score-centering.patch \
        /tmp/vllm-pd-request-metrics.patch \
        /tmp/vllm-inflight-queue-diagnostics.patch \
-       /tmp/vllm-retained-serving.patch \
        /tmp/vllm-generation-health.patch \
        /tmp/vllm-tensor-dump.patch \
        /tmp/vllm-fine-grained-tracing.patch \
@@ -267,7 +266,7 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
        /tmp/vllm-mm-decoder-only.patch \
        /tmp/vllm-rust-server-info.patch \
        /tmp/vllm-deepgemm-bf16.patch \
-       /tmp/vllm-deepep-optional-shrink.patch /tmp/vllm-draft-weights-cpu-backup.patch
+       /tmp/vllm-deepep-optional-shrink.patch
 
 # ====================================== Install main package ============================================
 COPY --from=vllm-rust-frontend /build/rust/target/release/vllm-rs /usr/local/lib/python3.12/dist-packages/vllm/vllm-rs
@@ -280,12 +279,13 @@ RUN git clone ${VIME_REPO} /root/vime && \
     pip install -e . --no-deps
 
 RUN cd /root/vime/vime/backends/megatron_utils/kernels/int4_qat && \
-    pip install . --no-build-isolation
+    pip install . --no-build-isolation --no-deps
 
-# Reset ENTRYPOINT inherited from the vllm/vllm-openai base (`vllm serve`), so the
-# image is a plain bash/ray environment. Without this, `docker run ... bash -c ...`
-# and `ray job submit` append to `vllm serve` and break.
-ENTRYPOINT []
+COPY docker/cuda-compat.sh docker/entrypoint.sh /opt/vime/
+ARG CUDA_COMPAT_VERSION=580.178.04-1ubuntu1
+RUN apt-get update && apt-get install -y --no-install-recommends "cuda-compat-13-0=${CUDA_COMPAT_VERSION}" && rm -rf /var/lib/apt/lists/*
+RUN chmod +x /opt/vime/entrypoint.sh
+ENTRYPOINT ["/opt/vime/entrypoint.sh"]
 
 RUN CUDA_MAJOR="$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" && \
     pip install --no-deps --force-reinstall "nvidia-nccl-cu${CUDA_MAJOR}==${NCCL_VERSION}"

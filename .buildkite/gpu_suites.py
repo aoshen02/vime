@@ -44,6 +44,7 @@ SUITES = {
         ("test_full_disk_weight_update.py", 4, "", {}),
         ("test_quick_start_glm4_9B.py", 8, "", {"ENABLE_EVAL": "0"}),
         ("test_glm4.7_30B_A3B_pd_mooncake.py", 8, "", {}),
+        ("test_mooncake_memory_reregister.py", 2, "", {}),
         (
             "test_qwen3_30B_A3B.py",
             8,
@@ -57,6 +58,9 @@ SUITES = {
         ("test_qwen3_4B_ppo_disaggregate.py", 8, "", {"ENABLE_EVAL": "0"}),
         ("test_qwen3_4B_ppo_train_critic_only.py", 8, "", {"ENABLE_EVAL": "0"}),
         ("test_ppo_logprob_entropy_gpu.py", 2, "", {}),
+        ("test_vllm_top_p_copy.py", 1, "", {}),
+        ("test_glm5_next_gpu.py", 1, "", {}),
+        ("test_glm5_next_cp.py", 4, "", {}),
         ("test_release_train.py", 4, "", {}),
         ("test_qwen3_4B_streaming_partial_rollout.py", 8, "", {}),
         ("test_moonlight_16B_A3B.py", 8, "", {"ENABLE_EVAL": "0"}),

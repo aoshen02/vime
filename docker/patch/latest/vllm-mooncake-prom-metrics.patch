@@ -1,8 +1,8 @@
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
-index 5f064259e8b..f7ac323d59f 100644
+index 1d12bd1ab19..61d065382b7 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
-@@ -34,13 +34,19 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
+@@ -37,13 +37,19 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
      KVConnectorTransferResults,
      SupportsHMA,
  )
@@ -23,10 +23,10 @@ index 5f064259e8b..f7ac323d59f 100644
  )
  from vllm.distributed.parallel_state import (
      get_pp_group,
-@@ -864,6 +870,18 @@ class MooncakeConnector(KVConnectorBase_V1, SupportsHMA):
+@@ -902,6 +908,18 @@ class MooncakeConnector(KVConnectorBase_V1, SupportsHMA):
      ) -> KVConnectorStats | None:
          return MooncakeKVConnectorStats(data=data or {})
- 
+
 +    @classmethod
 +    def build_prom_metrics(
 +        cls,
@@ -39,7 +39,7 @@ index 5f064259e8b..f7ac323d59f 100644
 +            vllm_config, metric_types, labelnames, per_engine_labelvalues
 +        )
 +
- 
+
  class MooncakeConnectorScheduler:
      """Implementation of Scheduler side methods."""
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/stats.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/stats.py
@@ -51,13 +51,13 @@ index a9dbd6bdd4e..24968bbfe81 100644
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 -"""Stats container for the Mooncake connector."""
 +"""Stats and Prometheus metrics for the Mooncake connector."""
- 
+
  import threading
  from dataclasses import dataclass
 @@ -8,12 +8,50 @@ from typing import Any
- 
+
  import numpy as np
- 
+
 +from vllm.config import VllmConfig
  from vllm.distributed.kv_transfer.kv_connector.v1.metrics import (
 +    KVConnectorPromMetrics,
@@ -66,7 +66,7 @@ index a9dbd6bdd4e..24968bbfe81 100644
 +    PromMetricT,
  )
 +from vllm.v1.metrics.utils import create_metric_per_engine
- 
+
 -# TODO(mooncake-stats): add MooncakePromMetrics (mirror NixlPromMetrics)
 -# and wire it via MooncakeConnector.build_prom_metrics in a follow-up PR.
 +# Bucket edges for the per-transfer series, named after the series each feeds.
@@ -104,13 +104,13 @@ index a9dbd6bdd4e..24968bbfe81 100644
 +    20000,
 +    50000,
 +)
- 
- 
+
+
  @dataclass
 @@ -58,8 +96,8 @@ class MooncakeKVConnectorStats(KVConnectorStats):
              self.data["bytes_transferred"].append(total_bytes)
              self.data["num_descriptors"].append(num_descs)
- 
+
 -    # Failure counters store a list of 1s so a future Prom counter can iterate
 -    # with .inc(list_item), mirroring NIXL's NixlPromMetrics.observe.
 +    # Each failure appends a single unit, which MooncakePromMetrics sums into

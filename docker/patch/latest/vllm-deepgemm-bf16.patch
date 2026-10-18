@@ -1,8 +1,8 @@
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
-index b8bfca082a4..0cd768e48d5 100644
+index a1b141237f3..f62b940cf89 100644
 --- a/vllm/config/kernel.py
 +++ b/vllm/config/kernel.py
-@@ -297,7 +297,7 @@ class KernelConfig:
+@@ -305,7 +305,7 @@ class KernelConfig:
      - "triton": Use Triton-based fused MoE kernels
      - "batched_triton": Use batched Triton experts (moe_mmk) on the batched
        activation format ([E_local, max_num_tokens, K])
@@ -12,7 +12,7 @@ index b8bfca082a4..0cd768e48d5 100644
      - "cutlass": Use vLLM CUTLASS kernels
      - "flashinfer_trtllm": Use FlashInfer with TRTLLM-GEN kernels
 diff --git a/vllm/model_executor/layers/fused_moe/__init__.py b/vllm/model_executor/layers/fused_moe/__init__.py
-index 120fbd15266..ec4d4728da2 100644
+index e68310f98d0..061e8c604dc 100644
 --- a/vllm/model_executor/layers/fused_moe/__init__.py
 +++ b/vllm/model_executor/layers/fused_moe/__init__.py
 @@ -100,6 +100,8 @@ if HAS_TRITON:
@@ -24,7 +24,7 @@ index 120fbd15266..ec4d4728da2 100644
          DeepGemmExperts,
      )
      from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import (
-@@ -144,6 +146,8 @@ if HAS_TRITON:
+@@ -152,6 +154,8 @@ if HAS_TRITON:
          "TritonWNA16Experts",
          "BatchedTritonExperts",
          "DeepGemmExperts",
@@ -48,7 +48,7 @@ index 1dee9bad54b..f5f56ab1a03 100644
 @@ -211,7 +212,7 @@ def _fwd_kernel_ep_scatter_2(
      for token_id in range(start_token_id, total_token_num, grid_num):
          to_copy = tl.load(recv_x + token_id * recv_x_stride0 + offset_in, mask=mask)
- 
+
 -        if PACK_UE8M0:
 +        if HAS_SCALE and PACK_UE8M0:
              # Pack 4 UE8M0 bytes into one int32 (byte j = group 4*pk+j).
@@ -109,15 +109,15 @@ index 1dee9bad54b..f5f56ab1a03 100644
 +    assert output_tensor_scale is not None
      # grid = (triton.cdiv(hidden_size, BLOCK_D), num_experts)
      grid = num_experts
- 
+
 @@ -306,7 +315,7 @@ def ep_scatter(
      assert expert_start_loc.shape[0] == num_experts
- 
+
      # pack_ue8m0: scatter packs 4 UE8M0 bytes per int32; else copies scales as-is.
 -    scale_hidden_size = hidden_size // BLOCK_D
 +    scale_hidden_size = hidden_size // BLOCK_D if has_scale else 1
      scale_packed_size = (scale_hidden_size + 3) // 4 if pack_ue8m0 else 1
- 
+
      _fwd_kernel_ep_scatter_1[(grid,)](
 @@ -347,6 +356,7 @@ def ep_scatter(
          topk_num=recv_topk.shape[1],
@@ -128,7 +128,7 @@ index 1dee9bad54b..f5f56ab1a03 100644
          HIDDEN_SIZE=hidden_size,
          HIDDEN_SIZE_PAD=triton.next_power_of_2(hidden_size),
 @@ -466,7 +476,7 @@ def ep_gather(
- 
+
  def deepgemm_moe_permute(
      aq: torch.Tensor,
 -    aq_scale: torch.Tensor,
@@ -137,7 +137,7 @@ index 1dee9bad54b..f5f56ab1a03 100644
      local_num_experts: int,
      expert_map: torch.Tensor | None,
 @@ -504,9 +514,13 @@ def deepgemm_moe_permute(
- 
+
      # uint8 UE8M0 (MXFP8) -> scatter packs into DeepGEMM's int32 MN-major
      # TMA-aligned layout; float32 (FP8/FP4) scattered row-major as-is.
 -    pack_ue8m0 = aq_scale.dtype == torch.uint8
@@ -153,12 +153,12 @@ index 1dee9bad54b..f5f56ab1a03 100644
          tma_aligned_mn = round_up(M_sum, 4)
          aq_scale_out = torch.empty_strided(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
-index 0eef7a83356..70c3546e123 100644
+index cfa380f9b41..ee69b12dfe8 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 @@ -4,6 +4,7 @@
  import torch
- 
+
  import vllm.model_executor.layers.fused_moe.modular_kernel as mk
 +from vllm.forward_context import get_forward_context, is_forward_context_available
  from vllm.logger import init_logger
@@ -187,15 +187,13 @@ index 0eef7a83356..70c3546e123 100644
  )
  from vllm.utils.import_utils import has_deep_gemm
 +from vllm.utils.math_utils import round_up
- 
+
  logger = init_logger(__name__)
- 
-@@ -691,3 +698,384 @@ class DeepGemmFP4Experts(mk.FusedMoEExpertsModular):
-             expert_map=expert_map,
-             output=output,
+
+@@ -444,6 +451,387 @@ class DeepGemmExperts(mk.FusedMoEExpertsModular):
          )
-+
-+
+
+
 +def _valid_deep_gemm_bf16(
 +    hidden_states: torch.Tensor, w1: torch.Tensor, w2: torch.Tensor
 +) -> bool:
@@ -575,8 +573,13 @@ index 0eef7a83356..70c3546e123 100644
 +        m_grouped_bf16_gemm_nt_masked(
 +            act_out, w2, output, expert_num_tokens, expected_m
 +        )
++
++
+ class DeepGemmFP4Experts(mk.FusedMoEExpertsModular):
+     """DeepGemm-based fused MoE expert implementation for FP4 weights.
+
 diff --git a/vllm/model_executor/layers/fused_moe/oracle/unquantized.py b/vllm/model_executor/layers/fused_moe/oracle/unquantized.py
-index 25b55670d1f..dccaf9fca4a 100644
+index 2f05074c643..5d2a12e0296 100644
 --- a/vllm/model_executor/layers/fused_moe/oracle/unquantized.py
 +++ b/vllm/model_executor/layers/fused_moe/oracle/unquantized.py
 @@ -40,6 +40,7 @@ class UnquantizedMoeBackend(Enum):
@@ -588,9 +591,9 @@ index 25b55670d1f..dccaf9fca4a 100644
      CPU = "CPU"
      XPU = "XPU"
 @@ -145,6 +146,14 @@ def backend_to_kernel_cls(
- 
+
          return [BatchedTritonExperts]
- 
+
 +    elif backend == UnquantizedMoeBackend.DEEP_GEMM:
 +        from vllm.model_executor.layers.fused_moe.experts.deep_gemm_moe import (
 +            DeepGemmBf16BatchedExperts,
@@ -611,13 +614,13 @@ index 25b55670d1f..dccaf9fca4a 100644
      if backend := mapping.get(runner_backend):
          return backend
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index 0eb979ce05a..ffb6fec4244 100644
+index b995d19d893..61c28f2fca7 100644
 --- a/vllm/utils/deep_gemm.py
 +++ b/vllm/utils/deep_gemm.py
-@@ -115,6 +115,26 @@ def is_deep_gemm_supported() -> bool:
+@@ -118,6 +118,26 @@ def is_deep_gemm_supported() -> bool:
      return is_supported_arch and envs.VLLM_USE_DEEP_GEMM and has_deep_gemm()
- 
- 
+
+
 +def is_deep_gemm_bf16_grouped_supported() -> bool:
 +    """Return ``True`` if the DeepGEMM bf16 grouped contiguous GEMM kernel
 +    is available on this platform (used by the bf16 MoE experts backend).
@@ -641,7 +644,7 @@ index 0eb979ce05a..ffb6fec4244 100644
  @functools.cache
  def is_deep_gemm_e8m0_used() -> bool:
      """Return `True` if vLLM is configured to use DeepGEMM "
-@@ -154,6 +174,8 @@ _fp8_gemm_nt_impl: Callable[..., Any] | None = None
+@@ -157,6 +177,8 @@ _fp8_gemm_nt_impl: Callable[..., Any] | None = None
  _fp8_einsum_impl: Callable[..., Any] | None = None
  _grouped_impl: Callable[..., Any] | None = None
  _grouped_masked_impl: Callable[..., Any] | None = None
@@ -650,7 +653,7 @@ index 0eb979ce05a..ffb6fec4244 100644
  _grouped_fp4_impl: Callable[..., Any] | None = None
  _fp8_fp4_mqa_logits_impl: Callable[..., Any] | None = None
  _fp8_fp4_paged_mqa_logits_impl: Callable[..., Any] | None = None
-@@ -235,6 +257,7 @@ def _lazy_init() -> None:
+@@ -238,6 +260,7 @@ def _lazy_init() -> None:
      global _cublaslt_gemm_nt_impl
      global _fp8_gemm_nt_impl, _fp8_einsum_impl
      global _grouped_impl, _grouped_masked_impl, _grouped_fp4_impl
@@ -658,7 +661,7 @@ index 0eb979ce05a..ffb6fec4244 100644
      global _fp8_fp4_mqa_logits_impl, _fp8_fp4_paged_mqa_logits_impl
      global _get_paged_mqa_logits_metadata_impl
      global _fp8_fp4_sparse_mqa_logits_impl, _fp8_fp4_paged_sparse_mqa_logits_impl
-@@ -256,6 +279,8 @@ def _lazy_init() -> None:
+@@ -259,6 +282,8 @@ def _lazy_init() -> None:
          or _fp8_einsum_impl is not None
          or _grouped_impl is not None
          or _grouped_masked_impl is not None
@@ -667,7 +670,7 @@ index 0eb979ce05a..ffb6fec4244 100644
          or _grouped_fp4_impl is not None
          or _fp8_fp4_mqa_logits_impl is not None
          or _fp8_fp4_paged_mqa_logits_impl is not None
-@@ -297,6 +322,8 @@ def _lazy_init() -> None:
+@@ -300,6 +325,8 @@ def _lazy_init() -> None:
      _grouped_masked_impl = getattr(
          _dg, "m_grouped_fp8_gemm_nt_masked", None
      ) or getattr(_dg, "fp8_m_grouped_gemm_nt_masked", None)
@@ -676,10 +679,10 @@ index 0eb979ce05a..ffb6fec4244 100644
      _grouped_fp4_impl = getattr(_dg, "m_grouped_fp8_fp4_gemm_nt_contiguous", None)
      # DeepGEMM exposes fp8_fp4_*_mqa_logits as the canonical symbols that
      # handle both the FP8 and FP4 Q/K paths via a tuple-typed `q`.
-@@ -563,6 +590,24 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
+@@ -566,6 +593,24 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
      )
- 
- 
+
+
 +def m_grouped_bf16_gemm_nt_contiguous(*args, **kwargs):
 +    # BF16 grouped GEMM: activations/weights are plain bf16 tensors, so there
 +    # are no block scales and no ue8m0 cast to disable (unlike the fp8 path).
@@ -701,7 +704,7 @@ index 0eb979ce05a..ffb6fec4244 100644
  def m_grouped_fp8_fp4_gemm_nt_contiguous(*args, **kwargs):
      _lazy_init()
      if _grouped_fp4_impl is None:
-@@ -1046,6 +1091,10 @@ __all__ = [
+@@ -1090,6 +1135,10 @@ __all__ = [
      "fp8_gemm_nt",
      "fp8_einsum",
      "m_grouped_fp8_gemm_nt_contiguous",

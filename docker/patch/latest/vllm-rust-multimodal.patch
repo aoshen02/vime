@@ -1,25 +1,35 @@
-diff --git a/rust/src/server/src/routes/inference/generate/types.rs b/rust/src/server/src/routes/inference/generate/types.rs
-index 4642b2a15..b24c769f8 100644
---- a/rust/src/server/src/routes/inference/generate/types.rs
-+++ b/rust/src/server/src/routes/inference/generate/types.rs
-@@ -10,6 +10,7 @@ use validator::Validate;
- use vllm_engine_core_client::protocol::output::RequestSpecDecodeMetrics;
- use vllm_text::SamplingParams;
+diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
+index 027ba1c5926..8671bf5df1c 100644
+--- a/rust/src/server/src/routes.rs
++++ b/rust/src/server/src/routes.rs
+@@ -10,6 +10,7 @@ mod kv_event_sources;
+ mod load;
+ mod lora;
+ mod metrics;
++mod multimodal_features;
+ pub(crate) mod openai;
+ mod pause;
+ mod profile;
+@@ -136,7 +137,16 @@ fn build_router_with_options(
+     }
 
-+use crate::routes::multimodal_features::MultiModalFeatures;
- use crate::routes::openai::utils::types::{Normalizable, StreamOptions, Usage};
-
- /// Sampling parameters for the token-in/token-out generate API.
-@@ -45,6 +46,7 @@ pub struct GenerateRequest {
-     pub priority: i32,
-     pub kv_transfer_params: Option<HashMap<String, Value>>,
-     pub ec_transfer_params: Option<HashMap<String, Value>>,
-+    pub features: Option<MultiModalFeatures>,
-     /// Raw multimodal input; server resolves media. Mutually exclusive with `features`.
-     pub content_parts: Option<Vec<MediaContentPart>>,
-     pub return_token_ids: Option<bool>,
+     if scale_out_endpoints_enabled {
+-        router = router.route("/inference/v1/generate", post(inference::generate));
++        router = router
++            .route("/inference/v1/generate", post(inference::generate))
++            .route(
++                "/v1/chat/completions/render",
++                post(render::serve_render_chat),
++            )
++            .route(
++                "/v1/completions/render",
++                post(render::serve_render_completion),
++            );
+     } else {
+         info!("{SCALE_OUT_DISABLED_MESSAGE}");
+         router = router.route("/inference/v1/generate", post(disabled_scale_out));
 diff --git a/rust/src/server/src/routes/inference/generate.rs b/rust/src/server/src/routes/inference/generate.rs
-index 5dd54d453..a4edd15d5 100644
+index 3dbfb16bd10..3648b624e49 100644
 --- a/rust/src/server/src/routes/inference/generate.rs
 +++ b/rust/src/server/src/routes/inference/generate.rs
 @@ -57,10 +57,30 @@ pub async fn generate(
@@ -55,9 +65,29 @@ index 5dd54d453..a4edd15d5 100644
              .instrument(vllm_chat::mm_request_span(&request_context.request_id))
              .await
          {
+diff --git a/rust/src/server/src/routes/inference/generate/types.rs b/rust/src/server/src/routes/inference/generate/types.rs
+index ed609879640..44b9c7bff95 100644
+--- a/rust/src/server/src/routes/inference/generate/types.rs
++++ b/rust/src/server/src/routes/inference/generate/types.rs
+@@ -12,6 +12,7 @@ use vllm_engine_core_client::protocol::request::ReasoningParserKwargs;
+ use vllm_llm::WeightVersionSpan;
+ use vllm_text::SamplingParams;
+
++use crate::routes::multimodal_features::MultiModalFeatures;
+ use crate::routes::openai::utils::types::{Normalizable, StreamOptions, Usage};
+
+ /// Sampling parameters for the token-in/token-out generate API.
+@@ -47,6 +48,7 @@ pub struct GenerateRequest {
+     pub priority: i32,
+     pub kv_transfer_params: Option<HashMap<String, Value>>,
+     pub ec_transfer_params: Option<HashMap<String, Value>>,
++    pub features: Option<MultiModalFeatures>,
+     /// Raw multimodal input; server resolves media. Mutually exclusive with `features`.
+     pub content_parts: Option<Vec<MediaContentPart>>,
+     pub return_token_ids: Option<bool>,
 diff --git a/rust/src/server/src/routes/multimodal_features.rs b/rust/src/server/src/routes/multimodal_features.rs
 new file mode 100644
-index 000000000..374936a79
+index 00000000000..374936a79f3
 --- /dev/null
 +++ b/rust/src/server/src/routes/multimodal_features.rs
 @@ -0,0 +1,258 @@
@@ -320,19 +350,19 @@ index 000000000..374936a79
 +    }
 +}
 diff --git a/rust/src/server/src/routes/render.rs b/rust/src/server/src/routes/render.rs
-index 6236cd907..f8403f5c6 100644
+index 2736641cdeb..cc24d48ab9a 100644
 --- a/rust/src/server/src/routes/render.rs
 +++ b/rust/src/server/src/routes/render.rs
-@@ -10,7 +10,7 @@ use axum::extract::State;
- use axum::http::{HeaderMap, StatusCode};
+@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, StatusCode};
  use axum::routing::{get, post};
  use thiserror_ext::AsReport as _;
+ use vllm_engine_core_client::protocol::request::ReasoningParserKwargs;
 -use vllm_text::TextRequest;
 +use vllm_text::{TextRequest, TextRequestProcessor};
 
  use crate::DEFAULT_REQUEST_BODY_LIMIT_BYTES;
  use crate::error::{ApiError, text_submit_error};
-@@ -19,11 +19,13 @@ use crate::render::RenderState;
+@@ -20,11 +20,13 @@ use crate::render::RenderState;
  use crate::routes::inference::generate::{
      GenerateRequest, GenerateSamplingParams, validate_request_compat as validate_generate_request,
  };
@@ -346,7 +376,7 @@ index 6236cd907..f8403f5c6 100644
  use crate::utils::{resolve_request_context, unix_timestamp};
 
  pub(crate) fn build_router(state: Arc<RenderState>) -> Router {
-@@ -78,14 +80,14 @@ fn response_model(state: &RenderState, requested_model: Option<&str>) -> String
+@@ -79,14 +81,14 @@ fn response_model(state: &RenderState, requested_model: Option<&str>) -> String
  }
 
  fn lower_render_request(
@@ -364,7 +394,7 @@ index 6236cd907..f8403f5c6 100644
          .prepare(text_request)
          .map_err(|error| text_submit_error("failed to prepare render request", error))?;
      let token_ids = prepared.generate_request.prompt_token_ids;
-@@ -105,11 +107,16 @@ fn lower_render_request(
+@@ -106,6 +108,11 @@ fn lower_render_request(
          priority: text_request.priority,
          kv_transfer_params: None,
          ec_transfer_params: None,
@@ -375,6 +405,9 @@ index 6236cd907..f8403f5c6 100644
 +            .transpose()?,
          content_parts: None,
          return_token_ids: None,
+         // Carry what the chat route would pass to the engine, so the engine
+@@ -116,7 +123,7 @@ fn lower_render_request(
+         .then_some(text_request.reasoning_parser_kwargs),
          other: Default::default(),
      };
 -    validate_generate_request(&request, &state.served_model_names)?;
@@ -382,7 +415,7 @@ index 6236cd907..f8403f5c6 100644
      Ok(request)
  }
 
-@@ -129,7 +136,8 @@ async fn render_chat(
+@@ -136,7 +143,8 @@ async fn render_chat(
          .await
          .map_err(|error| ApiError::invalid_request(error.to_report_string(), None))?;
      Ok(Json(lower_render_request(
@@ -392,7 +425,7 @@ index 6236cd907..f8403f5c6 100644
          text_request,
          model,
          stream,
-@@ -154,10 +162,62 @@ async fn render_completion(
+@@ -161,10 +169,62 @@ async fn render_completion(
          tokenizer.as_ref(),
      )?;
      Ok(Json(vec![lower_render_request(
@@ -457,10 +490,10 @@ index 6236cd907..f8403f5c6 100644
 +    )?]))
 +}
 diff --git a/rust/src/server/src/routes/tests.rs b/rust/src/server/src/routes/tests.rs
-index faf509b8d..1fb5e8090 100644
+index 29a5a25f5fa..cb4c5e3162b 100644
 --- a/rust/src/server/src/routes/tests.rs
 +++ b/rust/src/server/src/routes/tests.rs
-@@ -1533,6 +1533,58 @@ async fn render_chat_response_can_be_submitted_to_generate_unchanged() {
+@@ -1588,6 +1588,58 @@ async fn render_chat_response_can_be_submitted_to_generate_unchanged() {
      engine_task.finish().await;
  }
 
@@ -519,33 +552,3 @@ index faf509b8d..1fb5e8090 100644
  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
  #[serial]
  async fn list_models_returns_configured_model() {
-diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
-index c1f5edd23..25de2e9ae 100644
---- a/rust/src/server/src/routes.rs
-+++ b/rust/src/server/src/routes.rs
-@@ -10,6 +10,7 @@ mod kv_event_sources;
- mod load;
- mod lora;
- mod metrics;
-+mod multimodal_features;
- pub(crate) mod openai;
- mod pause;
- mod profile;
-@@ -117,7 +118,16 @@ fn build_router_with_options(
-     }
-
-     if scale_out_endpoints_enabled {
--        router = router.route("/inference/v1/generate", post(inference::generate));
-+        router = router
-+            .route("/inference/v1/generate", post(inference::generate))
-+            .route(
-+                "/v1/chat/completions/render",
-+                post(render::serve_render_chat),
-+            )
-+            .route(
-+                "/v1/completions/render",
-+                post(render::serve_render_completion),
-+            );
-     } else {
-         info!("scale-out endpoints are disabled; pass --enable-scale-out to enable them");
-     }

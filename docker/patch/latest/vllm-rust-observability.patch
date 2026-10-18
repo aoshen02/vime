@@ -1,12 +1,11 @@
 diff --git a/rust/Cargo.lock b/rust/Cargo.lock
+index 9c7cc758f2d..fd0c23204d5 100644
 --- a/rust/Cargo.lock
 +++ b/rust/Cargo.lock
-@@ -2905,6 +2905,66 @@
-  "openssl-src",
-  "pkg-config",
+@@ -2919,6 +2919,66 @@ dependencies = [
   "vcpkg",
-+]
-+
+ ]
+
 +[[package]]
 +name = "opentelemetry"
 +version = "0.32.0"
@@ -65,15 +64,15 @@ diff --git a/rust/Cargo.lock b/rust/Cargo.lock
 + "portable-atomic",
 + "rand 0.9.5",
 + "thiserror 2.0.18",
- ]
- 
- [[package]]
-@@ -5189,6 +5249,17 @@
-  "syn 2.0.117",
-  "tempfile",
-  "tonic-build",
 +]
 +
+ [[package]]
+ name = "option-ext"
+ version = "0.2.0"
+@@ -5222,6 +5282,17 @@ dependencies = [
+  "tonic-build",
+ ]
+
 +[[package]]
 +name = "tonic-types"
 +version = "0.14.5"
@@ -83,10 +82,12 @@ diff --git a/rust/Cargo.lock b/rust/Cargo.lock
 + "prost",
 + "prost-types",
 + "tonic",
- ]
- 
++]
++
  [[package]]
-@@ -5831,6 +5902,8 @@
+ name = "tool-parser"
+ version = "1.2.0"
+@@ -5864,6 +5935,8 @@ dependencies = [
   "enum-as-inner",
   "expect-test",
   "futures",
@@ -95,7 +96,7 @@ diff --git a/rust/Cargo.lock b/rust/Cargo.lock
   "parking_lot",
   "rmp-serde",
   "serde",
-@@ -5947,6 +6020,10 @@
+@@ -5980,6 +6053,10 @@ dependencies = [
   "libc",
   "llm-multimodal",
   "openssl",
@@ -106,10 +107,19 @@ diff --git a/rust/Cargo.lock b/rust/Cargo.lock
   "prost",
   "prost-types",
   "rmp-serde",
+@@ -5997,6 +6074,7 @@ dependencies = [
+  "tls-listener",
+  "tokio",
+  "tokio-openssl",
++ "tokio-stream",
+  "tokio-util",
+  "tonic",
+  "tonic-health",
 diff --git a/rust/Cargo.toml b/rust/Cargo.toml
+index 57f680cc147..837891ddd88 100644
 --- a/rust/Cargo.toml
 +++ b/rust/Cargo.toml
-@@ -70,6 +70,10 @@
+@@ -70,6 +70,10 @@ ndarray = { version = "0.17", features = ["serde"] }
  openai-harmony = { package = "oss-harmony", git = "https://github.com/oss-harmony/harmony", tag = "v0.0.11", default-features = false }
  openai-protocol = "1.6.0"
  openssl = "0.10"
@@ -121,9 +131,10 @@ diff --git a/rust/Cargo.toml b/rust/Cargo.toml
  parquet = { version = "59.2.0", default-features = false, features = ["json", "snap", "zstd", "flate2", "flate2-rust_backend", "lz4", "brotli"] }
  paste = "1.0.15"
 diff --git a/rust/src/chat/src/lib.rs b/rust/src/chat/src/lib.rs
+index 5abdd36cc9f..1949caf1024 100644
 --- a/rust/src/chat/src/lib.rs
 +++ b/rust/src/chat/src/lib.rs
-@@ -201,6 +201,7 @@
+@@ -203,6 +203,7 @@ impl ChatRequestProcessor {
              add_special_tokens: request.add_special_tokens,
              data_parallel_rank: request.data_parallel_rank,
              session_id: request.session_id,
@@ -132,18 +143,19 @@ diff --git a/rust/src/chat/src/lib.rs b/rust/src/chat/src/lib.rs
              reasoning_parser_kwargs: ReasoningParserKwargs {
                  chat_template_kwargs,
 diff --git a/rust/src/chat/src/request.rs b/rust/src/chat/src/request.rs
+index b52e9fbc0b8..e1bacc6b018 100644
 --- a/rust/src/chat/src/request.rs
 +++ b/rust/src/chat/src/request.rs
 @@ -1,7 +1,7 @@
  // SPDX-License-Identifier: Apache-2.0
  // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- 
+
 -use std::collections::{HashMap, HashSet};
 +use std::collections::{BTreeMap, HashMap, HashSet};
- 
+
  use llm_multimodal::ImageDetail;
  use serde::{Deserialize, Serialize};
-@@ -593,6 +593,8 @@
+@@ -593,6 +593,8 @@ pub struct ChatRequest {
      /// Stable session identity shared by related requests.
      #[serde(default)]
      pub session_id: Option<String>,
@@ -152,7 +164,7 @@ diff --git a/rust/src/chat/src/request.rs b/rust/src/chat/src/request.rs
      /// LoRA adapter selected for this request.
      #[serde(default)]
      pub lora_request: Option<LoraRequest>,
-@@ -616,6 +618,7 @@
+@@ -616,6 +618,7 @@ impl ChatRequest {
              add_special_tokens: false,
              data_parallel_rank: None,
              session_id: None,
@@ -161,9 +173,10 @@ diff --git a/rust/src/chat/src/request.rs b/rust/src/chat/src/request.rs
          }
      }
 diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
+index 15a6160fda5..59e7440b02b 100644
 --- a/rust/src/cmd/src/cli.rs
 +++ b/rust/src/cmd/src/cli.rs
-@@ -31,8 +31,8 @@
+@@ -32,8 +32,8 @@ use vllm_managed_engine::ManagedEngineConfig;
  use vllm_managed_engine::cli::{ManagedEngineArgs, repartition_managed_engine_args};
  use vllm_server::{
      ApiServerOptions, ChatTemplateContentFormatOption, Config, CoordinatorMode, CorsConfig,
@@ -173,11 +186,22 @@ diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
 +    ParserSelection, RenderConfig, RendererSelection,
  };
  use vllm_text::backend::hf::HfOverrides;
- 
-@@ -435,6 +435,18 @@
+
+@@ -340,10 +340,6 @@ pub struct SharedRuntimeArgs {
+     #[serde(default)]
+     pub enable_log_requests: bool,
+
+-    #[arg(long, default_missing_value = "true", num_args = 0..=1)]
+-    #[serde(default)]
+-    pub enable_per_request_metrics: bool,
+-
+     /// Include prompt_tokens_details in usage when cached prompt tokens are
+     /// present.
+     #[arg(
+@@ -450,6 +446,18 @@ pub struct SharedRuntimeArgs {
      #[serde(default)]
      pub profiler_config: Option<ProfilerConfig>,
- 
+
 +    /// Target URL to which OpenTelemetry traces will be sent. Enables the Rust
 +    /// frontend trace exporter; also forwarded to the managed Python engine.
 +    #[arg(long)]
@@ -193,54 +217,61 @@ diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
      /// Unsupported Python vLLM frontend arguments recognized but not yet
      /// implemented in Rust.
      #[educe(Debug(ignore))]
-@@ -519,6 +531,7 @@
+@@ -534,6 +542,7 @@ impl SharedRuntimeArgs {
          let cors = self.cors_config();
          let tls = self.ssl.tls_config();
          let profiler = self.profiler();
 +        let observability = self.observability_config();
- 
+
          Config {
              transport_mode: TransportMode::Bootstrapped {
-@@ -561,6 +574,7 @@
+@@ -577,6 +586,7 @@ impl SharedRuntimeArgs {
              manages_engine: false,
              keep_alive_timeout,
              profiler,
 +            observability,
          }
      }
- 
-@@ -584,6 +598,7 @@
+
+@@ -600,6 +610,7 @@ impl SharedRuntimeArgs {
          let cors = self.cors_config();
          let tls = self.ssl.tls_config();
          let profiler = self.profiler();
 +        let observability = self.observability_config();
- 
+
          Config {
              transport_mode: TransportMode::HandshakeOwner {
-@@ -622,6 +637,7 @@
+@@ -639,13 +650,13 @@ impl SharedRuntimeArgs {
              manages_engine,
              keep_alive_timeout,
              profiler,
 +            observability,
          }
      }
- 
-@@ -643,6 +659,14 @@
-             allow_methods: self.allowed_methods.0.clone(),
-             allow_headers: self.allowed_headers.0.clone(),
+
+     fn api_server_options(&self) -> ApiServerOptions {
+         ApiServerOptions {
+             enable_log_requests: self.enable_log_requests,
+-            enable_per_request_metrics: self.enable_per_request_metrics,
+             enable_prompt_tokens_details: self.enable_prompt_tokens_details,
+             enable_per_request_metrics: self.enable_per_request_metrics,
+             enable_request_id_headers: self.enable_request_id_headers,
+@@ -663,6 +674,14 @@ impl SharedRuntimeArgs {
              allow_credentials: self.allow_credentials,
-+        }
-+    }
+         }
+     }
 +    /// Build the observability config. Public so the managed `serve` path can
 +    /// validate it before spawning the Python engine.
 +    pub fn observability_config(&self) -> ObservabilityConfig {
 +        ObservabilityConfig {
 +            otlp_traces_endpoint: self.otlp_traces_endpoint.clone(),
 +            collect_detailed_traces: self.collect_detailed_traces.clone(),
-         }
-     }
++        }
++    }
  }
-@@ -839,6 +863,8 @@
+
+ fn default_engine_ready_timeout_secs() -> u64 {
+@@ -863,6 +882,8 @@ impl ServeArgs {
              self.runtime.revision.clone(),
              self.runtime.max_logprobs,
              profiler_config,
@@ -250,9 +281,18 @@ diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
              self.runtime.language_model_only,
              self.runtime.disable_log_stats,
 diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
+index ca4a7801da0..dec8ab962da 100644
 --- a/rust/src/cmd/src/cli/tests.rs
 +++ b/rust/src/cmd/src/cli/tests.rs
-@@ -228,6 +228,8 @@
+@@ -198,7 +198,6 @@ fn serve_args_forward_python_flags_with_separator() {
+                         lora_modules: [],
+                         chat_template_content_format: Auto,
+                         enable_log_requests: false,
+-                        enable_per_request_metrics: false,
+                         enable_prompt_tokens_details: false,
+                         enable_per_request_metrics: false,
+                         enable_request_id_headers: false,
+@@ -228,6 +227,8 @@ fn serve_args_forward_python_flags_with_separator() {
                              ssl_ciphers: None,
                          },
                          profiler_config: None,
@@ -261,7 +301,15 @@ diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
                      },
                      managed_engine: ManagedEngineArgs {
                          python: "../vllm/.venv/bin/python",
-@@ -1070,6 +1072,8 @@
+@@ -1102,7 +1103,6 @@ fn frontend_args_accept_json() {
+                         lora_modules: [],
+                         chat_template_content_format: Auto,
+                         enable_log_requests: false,
+-                        enable_per_request_metrics: false,
+                         enable_prompt_tokens_details: false,
+                         enable_per_request_metrics: false,
+                         enable_request_id_headers: false,
+@@ -1132,6 +1132,8 @@ fn frontend_args_accept_json() {
                              ssl_ciphers: None,
                          },
                          profiler_config: None,
@@ -270,7 +318,15 @@ diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
                      },
                  },
              ),
-@@ -1743,6 +1747,8 @@
+@@ -1775,7 +1777,6 @@ fn serve_args_accept_handshake_aliases() {
+                         lora_modules: [],
+                         chat_template_content_format: Auto,
+                         enable_log_requests: false,
+-                        enable_per_request_metrics: false,
+                         enable_prompt_tokens_details: false,
+                         enable_per_request_metrics: false,
+                         enable_request_id_headers: false,
+@@ -1805,6 +1806,8 @@ fn serve_args_accept_handshake_aliases() {
                              ssl_ciphers: None,
                          },
                          profiler_config: None,
@@ -279,7 +335,15 @@ diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
                      },
                      managed_engine: ManagedEngineArgs {
                          python: "python3",
-@@ -1896,6 +1902,10 @@
+@@ -1934,7 +1937,6 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
+             stream_interval: 1,
+             api_server_options: ApiServerOptions {
+                 enable_log_requests: false,
+-                enable_per_request_metrics: false,
+                 enable_prompt_tokens_details: false,
+                 enable_per_request_metrics: false,
+                 enable_request_id_headers: false,
+@@ -1958,6 +1960,10 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
              manages_engine: true,
              keep_alive_timeout: 5s,
              profiler: None,
@@ -290,7 +354,15 @@ diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
          }
      "#]]
      .assert_debug_eq(&Config {
-@@ -1992,6 +2002,10 @@
+@@ -2030,7 +2036,6 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
+             stream_interval: 1,
+             api_server_options: ApiServerOptions {
+                 enable_log_requests: false,
+-                enable_per_request_metrics: false,
+                 enable_prompt_tokens_details: false,
+                 enable_per_request_metrics: false,
+                 enable_request_id_headers: false,
+@@ -2054,6 +2059,10 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
              manages_engine: true,
              keep_alive_timeout: 5s,
              profiler: None,
@@ -301,7 +373,15 @@ diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
          }
      "#]]
      .assert_debug_eq(&config);
-@@ -2132,6 +2146,10 @@
+@@ -2170,7 +2179,6 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
+             stream_interval: 1,
+             api_server_options: ApiServerOptions {
+                 enable_log_requests: false,
+-                enable_per_request_metrics: false,
+                 enable_prompt_tokens_details: false,
+                 enable_per_request_metrics: false,
+                 enable_request_id_headers: false,
+@@ -2194,6 +2202,10 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
              manages_engine: false,
              keep_alive_timeout: 5s,
              profiler: None,
@@ -312,7 +392,7 @@ diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
          }
      "#]]
      .assert_debug_eq(&config);
-@@ -2312,3 +2330,106 @@
+@@ -2374,3 +2386,106 @@ fn serve_revision_reaches_frontend_and_managed_engine() {
      let engine = args.to_managed_engine_config(1234);
      assert!(engine.python_args.windows(2).any(|args| args == ["--revision", "release"]));
  }
@@ -420,12 +500,13 @@ diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
 +    .assert_debug_eq(&config.python_args);
 +}
 diff --git a/rust/src/cmd/src/cli/unsupported.rs b/rust/src/cmd/src/cli/unsupported.rs
+index 02e1377ff01..189cbe61fc2 100644
 --- a/rust/src/cmd/src/cli/unsupported.rs
 +++ b/rust/src/cmd/src/cli/unsupported.rs
-@@ -351,14 +351,6 @@
+@@ -351,14 +351,6 @@ pub struct EngineUnsupportedArgs {
      #[arg(long)]
      pub default_mm_loras: Option<Unsupported>,
- 
+
 -    /// Target URL to which OpenTelemetry traces will be sent.
 -    #[arg(long)]
 -    pub otlp_traces_endpoint: Option<Unsupported>,
@@ -434,13 +515,14 @@ diff --git a/rust/src/cmd/src/cli/unsupported.rs b/rust/src/cmd/src/cli/unsuppor
 -    #[arg(long)]
 -    pub collect_detailed_traces: Option<Unsupported>,
 -
-     /// The interval (or buffer size) for streaming in terms of token length.
-     #[arg(long)]
-     pub stream_interval: Option<Unsupported>,
+     /// Maximum number of requests that can be in-flight (waiting or running)
+     /// at the same time. When the limit is reached, new requests are rejected
+     /// with HTTP 503 so the client can retry on another instance.
 diff --git a/rust/src/cmd/src/main.rs b/rust/src/cmd/src/main.rs
+index b9535561e41..73da59898a9 100644
 --- a/rust/src/cmd/src/main.rs
 +++ b/rust/src/cmd/src/main.rs
-@@ -121,6 +121,10 @@
+@@ -121,6 +121,10 @@ async fn async_main(cli: Cli) -> Result<()> {
              vllm_bench::run(bench_args).await
          }
          Command::Serve(args) => {
@@ -449,12 +531,13 @@ diff --git a/rust/src/cmd/src/main.rs b/rust/src/cmd/src/main.rs
 +                .validate()
 +                .context("invalid observability configuration")?;
              let handshake_port = args.managed_engine.resolve_handshake_port()?;
- 
+
              if args.managed_engine.data_parallel_size_local == Some(0) {
 diff --git a/rust/src/llm/Cargo.toml b/rust/src/llm/Cargo.toml
+index 982fd32dfda..512f4aae11d 100644
 --- a/rust/src/llm/Cargo.toml
 +++ b/rust/src/llm/Cargo.toml
-@@ -12,6 +12,7 @@
+@@ -12,6 +12,7 @@ easy-ext.workspace = true
  enum-as-inner.workspace = true
  futures.workspace = true
  parking_lot.workspace = true
@@ -462,45 +545,46 @@ diff --git a/rust/src/llm/Cargo.toml b/rust/src/llm/Cargo.toml
  serde.workspace = true
  serde_json.workspace = true
  thiserror.workspace = true
-@@ -23,6 +24,7 @@
+@@ -23,6 +24,7 @@ vllm-engine-core-client.workspace = true
  vllm-metrics.workspace = true
- 
+
  [dev-dependencies]
 +opentelemetry_sdk.workspace = true
  anyhow.workspace = true
  bytes.workspace = true
  clap.workspace = true
 diff --git a/rust/src/llm/src/lib.rs b/rust/src/llm/src/lib.rs
+index 9e71669c44b..6fd396f8e52 100644
 --- a/rust/src/llm/src/lib.rs
 +++ b/rust/src/llm/src/lib.rs
-@@ -10,6 +10,7 @@
+@@ -12,6 +12,7 @@ mod log_stats;
  mod output;
  mod request;
  mod request_metrics;
 +mod request_trace;
- 
+
  pub use error::{Error, Result};
  pub use output::{
-@@ -36,6 +37,7 @@
-     randomize_request_id: bool,
+@@ -39,6 +40,7 @@ pub struct Llm {
+     stream_interval: NonZeroU32,
      stats_logger: Option<StatsLogger>,
      inflight: InflightRequests,
 +    tracing_enabled: bool,
  }
- 
+
  impl Llm {
-@@ -47,6 +49,7 @@
-             randomize_request_id: true,
+@@ -51,6 +53,7 @@ impl Llm {
+             stream_interval: NonZeroU32::MIN,
              stats_logger: None,
              inflight: InflightRequests::new(),
 +            tracing_enabled: false,
          }
      }
- 
-@@ -71,6 +74,11 @@
+
+@@ -83,6 +86,11 @@ impl Llm {
          self
      }
- 
+
 +    pub fn with_tracing(mut self, enabled: bool) -> Self {
 +        self.tracing_enabled = enabled;
 +        self
@@ -509,10 +593,10 @@ diff --git a/rust/src/llm/src/lib.rs b/rust/src/llm/src/lib.rs
      /// Expose the underlying engine-core client for low-level utility/admin
      /// calls.
      pub fn engine_core_client(&self) -> &EngineCoreClient {
-@@ -80,7 +88,11 @@
-     /// Submit one tokenized generate request and return a per-request output
-     /// stream.
-     pub async fn generate(&self, req: GenerateRequest) -> Result<GenerateOutputStream> {
+@@ -101,7 +109,11 @@ impl Llm {
+         req.sampling_params.stream_interval =
+             (stream_interval > NonZeroU32::MIN).then_some(stream_interval);
+
 -        let prepared = req.prepare(self.randomize_request_id)?;
 +        let mut prepared = req.prepare(self.randomize_request_id)?;
 +        let request_trace = self
@@ -522,56 +606,56 @@ diff --git a/rust/src/llm/src/lib.rs b/rust/src/llm/src/lib.rs
          let prompt_token_ids = prepared.prompt_token_ids().into();
          let external_request_id = prepared
              .engine_request
-@@ -115,6 +127,7 @@
+@@ -136,6 +148,7 @@ impl Llm {
              stream,
              request_metrics,
              guard,
 +            request_trace,
          ))
      }
- 
+
 diff --git a/rust/src/llm/src/output.rs b/rust/src/llm/src/output.rs
+index a1f176f6b1f..563a78f4a5f 100644
 --- a/rust/src/llm/src/output.rs
 +++ b/rust/src/llm/src/output.rs
-@@ -255,6 +255,7 @@
-     pending_prompt_info: Option<GeneratePromptInfo>,
-     raw_stream: EngineCoreOutputStream,
-     request_metrics: RequestMetricsTracker,
+@@ -313,6 +313,7 @@ pub struct GenerateOutputStream {
+     /// (weight version, first output-token index) for each span.
+     weight_version_starts: Vec<(Arc<str>, usize)>,
+     num_output_tokens: usize,
 +    request_trace: Option<crate::request_trace::RequestTrace>,
      /// Removes this request's external→internal tracking edge on drop. Held for
      /// its `Drop` side effect only; never read directly.
      _request_guard: RequestGuard,
-@@ -268,6 +269,7 @@
+@@ -326,6 +327,7 @@ impl GenerateOutputStream {
          raw_stream: EngineCoreOutputStream,
          request_metrics: RequestMetricsTracker,
          request_guard: RequestGuard,
 +        request_trace: Option<crate::request_trace::RequestTrace>,
      ) -> Self {
          Self {
-             pending_prompt_info: Some(GeneratePromptInfo {
-@@ -277,6 +279,7 @@
-             }),
-             raw_stream,
+             pending_prompt_info: Some(Box::new(GeneratePromptInfo {
+@@ -337,6 +339,7 @@ impl GenerateOutputStream {
              request_metrics,
+             weight_version_starts: Vec::new(),
+             num_output_tokens: 0,
 +            request_trace,
              _request_guard: request_guard,
          }
      }
-@@ -334,7 +337,12 @@
- 
+@@ -412,7 +415,11 @@ impl GenerateOutputStream {
+
          let finish_reason = finish_reason_from_engine(raw.finish_reason, raw.stop_reason);
          if let Some(finish_reason) = finish_reason.as_ref() {
 -            self.request_metrics.record_finished(received_at, finish_reason.clone());
-+            let state = self.as_mut().get_mut();
-+            state.request_metrics.record_finished(
++            self.request_metrics.record_finished(
 +                received_at,
 +                finish_reason.clone(),
-+                state.request_trace.as_mut(),
++                self.request_trace.as_mut(),
 +            );
          }
-         let request_timings = finish_reason.as_ref().map(|_| self.request_metrics.snapshot());
- 
-@@ -381,9 +389,11 @@
+         let weight_versions = if finish_reason.is_some() {
+             self.weight_version_spans()
+@@ -499,9 +506,11 @@ impl Drop for GenerateOutputStream {
              AbortCause::DroppedStream => FinishReason::Abort,
              AbortCause::StopStringMatched => FinishReason::Stop(None),
          };
@@ -585,20 +669,21 @@ diff --git a/rust/src/llm/src/output.rs b/rust/src/llm/src/output.rs
 +        );
      }
  }
- 
+
 diff --git a/rust/src/llm/src/request_metrics.rs b/rust/src/llm/src/request_metrics.rs
+index ed463cc29b7..ef1fd9e57c3 100644
 --- a/rust/src/llm/src/request_metrics.rs
 +++ b/rust/src/llm/src/request_metrics.rs
-@@ -2,6 +2,8 @@
- // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- 
+@@ -3,6 +3,8 @@
+
  use std::time::{SystemTime, UNIX_EPOCH};
-+
+
 +use opentelemetry::KeyValue;
- 
++
  use vllm_engine_core_client::protocol::output::{
      EngineCoreEvent, EngineCoreEventType, EngineCoreOutput,
-@@ -184,7 +186,12 @@
+ };
+@@ -197,7 +199,12 @@ impl RequestMetricsTracker {
      ///
      /// Original Python finished-request stats:
      /// <https://github.com/vllm-project/vllm/blob/bc2c0c86efb28e77677a3cfb8687e976914a313a/vllm/v1/metrics/stats.py#L222-L237>
@@ -612,15 +697,15 @@ diff --git a/rust/src/llm/src/request_metrics.rs b/rust/src/llm/src/request_metr
          let prefill_kv_computed_tokens =
              self.prompt_len.saturating_sub(self.latest_num_cached_tokens);
          let e2e_latency_seconds = received_at - self.arrival_time;
-@@ -196,6 +203,7 @@
+@@ -209,6 +216,7 @@ impl RequestMetricsTracker {
              0.0
          };
- 
+
 +        let aborted = matches!(finish_reason, FinishReason::Abort);
          self.record_request_success(finish_reason);
- 
-         self.handles.request_prompt_tokens.observe(self.prompt_len as f64);
-@@ -217,6 +225,22 @@
+         if self.is_corrupted {
+             self.handles.corrupted_requests.inc();
+@@ -233,6 +241,22 @@ impl RequestMetricsTracker {
          self.handles
              .request_time_per_output_token_seconds
              .observe(time_per_output_token_seconds);
@@ -640,10 +725,10 @@ diff --git a/rust/src/llm/src/request_metrics.rs b/rust/src/llm/src/request_metr
 +                KeyValue::new("gen_ai.latency.time_in_model_decode", decode_time_seconds),
 +            ]);
 +        }
- 
+
          if let Some(events) = &self.handles.events {
              let queue_time_seconds = diff_or_zero(self.scheduled_ts, self.queued_ts);
-@@ -227,6 +251,19 @@
+@@ -243,6 +267,19 @@ impl RequestMetricsTracker {
              events.request_queue_time_seconds.observe(queue_time_seconds);
              events.request_prefill_time_seconds.observe(prefill_time_seconds);
              events.request_inference_time_seconds.observe(inference_time_seconds);
@@ -662,9 +747,10 @@ diff --git a/rust/src/llm/src/request_metrics.rs b/rust/src/llm/src/request_metr
 +            trace.finish(aborted);
          }
      }
- 
+
 diff --git a/rust/src/llm/src/request_trace.rs b/rust/src/llm/src/request_trace.rs
 new file mode 100644
+index 00000000000..91e66cb8355
 --- /dev/null
 +++ b/rust/src/llm/src/request_trace.rs
 @@ -0,0 +1,215 @@
@@ -884,9 +970,10 @@ new file mode 100644
 +    }
 +}
 diff --git a/rust/src/managed-engine/src/cli.rs b/rust/src/managed-engine/src/cli.rs
+index 0a81ae598e9..8aeae9067ae 100644
 --- a/rust/src/managed-engine/src/cli.rs
 +++ b/rust/src/managed-engine/src/cli.rs
-@@ -87,6 +87,8 @@
+@@ -87,6 +87,8 @@ impl ManagedEngineArgs {
          revision: Option<String>,
          max_logprobs: Option<i32>,
          profiler_config: Option<String>,
@@ -895,11 +982,10 @@ diff --git a/rust/src/managed-engine/src/cli.rs b/rust/src/managed-engine/src/cl
          reasoning_parser: Option<&str>,
          language_model_only: bool,
          disable_log_stats: bool,
-@@ -112,6 +114,14 @@
-         if let Some(profiler_config) = profiler_config {
+@@ -113,6 +115,14 @@ impl ManagedEngineArgs {
              python_args.push("--profiler-config".to_string());
              python_args.push(profiler_config);
-+        }
+         }
 +        if let Some(otlp_traces_endpoint) = otlp_traces_endpoint {
 +            python_args.push("--otlp-traces-endpoint".to_string());
 +            python_args.push(otlp_traces_endpoint);
@@ -907,13 +993,15 @@ diff --git a/rust/src/managed-engine/src/cli.rs b/rust/src/managed-engine/src/cl
 +        if let Some(collect_detailed_traces) = collect_detailed_traces {
 +            python_args.push("--collect-detailed-traces".to_string());
 +            python_args.push(collect_detailed_traces);
-         }
++        }
          if let Some(reasoning_parser) = reasoning_parser {
              python_args.push("--reasoning-parser".to_string());
+             python_args.push(reasoning_parser.to_string());
 diff --git a/rust/src/server/Cargo.toml b/rust/src/server/Cargo.toml
+index b7b00398ced..ca533797aef 100644
 --- a/rust/src/server/Cargo.toml
 +++ b/rust/src/server/Cargo.toml
-@@ -20,6 +20,9 @@
+@@ -20,6 +20,9 @@ itertools.workspace = true
  libc.workspace = true
  llm-multimodal.workspace = true
  openssl.workspace = true
@@ -923,7 +1011,7 @@ diff --git a/rust/src/server/Cargo.toml b/rust/src/server/Cargo.toml
  prost.workspace = true
  prost-types.workspace = true
  rmp-serde.workspace = true
-@@ -62,9 +65,12 @@
+@@ -61,9 +64,12 @@ bytes.workspace = true
  clap.workspace = true
  expect-test.workspace = true
  prost.workspace = true
@@ -937,26 +1025,33 @@ diff --git a/rust/src/server/Cargo.toml b/rust/src/server/Cargo.toml
  vllm-engine-core-client = { workspace = true, features = ["test-util"] }
  vllm-tokenizer = { workspace = true, features = ["test-utils"] }
 diff --git a/rust/src/server/examples/external_engine_openai_qwen.rs b/rust/src/server/examples/external_engine_openai_qwen.rs
+index c3b6625d257..c35a5e5dcbb 100644
 --- a/rust/src/server/examples/external_engine_openai_qwen.rs
 +++ b/rust/src/server/examples/external_engine_openai_qwen.rs
-@@ -90,6 +90,7 @@
+@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
          manages_engine: false,
          keep_alive_timeout: Duration::from_secs(5),
          profiler: None,
 +        observability: Default::default(),
      };
- 
+
      let bind_address = format!("127.0.0.1:{port}");
 diff --git a/rust/src/server/src/config.rs b/rust/src/server/src/config.rs
+index fb1cec25a34..726a75daba8 100644
 --- a/rust/src/server/src/config.rs
 +++ b/rust/src/server/src/config.rs
-@@ -205,6 +205,31 @@
-         }
-         serde_json::from_str(value)
-             .map_err(|e| format!("expected `name=path` or a JSON object: {e}"))
-+    }
-+}
-+
+@@ -54,7 +54,6 @@ pub enum CoordinatorMode {
+ pub struct ApiServerOptions {
+     /// Log a summary line for each completed request.
+     pub enable_log_requests: bool,
+-    pub enable_per_request_metrics: bool,
+     /// When `true`, include prompt token cache details in response usage.
+     pub enable_prompt_tokens_details: bool,
+     /// Include request timing metrics in OpenAI chat and completion responses.
+@@ -211,6 +210,31 @@ impl FromStr for LoraModulePath {
+     }
+ }
+
 +/// OpenTelemetry / observability settings, mirroring Python's
 +/// `ObservabilityConfig`. A `None` endpoint disables tracing.
 +#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
@@ -979,19 +1074,22 @@ diff --git a/rust/src/server/src/config.rs b/rust/src/server/src/config.rs
 +            crate::otel::validate_protocol_env()?;
 +        }
 +        Ok(())
-     }
- }
- 
-@@ -286,6 +311,8 @@
++    }
++}
++
+ /// Normalized runtime configuration for the minimal OpenAI-compatible server.
+ #[derive(Educe, Clone, PartialEq, Eq, Serialize)]
+ #[educe(Debug)]
+@@ -294,6 +318,8 @@ pub struct Config {
      /// Profiler mode that registers `/start_profile` and `/stop_profile`
      /// routes when present.
      pub profiler: Option<String>,
 +    /// OpenTelemetry / observability settings (OTLP trace export).
 +    pub observability: ObservabilityConfig,
  }
- 
+
  impl Config {
-@@ -297,6 +324,7 @@
+@@ -310,6 +336,7 @@ impl Config {
          if let Some(tls) = &self.tls {
              tls.validate()?;
          }
@@ -1000,32 +1098,33 @@ diff --git a/rust/src/server/src/config.rs b/rust/src/server/src/config.rs
              && max_logprobs < -1
          {
 diff --git a/rust/src/server/src/grpc/convert.rs b/rust/src/server/src/grpc/convert.rs
+index 6d09676368a..8c3fed4ebe5 100644
 --- a/rust/src/server/src/grpc/convert.rs
 +++ b/rust/src/server/src/grpc/convert.rs
-@@ -136,6 +136,7 @@
+@@ -138,6 +138,7 @@ pub fn to_text_request(
          add_special_tokens: true,
          data_parallel_rank: None,
          session_id,
 +        trace_headers: None,
          kv_hints,
-         reasoning_parser_kwargs: Default::default(),
-         reasoning_ended: None,
+         reasoning_parser_kwargs: ReasoningParserKwargs {
+             chat_template_kwargs: reasoning_gate
 diff --git a/rust/src/server/src/grpc/inference.rs b/rust/src/server/src/grpc/inference.rs
+index fae2794ba33..c7ffe71068b 100644
 --- a/rust/src/server/src/grpc/inference.rs
 +++ b/rust/src/server/src/grpc/inference.rs
 @@ -1,6 +1,7 @@
  // SPDX-License-Identifier: Apache-2.0
  // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- 
+
 +use std::collections::BTreeMap;
  use std::pin::Pin;
  use std::sync::Arc;
  use std::time::Instant;
-@@ -23,6 +24,23 @@
- pub(crate) type InferenceGrpcService = InferenceServer<InferenceServiceImpl>;
- 
+@@ -25,6 +26,23 @@ pub(crate) type InferenceGrpcService = InferenceServer<InferenceServiceImpl>;
+
  const DATA_PARALLEL_RANK_METADATA_KEY: &str = "x-data-parallel-rank";
-+
+
 +fn trace_headers_from_metadata<Message>(
 +    request: &Request<Message>,
 +) -> Option<BTreeMap<String, String>> {
@@ -1042,10 +1141,11 @@ diff --git a/rust/src/server/src/grpc/inference.rs b/rust/src/server/src/grpc/in
 +        .collect();
 +    (!headers.is_empty()).then_some(headers)
 +}
- 
++
  /// gRPC inference service backed by the shared application state.
  pub struct InferenceServiceImpl {
-@@ -223,13 +241,15 @@
+     state: Arc<AppState>,
+@@ -224,13 +242,15 @@ impl pb::inference_server::Inference for InferenceServiceImpl {
          request: Request<pb::GenerateRequest>,
      ) -> Result<Response<pb::GenerateResponse>, Status> {
          let data_parallel_rank = data_parallel_rank_from_metadata(&request)?;
@@ -1059,10 +1159,10 @@ diff --git a/rust/src/server/src/grpc/inference.rs b/rust/src/server/src/grpc/in
              started_at,
          } = self.prepare_request(proto_req, data_parallel_rank, false, "Generate").await?;
 +        text_request.trace_headers = trace_headers;
- 
+
          let stream = self
              .state
-@@ -285,15 +305,17 @@
+@@ -287,15 +307,17 @@ impl pb::inference_server::Inference for InferenceServiceImpl {
          request: Request<pb::GenerateRequest>,
      ) -> Result<Response<Self::GenerateStreamStream>, Status> {
          let data_parallel_rank = data_parallel_rank_from_metadata(&request)?;
@@ -1078,13 +1178,14 @@ diff --git a/rust/src/server/src/grpc/inference.rs b/rust/src/server/src/grpc/in
              .prepare_request(proto_req, data_parallel_rank, true, "GenerateStream")
              .await?;
 +        text_request.trace_headers = trace_headers;
- 
+
          let stream = self
              .state
 diff --git a/rust/src/server/src/lib.rs b/rust/src/server/src/lib.rs
+index d5999cd3e78..0630c4f429f 100644
 --- a/rust/src/server/src/lib.rs
 +++ b/rust/src/server/src/lib.rs
-@@ -9,6 +9,7 @@
+@@ -9,6 +9,7 @@ mod grpc;
  mod listener;
  mod lora;
  mod middleware;
@@ -1092,7 +1193,7 @@ diff --git a/rust/src/server/src/lib.rs b/rust/src/server/src/lib.rs
  mod render;
  mod routes;
  mod runtime;
-@@ -29,7 +30,7 @@
+@@ -29,7 +30,7 @@ use axum::body::Body;
  use axum::http::Request;
  pub use config::{
      ApiServerOptions, Config, CoordinatorMode, CorsConfig, DEFAULT_KEEP_ALIVE_TIMEOUT,
@@ -1101,34 +1202,33 @@ diff --git a/rust/src/server/src/lib.rs b/rust/src/server/src/lib.rs
  };
  use hyper::body::Incoming;
  use hyper::server::conn::http1;
-@@ -123,7 +124,9 @@
-     .await
-     .context("failed to connect to engine core")?;
- 
--    let llm = Llm::new(client).with_log_stats(!config.disable_log_stats);
-+    let llm = Llm::new(client)
-+        .with_log_stats(!config.disable_log_stats)
+@@ -125,7 +126,8 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
+
+     let llm = Llm::new(client)
+         .with_log_stats(!config.disable_log_stats)
+-        .with_stream_interval(config.stream_interval);
++        .with_stream_interval(config.stream_interval)
 +        .with_tracing(config.observability.otlp_traces_endpoint.is_some());
      let text = TextLlm::new(llm, text_backend).with_max_logprobs(config.max_logprobs);
- 
+
      let chat = ChatLlm::new(text, chat_backend)
-@@ -260,6 +263,9 @@
+@@ -262,6 +264,9 @@ where
          None
      };
- 
+
 +    // Init after all fallible setup, so an early return has no provider to leak.
 +    let tracer_provider = otel::init_tracer_provider(&config.observability)?;
 +
      let scheme = if tls_config.is_some() {
          "https"
      } else {
-@@ -384,13 +390,21 @@
+@@ -386,13 +391,21 @@ where
      };
- 
+
      let (http_res, grpc_res) = tokio::join!(http_fut, grpc_fut);
 -    http_res.and(grpc_res)?;
 +    let serve_result = http_res.and(grpc_res);
- 
+
      let shutdown_deadline = shutdown_deadline
          .get()
          .copied()
@@ -1144,22 +1244,24 @@ diff --git a/rust/src/server/src/lib.rs b/rust/src/server/src/lib.rs
 +
 +    serve_result.and(state_result)
  }
- 
+
  /// Per-connection timeouts applied while serving HTTP/HTTPS.
 diff --git a/rust/src/server/src/middleware/auth.rs b/rust/src/server/src/middleware/auth.rs
+index 93791fff623..ccdf58cbcec 100644
 --- a/rust/src/server/src/middleware/auth.rs
 +++ b/rust/src/server/src/middleware/auth.rs
-@@ -13,7 +13,7 @@
- 
+@@ -13,7 +13,7 @@ use serde_json::json;
+
  use crate::state::{ApiKeyHash, AppState, hash_api_key};
- 
+
 -const GUARDED_PREFIXES: &[&str] = &["/v1", "/v2", "/inference"];
 +const GUARDED_PREFIXES: &[&str] = &["/v1", "/v2", "/inference", "/dumper"];
- 
+
  /// Authenticate guarded HTTP routes with an OpenAI-compatible bearer token.
  ///
 diff --git a/rust/src/server/src/otel.rs b/rust/src/server/src/otel.rs
 new file mode 100644
+index 00000000000..7f6eddbd22e
 --- /dev/null
 +++ b/rust/src/server/src/otel.rs
 @@ -0,0 +1,247 @@
@@ -1411,9 +1513,10 @@ new file mode 100644
 +    }
 +}
 diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
+index a86d7bbc25a..027ba1c5926 100644
 --- a/rust/src/server/src/routes.rs
 +++ b/rust/src/server/src/routes.rs
-@@ -16,6 +16,7 @@
+@@ -16,6 +16,7 @@ mod profile;
  pub(super) mod render;
  mod server_info;
  mod sleep;
@@ -1421,15 +1524,15 @@ diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
  mod tokenize;
  mod version;
  mod weight_checker;
-@@ -56,6 +57,7 @@
+@@ -75,6 +76,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
          server_dev_mode_enabled(),
          runtime_lora_updating_enabled(),
          scale_out_endpoints_enabled,
 +        std::env::var("DUMPER_SERVER_PORT").ok().as_deref() == Some("reuse"),
      )
  }
- 
-@@ -70,7 +72,13 @@
+
+@@ -89,7 +91,13 @@ fn build_router_with_dev_mode_and_lora(
      dev_mode_enabled: bool,
      runtime_lora_updating_enabled: bool,
  ) -> Router {
@@ -1442,18 +1545,18 @@ diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
 +        false,
 +    )
  }
- 
+
  #[cfg(test)]
-@@ -78,7 +86,7 @@
+@@ -97,7 +105,7 @@ fn build_router_with_scale_out_endpoints(
      state: Arc<AppState>,
      scale_out_endpoints_enabled: bool,
  ) -> Router {
 -    build_router_with_options(state, false, false, scale_out_endpoints_enabled)
 +    build_router_with_options(state, false, false, scale_out_endpoints_enabled, false)
  }
- 
+
  fn build_router_with_options(
-@@ -86,6 +94,7 @@
+@@ -105,6 +113,7 @@ fn build_router_with_options(
      dev_mode_enabled: bool,
      runtime_lora_updating_enabled: bool,
      scale_out_endpoints_enabled: bool,
@@ -1461,10 +1564,10 @@ diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
  ) -> Router {
      let mut router = Router::new()
          // Health & monitoring
-@@ -103,6 +112,10 @@
+@@ -122,6 +131,10 @@ fn build_router_with_options(
          .route("/tokenize", post(tokenize::tokenize))
          .route("/detokenize", post(tokenize::detokenize));
- 
+
 +    if dumper_enabled {
 +        router = router.route("/dumper/{action}", post(tensor_dump::control));
 +    }
@@ -1473,31 +1576,34 @@ diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
          router = router.route("/inference/v1/generate", post(inference::generate));
      } else {
 diff --git a/rust/src/server/src/routes/inference/generate/convert.rs b/rust/src/server/src/routes/inference/generate/convert.rs
+index cd65682f6cb..092361f3424 100644
 --- a/rust/src/server/src/routes/inference/generate/convert.rs
 +++ b/rust/src/server/src/routes/inference/generate/convert.rs
-@@ -84,6 +84,7 @@
+@@ -82,6 +82,7 @@ pub(super) fn prepare_generate_request(
          add_special_tokens: false,
          data_parallel_rank: ctx.data_parallel_rank,
          session_id: ctx.session_id,
 +        trace_headers: ctx.trace_headers,
          kv_hints: None,
-         reasoning_parser_kwargs: Default::default(),
-         reasoning_ended: None,
+         reasoning_parser_kwargs: request.reasoning_parser_kwargs.unwrap_or_default(),
+         reasoning_ended: request.reasoning_ended,
 diff --git a/rust/src/server/src/routes/openai/chat_completions/convert.rs b/rust/src/server/src/routes/openai/chat_completions/convert.rs
+index 30c4fc8ad24..84d7e43295a 100644
 --- a/rust/src/server/src/routes/openai/chat_completions/convert.rs
 +++ b/rust/src/server/src/routes/openai/chat_completions/convert.rs
-@@ -201,6 +201,7 @@
+@@ -210,6 +210,7 @@ pub(super) fn prepare_chat_request(
          add_special_tokens: request.add_special_tokens,
          data_parallel_rank: ctx.data_parallel_rank,
          session_id,
 +        trace_headers: ctx.trace_headers,
          lora_request: lora_resolution.lora_request.clone(),
      };
- 
+
 diff --git a/rust/src/server/src/routes/openai/completions/convert.rs b/rust/src/server/src/routes/openai/completions/convert.rs
+index c75cd8da1db..07d5c53099d 100644
 --- a/rust/src/server/src/routes/openai/completions/convert.rs
 +++ b/rust/src/server/src/routes/openai/completions/convert.rs
-@@ -157,6 +157,7 @@
+@@ -165,6 +165,7 @@ pub(super) fn prepare_completion_request(
          add_special_tokens: request.add_special_tokens,
          data_parallel_rank: ctx.data_parallel_rank,
          session_id,
@@ -1507,6 +1613,7 @@ diff --git a/rust/src/server/src/routes/openai/completions/convert.rs b/rust/src
          reasoning_ended: None,
 diff --git a/rust/src/server/src/routes/tensor_dump.rs b/rust/src/server/src/routes/tensor_dump.rs
 new file mode 100644
+index 00000000000..522ddfe2385
 --- /dev/null
 +++ b/rust/src/server/src/routes/tensor_dump.rs
 @@ -0,0 +1,44 @@
@@ -1555,14 +1662,13 @@ new file mode 100644
 +    Ok(Json(results))
 +}
 diff --git a/rust/src/server/src/routes/tests.rs b/rust/src/server/src/routes/tests.rs
+index c04f148f2c2..29a5a25f5fa 100644
 --- a/rust/src/server/src/routes/tests.rs
 +++ b/rust/src/server/src/routes/tests.rs
-@@ -5913,6 +5913,120 @@
-             }]
-         })
+@@ -6167,6 +6167,120 @@ async fn collective_rpc_route_sends_expected_utility_call_and_returns_results()
      );
-+}
-+
+ }
+
 +#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 +#[serial]
 +async fn dumper_control_routes_forward_without_dev_mode_and_return_worker_lists() {
@@ -1675,13 +1781,16 @@ diff --git a/rust/src/server/src/routes/tests.rs b/rust/src/server/src/routes/te
 +        .await
 +        .unwrap();
 +    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
- }
- 
++}
++
  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+ #[serial]
+ async fn weight_checker_route_merges_worker_checksums_and_compares() {
 diff --git a/rust/src/server/src/routes/tokenize/types.rs b/rust/src/server/src/routes/tokenize/types.rs
+index ed3fd11d1d0..d6583a3768a 100644
 --- a/rust/src/server/src/routes/tokenize/types.rs
 +++ b/rust/src/server/src/routes/tokenize/types.rs
-@@ -54,6 +54,7 @@
+@@ -54,6 +54,7 @@ impl TokenizeCompletionRequest {
              add_special_tokens: self.add_special_tokens,
              data_parallel_rank: None,
              session_id: None,
@@ -1689,7 +1798,7 @@ diff --git a/rust/src/server/src/routes/tokenize/types.rs b/rust/src/server/src/
              kv_hints: None,
              reasoning_parser_kwargs: Default::default(),
              reasoning_ended: None,
-@@ -126,6 +127,7 @@
+@@ -126,6 +127,7 @@ impl TokenizeChatRequest {
              add_special_tokens: self.add_special_tokens,
              data_parallel_rank: None,
              session_id: None,
@@ -1698,26 +1807,27 @@ diff --git a/rust/src/server/src/routes/tokenize/types.rs b/rust/src/server/src/
          })
      }
 diff --git a/rust/src/server/src/utils.rs b/rust/src/server/src/utils.rs
+index 6a6ba16e822..4fde3727d1d 100644
 --- a/rust/src/server/src/utils.rs
 +++ b/rust/src/server/src/utils.rs
 @@ -1,7 +1,7 @@
  // SPDX-License-Identifier: Apache-2.0
  // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- 
+
 -use std::collections::HashMap;
 +use std::collections::{BTreeMap, HashMap};
  use std::time::{Duration, SystemTime, UNIX_EPOCH};
- 
+
  use axum::BoxError;
-@@ -21,6 +21,7 @@
+@@ -21,6 +21,7 @@ pub struct ResolvedRequestContext {
      pub data_parallel_rank: Option<u32>,
      pub priority: Option<i32>,
      pub session_id: Option<String>,
 +    pub trace_headers: Option<BTreeMap<String, String>>,
  }
- 
+
  /// Return the current Unix timestamp in seconds for OpenAI response objects.
-@@ -167,6 +168,19 @@
+@@ -167,6 +168,19 @@ pub fn resolve_request_context(
          data_parallel_rank,
          priority,
          session_id,
@@ -1736,32 +1846,34 @@ diff --git a/rust/src/server/src/utils.rs b/rust/src/server/src/utils.rs
 +        },
      }
  }
- 
+
 diff --git a/rust/src/text/src/lower.rs b/rust/src/text/src/lower.rs
+index 9fa8c78f4f9..7b12f546f3a 100644
 --- a/rust/src/text/src/lower.rs
 +++ b/rust/src/text/src/lower.rs
-@@ -69,7 +69,7 @@
+@@ -69,7 +69,7 @@ pub fn lower_text_request(
          reasoning_ended: request.reasoning_ended,
          lora_request: request.lora_request.clone(),
          arrival_time: request.arrival_time,
 -        trace_headers: None,
 +        trace_headers: request.trace_headers.clone(),
      };
- 
+
      Ok(PreparedTextRequest {
 diff --git a/rust/src/text/src/request.rs b/rust/src/text/src/request.rs
+index 37dbb5f4da4..6d9300665fe 100644
 --- a/rust/src/text/src/request.rs
 +++ b/rust/src/text/src/request.rs
 @@ -1,7 +1,7 @@
  // SPDX-License-Identifier: Apache-2.0
  // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- 
+
 -use std::collections::HashMap;
 +use std::collections::{BTreeMap, HashMap};
- 
+ use std::num::NonZeroU32;
+
  use enum_as_inner::EnumAsInner;
- use serde::{Deserialize, Deserializer, Serialize};
-@@ -239,6 +239,8 @@
+@@ -250,6 +250,8 @@ pub struct TextRequest {
      /// Stable session identity shared by related requests.
      #[serde(default)]
      pub session_id: Option<String>,
@@ -1770,7 +1882,7 @@ diff --git a/rust/src/text/src/request.rs b/rust/src/text/src/request.rs
      /// Optional orchestrator-originated KV hints.
      #[serde(default)]
      pub kv_hints: Option<KvHintsEnvelope>,
-@@ -282,6 +284,7 @@
+@@ -293,6 +295,7 @@ impl TextRequest {
              add_special_tokens: false,
              data_parallel_rank: None,
              session_id: None,

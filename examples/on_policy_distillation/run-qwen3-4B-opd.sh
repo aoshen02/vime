@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# usage: bash examples/on_policy_distillation/run-qwen3-8B-opd.sh
+# usage: bash examples/on_policy_distillation/run-qwen3-4B-opd.sh
 
 set -ex
 
@@ -20,20 +20,17 @@ TEACHER_PORT=13141
 LOG_FILE="/tmp/vllm_teacher_$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6).log"
 
 ## Launch the teacher model server in the background
-CUDA_VISIBLE_DEVICES=4,5,6,7 python3 -m vllm.entrypoints.openai.api_server \
-    --model /root/Qwen3-32B \
+CUDA_VISIBLE_DEVICES=6,7 vllm serve /root/Qwen3-30B-A3B-Instruct-2507 \
+    --enable-scale-out \
     --host 0.0.0.0 \
-    --port ${TEACHER_PORT} \
-    --tensor-parallel-size 4 \
-    --gpu-memory-utilization 0.85 \
-    --trust-remote-code \
-    --dtype bfloat16 \
-    --max-model-len 16384 \
-    --disable-custom-all-reduce \
-    > "${LOG_FILE}" 2>&1 &
+    --port $TEACHER_PORT \
+    --tensor-parallel-size 2 \
+    --max-num-batched-tokens 4096 \
+    --gpu-memory-utilization 0.8 \
+    > "$LOG_FILE" 2>&1 &
 TEACHER_PID=$!
 
-echo "Starting teacher model server (pid=${TEACHER_PID})..."
+echo "Starting teacher model server..."
 
 ## Wait for the teacher model server to be ready
 for i in $(seq 1 120); do
@@ -58,13 +55,13 @@ for i in $(seq 1 120); do
 done
 sleep 5
 
-source "/root/vime/scripts/models/qwen3-8B.sh"
+source "/root/vime/scripts/models/qwen3-4B-Instruct-2507.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-8B
-   --ref-load /root/Qwen3-8B_torch_dist
-   --load /root/Qwen3-8B_torch_dist
-   --save /root/Qwen3-8B_vime/
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507
+   --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist
+   --load /root/Qwen3-4B-Instruct-2507_vime/
+   --save /root/Qwen3-4B-Instruct-2507_vime/
    --save-interval 20
 )
 
@@ -77,8 +74,7 @@ ROLLOUT_ARGS=(
    --num-rollout 300
    --rollout-batch-size 16
    --n-samples-per-prompt 4
-   --rollout-max-response-len 4096
-   --rollout-max-context-len 8192
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 64
@@ -92,19 +88,17 @@ RM_ARGS=(
 )
 
 EVAL_ARGS=(
-   # --eval-interval 50
-   # --eval-prompt-data gsm8k /root/gsm8k/test.parquet
-   # --eval-input-key messages
-   # --n-samples-per-eval-prompt 1
-   # --eval-max-response-len 4096
-   # --eval-top-k 1
+   # --eval-interval 20
+   # --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
+   # --n-samples-per-eval-prompt 16
+   # --eval-max-response-len 131072
+   # --eval-top-p 1
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
-   --sequence-parallel
+   --tensor-model-parallel-size 1
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 4
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
@@ -113,7 +107,8 @@ PERF_ARGS=(
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 2048
+   --log-probs-chunk-size 1024
+   --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
@@ -130,6 +125,9 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
@@ -160,9 +158,9 @@ MISC_ARGS=(
 )
 
 # launch the master node of ray in container
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 6 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -179,7 +177,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --train-backend megatron \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 4 \
-   --colocate \
+   --rollout-num-gpus 2 \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

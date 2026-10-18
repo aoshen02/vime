@@ -1,24 +1,28 @@
+diff --git a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
+index c8d82eeb5a2..2ee933d8690 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
-@@ -469,6 +469,7 @@
+@@ -480,6 +480,7 @@ class GenerateStreamResponseBase(BaseModel):
      prompt_token_ids: list[NonNegativeInt] | None = None
      mm_placeholders: dict[str, list[PlaceholderRangeInfo]] | None = None
      metrics: PerRequestMetrics | None = None
 +    weight_version: str | None = None
- 
- 
+
+
  class GenerateTokensStreamResponse(GenerateStreamResponseBase):
-@@ -498,6 +499,7 @@
+@@ -509,6 +510,7 @@ class GenerateResponseBase(BaseModel):
      prompt_token_ids: list[NonNegativeInt] | None = None
      mm_placeholders: dict[str, list[PlaceholderRangeInfo]] | None = None
      metrics: PerRequestMetrics | None = None
 +    weight_version: str | None = None
- 
+
      kv_transfer_params: dict[str, Any] | None = Field(
          default=None,
+diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
+index 02a68108662..15d5cc3cc5e 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/serving.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
-@@ -504,6 +504,7 @@
+@@ -504,6 +504,7 @@ class ServingTokens(GenerateBaseServing):
              ),
              mm_placeholders=request._response_mm_placeholders,
              metrics=per_request_metrics,
@@ -26,7 +30,7 @@
              kv_transfer_params=final_res.kv_transfer_params,
              ec_transfer_params=final_res.ec_transfer_params,
          )
-@@ -630,6 +631,7 @@
+@@ -630,6 +631,7 @@ class ServingTokens(GenerateBaseServing):
                      if text_mode:
                          chunk = GenerateTextStreamResponse(
                              request_id=request_id,
@@ -34,15 +38,15 @@
                              choices=[
                                  GenerateTextStreamChoice(
                                      text=output.text, **choice_fields
-@@ -639,6 +641,7 @@
+@@ -639,6 +641,7 @@ class ServingTokens(GenerateBaseServing):
                      else:
                          chunk = GenerateTokensStreamResponse(
                              request_id=request_id,
 +                            weight_version=res.weight_version,
                              choices=[GenerateTokensStreamChoice(**choice_fields)],
                          )
- 
-@@ -656,7 +659,12 @@
+
+@@ -656,7 +659,12 @@ class ServingTokens(GenerateBaseServing):
                      # Omit fields that are absent from token-bearing chunks.
                      exclude = {
                          name
@@ -56,7 +60,7 @@
                          if getattr(chunk, name) is None
                      }
                      yield f"data: {chunk.model_dump_json(exclude=exclude)}\n\n"
-@@ -688,6 +696,7 @@
+@@ -688,6 +696,7 @@ class ServingTokens(GenerateBaseServing):
                          choices=[],
                          usage=final_usage_info,
                          metrics=per_request_metrics,
@@ -64,25 +68,27 @@
                      )
                  else:
                      final_chunk = GenerateTokensStreamResponse(
-@@ -695,6 +704,7 @@
+@@ -695,6 +704,7 @@ class ServingTokens(GenerateBaseServing):
                          choices=[],
                          usage=final_usage_info,
                          metrics=per_request_metrics,
 +                        weight_version=last_res.weight_version if last_res else None,
                      )
                  yield f"data: {final_chunk.model_dump_json(exclude_none=True)}\n\n"
- 
+
+diff --git a/vllm/outputs.py b/vllm/outputs.py
+index 887ebc5933d..7fad9ff683d 100644
 --- a/vllm/outputs.py
 +++ b/vllm/outputs.py
-@@ -143,6 +143,7 @@
+@@ -155,6 +155,7 @@ class RequestOutput:
              prefix-cache writes for this request.
          kv_transfer_params: The params for remote K/V transfer.
          ec_transfer_params: The params for remote encoder-cache transfer.
 +        weight_version: The weight version for this output.
- 
+
      """
- 
-@@ -164,6 +165,7 @@
+
+@@ -176,6 +177,7 @@ class RequestOutput:
          prompt_token_id_logprobs: np.ndarray | None = None,
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
@@ -90,24 +96,38 @@
          # Forward compatibility, code that uses args added in new release can
          # still run with older versions of vLLM without breaking.
          **kwargs: Any,
-@@ -187,12 +189,14 @@
+@@ -199,12 +201,14 @@ class RequestOutput:
          self.num_cache_creation_tokens = num_cache_creation_tokens
          self.kv_transfer_params = kv_transfer_params
          self.ec_transfer_params = ec_transfer_params
 +        self.weight_version = weight_version
- 
+
      def add(self, next_output: "RequestOutput", aggregate: bool) -> None:
          """Merge subsequent RequestOutput into this one"""
          self.finished |= next_output.finished
          self.kv_transfer_params = next_output.kv_transfer_params
          self.ec_transfer_params = next_output.ec_transfer_params
 +        self.weight_version = next_output.weight_version
- 
+
          for next_completion in next_output.outputs:
              for i, completion in enumerate(self.outputs):
+diff --git a/vllm/v1/core/sched/interface.py b/vllm/v1/core/sched/interface.py
+index dd88d99c1f7..4c51ff4c04f 100644
+--- a/vllm/v1/core/sched/interface.py
++++ b/vllm/v1/core/sched/interface.py
+@@ -94,6 +94,7 @@ class SchedulerInterface(ABC):
+         self,
+         scheduler_output: "SchedulerOutput",
+         model_runner_output: "ModelRunnerOutput",
++        weight_version: str | None = None,
+     ) -> dict[int, "EngineCoreOutputs"]:
+         """Update the scheduler state based on the model runner output.
+
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index c7619a2f66d..b8214f113ad 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -2003,6 +2003,7 @@
+@@ -2108,6 +2108,7 @@ class Scheduler(SchedulerInterface):
          self,
          scheduler_output: SchedulerOutput,
          model_runner_output: ModelRunnerOutput,
@@ -115,7 +135,7 @@
      ) -> dict[int, EngineCoreOutputs]:
          sampled_token_ids = model_runner_output.sampled_token_ids
          logprobs = model_runner_output.logprobs
-@@ -2240,6 +2241,7 @@
+@@ -2345,6 +2346,7 @@ class Scheduler(SchedulerInterface):
                      EngineCoreOutput(
                          request_id=req_id,
                          new_token_ids=new_token_ids,
@@ -123,7 +143,7 @@
                          finish_reason=finish_reason,
                          new_logprobs=new_logprobs,
                          new_sampling_mask=new_sampling_mask,
-@@ -2295,6 +2297,7 @@
+@@ -2400,6 +2402,7 @@ class Scheduler(SchedulerInterface):
                      EngineCoreOutput(
                          request_id=request.request_id,
                          new_token_ids=[],
@@ -131,21 +151,25 @@
                          finish_reason=request.get_finished_reason(),
                          events=request.take_events(),
                          trace_headers=request.trace_headers,
+diff --git a/vllm/v1/engine/__init__.py b/vllm/v1/engine/__init__.py
+index 38aee447201..b4a3d80ceb3 100644
 --- a/vllm/v1/engine/__init__.py
 +++ b/vllm/v1/engine/__init__.py
-@@ -238,6 +238,9 @@
- 
+@@ -241,6 +241,9 @@ class EngineCoreOutput(
+
      # [num_scored_rows, num_token_ids]; appended last for array_like compatibility.
      prompt_token_id_logprobs: torch.Tensor | None = None
 +    weight_version: str | None = None
 +    remote_kv_wait_time: float | None = None
 +    kv_transfer_metrics: dict[str, float] | None = None
- 
+
      @property
      def finished(self) -> bool:
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 2b275b65c52..7ce9391409b 100644
 --- a/vllm/v1/engine/core.py
 +++ b/vllm/v1/engine/core.py
-@@ -652,7 +652,7 @@
+@@ -679,7 +679,7 @@ class EngineCore:
          # during the model execution.
          self._process_aborts_queue()
          engine_core_outputs = self.scheduler.update_from_output(
@@ -153,8 +177,8 @@
 +            scheduler_output, model_output, self._weight_version
          )
          self._attach_iteration_details(engine_core_outputs, iteration_details)
- 
-@@ -753,7 +753,7 @@
+         self._attach_weight_version(engine_core_outputs)
+@@ -781,7 +781,7 @@ class EngineCore:
          # during the model execution.
          self._process_aborts_queue()
          engine_core_outputs = self.scheduler.update_from_output(
@@ -162,8 +186,8 @@
 +            scheduler_output, model_output, self._weight_version
          )
          self._attach_iteration_details(engine_core_outputs, iteration_details)
- 
-@@ -2050,7 +2050,12 @@
+         self._attach_weight_version(engine_core_outputs)
+@@ -2149,7 +2149,12 @@ class EngineCoreProc(EngineCore):
          self, req_ids: list[str], client_index: int, finish_reason: FinishReason
      ) -> None:
          outputs = [
@@ -177,17 +201,19 @@
              for req_id in req_ids
          ]
          eco = EngineCoreOutputs(finished_requests=req_ids, outputs=outputs)
+diff --git a/vllm/v1/engine/output_processor.py b/vllm/v1/engine/output_processor.py
+index 6008dd0d12a..7eff75a0d52 100644
 --- a/vllm/v1/engine/output_processor.py
 +++ b/vllm/v1/engine/output_processor.py
-@@ -184,6 +184,7 @@
+@@ -232,6 +232,7 @@ class RequestState:
          # Per-sequence spec-decode accumulator; arrives once (on finish) via
          # EngineCoreOutput, then attached to this sequence's CompletionOutput.
          self.spec_decode_metrics: RequestSpecDecodeMetrics | None = None
 +        self.weight_version: str | None = None
- 
+
          self.stats = RequestStateStats(arrival_time=arrival_time) if log_stats else None
- 
-@@ -306,6 +307,7 @@
+
+@@ -360,6 +361,7 @@ class RequestState:
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
          error: RequestError | None = None,
@@ -195,15 +221,15 @@
      ) -> RequestOutput | PoolingRequestOutput | None:
          finished = finish_reason is not None
          final_only = self.output_kind == RequestOutputKind.FINAL_ONLY
-@@ -363,6 +365,7 @@
+@@ -417,6 +419,7 @@ class RequestState:
              finished,
              kv_transfer_params,
              ec_transfer_params,
 +            weight_version=weight_version,
          )
- 
+
      def _new_request_output(
-@@ -373,6 +377,7 @@
+@@ -427,6 +430,7 @@ class RequestState:
          kv_transfer_params: dict[str, Any] | None = None,
          ec_transfer_params: dict[str, Any] | None = None,
          error: RequestError | None = None,
@@ -211,7 +237,7 @@
      ) -> RequestOutput | PoolingRequestOutput:
          # If prompt embeds were used, put placeholder prompt token ids
          prompt_token_ids = self.prompt_token_ids
-@@ -413,6 +418,7 @@
+@@ -467,6 +471,7 @@ class RequestState:
              finished=finished,
              kv_transfer_params=kv_transfer_params,
              ec_transfer_params=ec_transfer_params,
@@ -219,7 +245,7 @@
              num_cached_tokens=self.num_cached_tokens,
              num_cache_creation_tokens=self.num_cache_creation_tokens,
              metrics=self.stats,
-@@ -576,6 +582,7 @@
+@@ -647,6 +652,7 @@ class OutputProcessor:
                          stop_reason=None,
                          kv_transfer_params=None,
                          ec_transfer_params=None,
@@ -227,29 +253,19 @@
                      )
                  ):
                      req_state.queue.put(request_output)
-@@ -753,6 +760,7 @@
-                 req_state.logprobs_processor.update_from_output(engine_core_output)
- 
+@@ -836,6 +842,7 @@ class OutputProcessor:
+             )
+
              # 4) Create and handle RequestOutput objects.
 +            req_state.weight_version = engine_core_output.weight_version
              if request_output := req_state.make_request_output(
                  new_token_ids,
                  pooling_output,
-@@ -761,6 +769,7 @@
+@@ -844,6 +851,7 @@ class OutputProcessor:
                  kv_transfer_params,
                  ec_transfer_params,
                  error=request_error,
 +                weight_version=engine_core_output.weight_version,
              ):
-                 if req_state.streaming_input:
+                 if streaming_chunk_boundary:
                      request_output.finished = False
---- a/vllm/v1/core/sched/interface.py
-+++ b/vllm/v1/core/sched/interface.py
-@@ -94,6 +94,7 @@
-         self,
-         scheduler_output: "SchedulerOutput",
-         model_runner_output: "ModelRunnerOutput",
-+        weight_version: str | None = None,
-     ) -> dict[int, "EngineCoreOutputs"]:
-         """Update the scheduler state based on the model runner output.
- 

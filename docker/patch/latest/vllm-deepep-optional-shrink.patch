@@ -1,8 +1,8 @@
 diff --git a/vllm/distributed/device_communicators/all2all.py b/vllm/distributed/device_communicators/all2all.py
-index d8790dbf42c..59d260f8448 100644
+index 3466700c333..9305554cb80 100644
 --- a/vllm/distributed/device_communicators/all2all.py
 +++ b/vllm/distributed/device_communicators/all2all.py
-@@ -374,7 +374,7 @@ class DeepEPLLAll2AllManager(DeepEPAll2AllManagerBase):
+@@ -375,7 +375,7 @@ class DeepEPLLAll2AllManager(DeepEPAll2AllManagerBase):
              allow_nvlink_for_low_latency_mode=True,
              allow_mnnvl=envs.VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL,
              explicitly_destroy=True,
@@ -10,4 +10,4 @@ index d8790dbf42c..59d260f8448 100644
 +            **({"enable_shrink": True} if self.support_fault_tolerance else {}),
          )
          return kwargs
- 
+

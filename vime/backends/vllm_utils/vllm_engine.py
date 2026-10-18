@@ -17,6 +17,7 @@ from vime.backends.vllm_utils.external import get_server_info
 from vime.backends.vllm_utils.server_control import unregister_worker
 from vime.ray.ray_actor import RayActor
 from vime.utils.http_utils import _wrap_ipv6, get_host_info
+from vime.utils.model_config import vllm_model_config_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,12 @@ def get_base_gpu_id(args, rank):
 def launch_server_process(server_args_dict: dict) -> multiprocessing.Process:
     os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
     os.environ.pop("PYTORCH_ALLOC_CONF", None)
+    # Mooncake's default RPC range (15000-17000) overlaps our HTTP port
+    # allocation. Its workers can bind a port before another server starts.
+    # Preserve explicit ranges, including the legacy PRC spelling.
+    if not any(f"MC_{bound}_{spelling}_PORT" in os.environ for bound in ("MIN", "MAX") for spelling in ("RPC", "PRC")):
+        os.environ["MC_MIN_PRC_PORT"] = "27000"
+        os.environ["MC_MAX_PRC_PORT"] = "28000"
     env = _build_subprocess_env(server_args_dict)
     kwargs = {k: v for k, v in server_args_dict.items() if not k.startswith("_")}
     host = _wrap_ipv6(kwargs.get("host") or "127.0.0.1")
@@ -217,6 +224,9 @@ class VLLMEngine(RayActor):
         self._register_to_router(expect_server_args)
 
     def _init_normal(self, server_args_dict):
+        server_args_dict["hf_overrides"] = vllm_model_config_overrides(
+            server_args_dict["model"], server_args_dict.get("hf_overrides", {})
+        )
         logger.info(f"Launch vLLM api_server at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(server_args_dict)
         self._register_to_router(server_args_dict)
