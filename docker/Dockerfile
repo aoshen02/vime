@@ -111,7 +111,13 @@ RUN mkdir -p /opt/vime && python -c 'import importlib.metadata as m; packages = 
 ENV PIP_CONSTRAINT=/opt/vime/constraints.txt
 
 # The training context-parallel stack uses FA2 + FA3.
-RUN MAX_JOBS=${FA2_MAX_JOBS} pip -v install flash-attn==2.8.3 --no-build-isolation
+COPY docker/patch/${PATCH_VERSION}/flash-attn-cxx20.patch /tmp/flash-attn-cxx20.patch
+RUN curl -fsSL https://files.pythonhosted.org/packages/3b/b2/8d76c41ad7974ee264754709c22963447f7f8134613fd9ce80984ed0dab7/flash_attn-2.8.3.tar.gz -o /tmp/flash_attn-2.8.3.tar.gz && \
+    echo "1e71dd64a9e0280e0447b8a0c2541bad4bf6ac65bdeaa2f90e51a9e57de0370d  /tmp/flash_attn-2.8.3.tar.gz" | sha256sum -c - && \
+    tar -xf /tmp/flash_attn-2.8.3.tar.gz -C /tmp && \
+    cd /tmp/flash_attn-2.8.3 && git apply /tmp/flash-attn-cxx20.patch && \
+    FLASH_ATTENTION_FORCE_BUILD=TRUE MAX_JOBS=${FA2_MAX_JOBS} pip -v install . --no-build-isolation --no-deps && \
+    cd /root && rm -rf /tmp/flash_attn-2.8.3 /tmp/flash_attn-2.8.3.tar.gz /tmp/flash-attn-cxx20.patch
 
 # This FA3 commit provides the window_size_left/window_size_right API used by TE.
 RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
