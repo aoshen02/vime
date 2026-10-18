@@ -152,16 +152,14 @@ index c7619a2f66d..b8214f113ad 100644
                          events=request.take_events(),
                          trace_headers=request.trace_headers,
 diff --git a/vllm/v1/engine/__init__.py b/vllm/v1/engine/__init__.py
-index 38aee447201..b4a3d80ceb3 100644
+index 38aee447201..121d68d5d41 100644
 --- a/vllm/v1/engine/__init__.py
 +++ b/vllm/v1/engine/__init__.py
-@@ -241,6 +241,9 @@ class EngineCoreOutput(
+@@ -241,6 +241,7 @@ class EngineCoreOutput(
 
      # [num_scored_rows, num_token_ids]; appended last for array_like compatibility.
      prompt_token_id_logprobs: torch.Tensor | None = None
 +    weight_version: str | None = None
-+    remote_kv_wait_time: float | None = None
-+    kv_transfer_metrics: dict[str, float] | None = None
 
      @property
      def finished(self) -> bool:

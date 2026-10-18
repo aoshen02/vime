@@ -63,6 +63,7 @@ steps:
     timeout_in_minutes: 30
     command: |
       docker run --rm --shm-size=1g -e VIME_DOC_LAYOUT=prefix \
+        -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
         -v "$$PWD:/workspace" -w /workspace python:3.13-bookworm bash -c '
           set -euo pipefail
           apt-get update

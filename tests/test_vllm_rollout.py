@@ -47,14 +47,6 @@ class _FakeProcessor:
         }
 
 
-class _DummySemaphore:
-    async def __aenter__(self):
-        return None
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
 class _PatchedGenerateState:
     """Lightweight GenerateState for unit tests (no HF load)."""
 
@@ -64,7 +56,7 @@ class _PatchedGenerateState:
         self.args = args
         self.tokenizer = _FakeTokenizer()
         self.processor = None
-        self.semaphore = _DummySemaphore()
+        self.semaphore = asyncio.Semaphore(128)
         self.generation_pacer = AsyncPacer()
         self.aborted = False
         self.remaining_batch_size = 0

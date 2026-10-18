@@ -759,8 +759,8 @@ def enable_vllm_layer0_input_rmsnorm(
 ) -> None:
     """Match standalone replay's independent RMSNorm at every PP boundary.
 
-    Later Transformer layers consume the explicit FP32 residual sum and use
-    Megatron's VLLM-aligned fused residual/RMSNorm path.  The first local
+    VLLM's BF16 fused residual/RMSNorm path normalizes the rounded residual
+    sum.  The first local
     layer on each pipeline stage has no local preceding residual sum, so it
     still calls its standalone TE RMSNorm module.  The standalone accuracy
     replay replaces all such modules with VLLM's batch-invariant RMSNorm; do

@@ -483,6 +483,19 @@ index b8214f113ad..fe248b6b0b7 100644
          # KV Connector:: update recv and send status from last step.
          for req_id in kv_connector_output.finished_recving or ():
              logger.debug("Finished recving KV transfer for request %s", req_id)
+diff --git a/vllm/v1/engine/__init__.py b/vllm/v1/engine/__init__.py
+index 121d68d5d41..b4a3d80ceb3 100644
+--- a/vllm/v1/engine/__init__.py
++++ b/vllm/v1/engine/__init__.py
+@@ -242,6 +242,8 @@ class EngineCoreOutput(
+     # [num_scored_rows, num_token_ids]; appended last for array_like compatibility.
+     prompt_token_id_logprobs: torch.Tensor | None = None
+     weight_version: str | None = None
++    remote_kv_wait_time: float | None = None
++    kv_transfer_metrics: dict[str, float] | None = None
+
+     @property
+     def finished(self) -> bool:
 diff --git a/vllm/v1/engine/output_processor.py b/vllm/v1/engine/output_processor.py
 index 4805ed4d339..702c4001e57 100644
 --- a/vllm/v1/engine/output_processor.py
