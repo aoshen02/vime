@@ -171,7 +171,9 @@ RUN TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.ver
     export TMS_CUDA_MAJOR && \
     pip install git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} --no-cache-dir --force-reinstall --no-build-isolation
 
-RUN git clone https://github.com/zhuzilin/DeepGEMM.git --recursive && \
+RUN apt-get update && apt-get install -y libdw-dev libelf-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    git clone https://github.com/zhuzilin/DeepGEMM.git --recursive && \
     cd DeepGEMM && git checkout ${DEEPGEMM_COMMIT} && \
     git submodule update --init --recursive && \
     bash build_sgl_deep_gemm.sh && \
