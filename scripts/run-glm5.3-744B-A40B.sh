@@ -151,6 +151,7 @@ vllm:
           max_num_seqs: 768
           max_cudagraph_capture_size: 60
           all2all_backend: deepep_low_latency
+          moe_backend: deep_gemm
           kv_transfer_config:
             kv_connector: MooncakeConnector
             kv_role: kv_consumer
@@ -162,6 +163,7 @@ CFG
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 64
    --vllm-gpu-memory-utilization 0.70
+   --vllm-block-size 64
    --vllm-kv-cache-dtype fp8_e4m3
    --vllm-attention-backend FLASHMLA_SPARSE
    --vllm-max-cudagraph-capture-size 40

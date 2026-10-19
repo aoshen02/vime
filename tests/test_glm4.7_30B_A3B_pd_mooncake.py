@@ -37,11 +37,23 @@ def write_vllm_config() -> str:
                         "worker_type": "prefill",
                         "num_gpus": 4,
                         "num_gpus_per_engine": 4,
+                        "overrides": {
+                            "kv_transfer_config": {
+                                "kv_connector": "MooncakeConnector",
+                                "kv_role": "kv_producer",
+                            }
+                        },
                     },
                     {
                         "worker_type": "decode",
                         "num_gpus": 4,
                         "num_gpus_per_engine": 4,
+                        "overrides": {
+                            "kv_transfer_config": {
+                                "kv_connector": "MooncakeConnector",
+                                "kv_role": "kv_consumer",
+                            }
+                        },
                     },
                 ],
             }
@@ -116,6 +128,7 @@ def execute():
         "--vllm-max-cudagraph-capture-size 40 "
         '--vllm-speculative-config \'{"method":"mtp","num_speculative_tokens":4}\' '
         "--router-request-timeout-secs 1200 "
+        "--router-kv-connector mooncake "
         f"--vllm-config {vllm_config} "
     )
     misc_args = (
