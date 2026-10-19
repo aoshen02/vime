@@ -234,6 +234,13 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
         pod["hostNetwork"] = True
         pod["dnsPolicy"] = "ClusterFirstWithHostNet"
         pod["containers"][0]["securityContext"] = {"capabilities": {"add": ["IPC_LOCK", "SYS_RESOURCE"]}}
+    if test_file == "test_mooncake_memory_reregister.py":
+        pod["volumes"].append({"name": "host-sys", "hostPath": {"path": "/sys", "type": "Directory"}})
+        pod["containers"][0]["volumeMounts"].append({"name": "host-sys", "mountPath": "/host-sys", "readOnly": True})
+        step["command"] = (
+            "ls -l /dev/infiniband /sys/class/infiniband /host-sys/class/infiniband || true\n"
+            "grep -E '^(Cap|Seccomp|NoNewPrivs)' /proc/self/status\n" + step["command"]
+        )
     if agent_e2e:
         step["command"] = "bash -c " + shlex.quote(command)
         step["timeout_in_minutes"] = 35
