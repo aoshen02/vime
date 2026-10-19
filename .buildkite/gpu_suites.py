@@ -229,7 +229,11 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
             }
         ],
     }
-    if test_file in {"test_glm4.7_30B_A3B_pd_mooncake.py", "test_mooncake_memory_reregister.py"}:
+    if test_file in {
+        "test_glm4.7_30B_A3B_pd_mooncake.py",
+        "test_qwen3.6_35B_A3B_pd_mooncake.py",
+        "test_mooncake_memory_reregister.py",
+    }:
         pod = step["plugins"][0]["kubernetes"]["podSpec"]
         pod["hostNetwork"] = True
         pod["dnsPolicy"] = "ClusterFirstWithHostNet"

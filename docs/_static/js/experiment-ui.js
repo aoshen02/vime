@@ -309,8 +309,8 @@
               'Smaller recurrent state. Validate long-sequence accuracy and kernel support.',
               '减少递归状态存储；验证长序列精度与 kernel 支持。')]
           ]) + `<p class="step-hint">${t(
-            'vLLM manages attention KV and recurrent state in a shared paged cache. Both use the total GPU cache budget; no separate pool-ratio setting is needed.',
-            'vLLM 在共享分页缓存中管理 attention KV 与递归状态，两者受总 GPU 缓存预算约束，无需设置独立池比例。')}</p>` : '');
+            'vLLM manages attention KV and recurrent state in a shared paged cache. The total GPU cache budget is not equivalent to an independently configured pool ratio.',
+            'vLLM 在共享分页缓存中管理 attention KV 与递归状态；总 GPU 缓存预算不等价于独立配置的池比例。')}</p>` : '');
       case 3:
         return options('correction', t('Importance correction', '重要性修正'), [
             ['none', t('Observe only', '暂不修正'), t('Baseline. Watch log-prob mismatch and reward.',

@@ -49,7 +49,15 @@ index 4e86000bb11..0ada1bb6fe2 100644
                  self._ready_requests.put(entry)
              except Exception as e:
                  self._log_failure(
-@@ -3228,6 +3233,13 @@ class NixlBaseConnectorWorker:
+@@ -3048,6 +3053,7 @@ class NixlBaseConnectorWorker:
+         for req_id in done_recving:
+             # clean up metadata for completed requests
+             meta = self._recving_metadata.pop(req_id, None)
++            self.pending_request_metrics.pop(req_id, None)
+             assert meta is not None, f"{req_id} not found in recving_metadata list"
+
+             # Skip KV sync and post-processing for failed requests
+@@ -3228,6 +3234,13 @@ class NixlBaseConnectorWorker:
                      if xfer_state == "DONE":
                          res = self.nixl_wrapper.get_xfer_telemetry(handle)
                          self.xfer_stats.record_transfer(res)
@@ -63,7 +71,7 @@ index 4e86000bb11..0ada1bb6fe2 100644
                          self.nixl_wrapper.release_xfer_handle(handle)
                      elif xfer_state == "PROC":
                          in_progress.append(handle)
-@@ -3251,6 +3263,10 @@ class NixlBaseConnectorWorker:
+@@ -3251,6 +3264,10 @@ class NixlBaseConnectorWorker:
                          in_progress.append(handle)
 
              if not in_progress:
@@ -74,7 +82,7 @@ index 4e86000bb11..0ada1bb6fe2 100644
                  done_req_ids.add(req_id)
                  del transfers[req_id]
              else:
-@@ -3919,4 +3935,6 @@ class NixlBaseConnectorWorker:
+@@ -3919,4 +3936,6 @@ class NixlBaseConnectorWorker:
              for handle in handles:
                  self.nixl_wrapper.release_xfer_handle(handle)
          self._recving_transfers.clear()

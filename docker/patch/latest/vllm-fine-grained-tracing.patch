@@ -277,12 +277,15 @@ index e1d75cce65f..f3b9e1c04b6 100644
                      # Set num_computed_tokens even though KVs are not yet loaded.
                      # request.num_computed_tokens will not be used anywhere until
                      # the request finished the KV transfer.
-@@ -1432,9 +1433,15 @@ class Scheduler(SchedulerInterface):
+@@ -1432,9 +1433,18 @@ class Scheduler(SchedulerInterface):
                          EngineCoreEventType.SCHEDULED, scheduled_timestamp
                      )
                  if request.status == RequestStatus.WAITING:
 +                    request.trace_end_queuing()
-+                    if request.num_computed_tokens > 0:
++                    if (
++                        request.num_computed_tokens > 0
++                        and num_computed_tokens >= request.num_tokens - 1
++                    ):
 +                        request.decode_start_time_ns = time.time_ns()
 +                    else:
 +                        request.prefill_start_time_ns = time.time_ns()
@@ -293,7 +296,7 @@ index e1d75cce65f..f3b9e1c04b6 100644
                  else:
                      raise RuntimeError(f"Invalid request status: {request.status}")
 
-@@ -1684,6 +1691,8 @@ class Scheduler(SchedulerInterface):
+@@ -1684,6 +1694,8 @@ class Scheduler(SchedulerInterface):
          )
          if self.aux_output_connector is not None:
              self.aux_output_connector.request_finished(request)
@@ -302,7 +305,7 @@ index e1d75cce65f..f3b9e1c04b6 100644
          self._free_request_blocks(request)
          self.encoder_cache_manager.free(request)
          self._inflight_prefills.discard(request)
-@@ -2209,6 +2218,11 @@ class Scheduler(SchedulerInterface):
+@@ -2209,6 +2221,11 @@ class Scheduler(SchedulerInterface):
                  sampled_token_ids[req_index] if sampled_token_ids else []
              )
 

@@ -497,7 +497,7 @@ def _deepgemm_linear(
             # Hopper (sm90): FP32 block scales. Unchanged.
             qweight, weight_scale = blockwise_cast_to_fp8_triton(weight.detach().contiguous(), (128, 128))
         qinput, input_scale = per_token_group_quant_fp8(
-            input_.detach().contiguous(),
+            input_.detach().contiguous().view(-1, input_.shape[-1]),
             128,
             column_major_scales=True,
             tma_aligned_scales=True,

@@ -16,8 +16,10 @@ Patch extraction compares the actual workspace before and after the agent runs,
 so files already shipped in the image are not counted as agent edits. It preserves
 the repository's HEAD and index while capturing staged, unstaged and new files.
 
-The main launcher is `run_qwen38_27b_sunabako_2plus2.sh`: two 8-GPU nodes run
-training and model serving; two other nodes run the agent and grader sandboxes.
+The fully-async launcher is `run_qwen38_27b_fully_async.sh`: three 8-GPU nodes
+train and three serve on an existing Ray cluster. Sandbox nodes are configured
+separately. The older colocated `run_qwen38_27b_sunabako_2plus2.sh` remains a
+separate bounded example, not the fully-async recipe.
 **sunabako is the default sandbox provider.** Install its independent package
 into vime's environment; dataset preparation and training code live here.
 
@@ -163,7 +165,36 @@ Importing all task images can consume substantial disk space. Some images keep
 Python under `/root/.pyenv`; adjust their mapping's `env.PATH` so the `agent`
 user can invoke the image's toolchain. This does not change the official tests.
 
-## Run Qwen3.8-27B on two training nodes and two sandbox nodes
+## Run Qwen3.8-27B fully asynchronously
+
+With shared model, data and experiment paths available to the existing Ray
+cluster, provide its addresses and sandbox configuration:
+
+```bash
+export HF_CHECKPOINT=/path/to/Qwen3.8-27B
+export DATA_ROOT=/shared/vime-mimo
+export RUN_ROOT=/shared/vime-runs/run-001
+export MEGATRON_DIR=/path/to/Megatron-LM
+export RAY_ADDRESS=<ray-head-ip>:6379
+export RAY_DASHBOARD_ADDRESS=http://<ray-head-ip>:8265
+export SOCKET_IFNAME=<inter-node-network-interface>
+export SUNABAKO_CLUSTER="$DATA_ROOT/cluster.json"
+export VIME_AGENT_NODE_TARBALL=/path/to/node.tar.xz
+export VIME_AGENT_CC_TARBALL=/path/to/claude-code.tgz
+bash examples/coding_agent_rl/run_qwen38_27b_fully_async.sh
+```
+
+This follows Slime's fully-async training and rollout configuration. Engine
+translation uses MTP, prefix caching and `SimpleCPUOffloadConnector` with
+`cpu_to_gpu_ratio` for the host-cache capacity. SGLang's independent Mamba pool
+ratio of 0.5 has no equivalent in vLLM's shared allocator; this is an explicit
+capacity-control difference, not a claim of identical cache behavior. The
+default three draft steps map to three vLLM speculative tokens, excluding the
+verification root. Overrides must keep `SPECULATIVE_DRAFT_TOKENS` equal to
+`SPECULATIVE_STEPS + 1`; unsupported combinations are rejected rather than
+silently ignored. The six-node recipe has not yet been validated end to end.
+
+## Legacy colocated example: two training nodes and two sandbox nodes
 
 Supply host-side Node 22 and Claude Code npm tarballs; the harness uploads them
 into each sandbox at boot. Launch from a long-lived shell on the first training

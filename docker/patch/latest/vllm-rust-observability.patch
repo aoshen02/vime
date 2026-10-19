@@ -173,7 +173,7 @@ index b52e9fbc0b8..e1bacc6b018 100644
          }
      }
 diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
-index 15a6160fda5..59e7440b02b 100644
+index e6b329cfb4a..59e7440b02b 100644
 --- a/rust/src/cmd/src/cli.rs
 +++ b/rust/src/cmd/src/cli.rs
 @@ -32,8 +32,8 @@ use vllm_managed_engine::ManagedEngineConfig;
@@ -187,18 +187,7 @@ index 15a6160fda5..59e7440b02b 100644
  };
  use vllm_text::backend::hf::HfOverrides;
 
-@@ -340,10 +340,6 @@ pub struct SharedRuntimeArgs {
-     #[serde(default)]
-     pub enable_log_requests: bool,
-
--    #[arg(long, default_missing_value = "true", num_args = 0..=1)]
--    #[serde(default)]
--    pub enable_per_request_metrics: bool,
--
-     /// Include prompt_tokens_details in usage when cached prompt tokens are
-     /// present.
-     #[arg(
-@@ -450,6 +446,18 @@ pub struct SharedRuntimeArgs {
+@@ -446,6 +446,18 @@ pub struct SharedRuntimeArgs {
      #[serde(default)]
      pub profiler_config: Option<ProfilerConfig>,
 
@@ -217,7 +206,7 @@ index 15a6160fda5..59e7440b02b 100644
      /// Unsupported Python vLLM frontend arguments recognized but not yet
      /// implemented in Rust.
      #[educe(Debug(ignore))]
-@@ -534,6 +542,7 @@ impl SharedRuntimeArgs {
+@@ -530,6 +542,7 @@ impl SharedRuntimeArgs {
          let cors = self.cors_config();
          let tls = self.ssl.tls_config();
          let profiler = self.profiler();
@@ -225,7 +214,7 @@ index 15a6160fda5..59e7440b02b 100644
 
          Config {
              transport_mode: TransportMode::Bootstrapped {
-@@ -577,6 +586,7 @@ impl SharedRuntimeArgs {
+@@ -573,6 +586,7 @@ impl SharedRuntimeArgs {
              manages_engine: false,
              keep_alive_timeout,
              profiler,
@@ -233,7 +222,7 @@ index 15a6160fda5..59e7440b02b 100644
          }
      }
 
-@@ -600,6 +610,7 @@ impl SharedRuntimeArgs {
+@@ -596,6 +610,7 @@ impl SharedRuntimeArgs {
          let cors = self.cors_config();
          let tls = self.ssl.tls_config();
          let profiler = self.profiler();
@@ -241,7 +230,7 @@ index 15a6160fda5..59e7440b02b 100644
 
          Config {
              transport_mode: TransportMode::HandshakeOwner {
-@@ -639,13 +650,13 @@ impl SharedRuntimeArgs {
+@@ -635,6 +650,7 @@ impl SharedRuntimeArgs {
              manages_engine,
              keep_alive_timeout,
              profiler,
@@ -249,14 +238,7 @@ index 15a6160fda5..59e7440b02b 100644
          }
      }
 
-     fn api_server_options(&self) -> ApiServerOptions {
-         ApiServerOptions {
-             enable_log_requests: self.enable_log_requests,
--            enable_per_request_metrics: self.enable_per_request_metrics,
-             enable_prompt_tokens_details: self.enable_prompt_tokens_details,
-             enable_per_request_metrics: self.enable_per_request_metrics,
-             enable_request_id_headers: self.enable_request_id_headers,
-@@ -663,6 +674,14 @@ impl SharedRuntimeArgs {
+@@ -658,6 +674,14 @@ impl SharedRuntimeArgs {
              allow_credentials: self.allow_credentials,
          }
      }
@@ -271,7 +253,7 @@ index 15a6160fda5..59e7440b02b 100644
  }
 
  fn default_engine_ready_timeout_secs() -> u64 {
-@@ -863,6 +882,8 @@ impl ServeArgs {
+@@ -858,6 +882,8 @@ impl ServeArgs {
              self.runtime.revision.clone(),
              self.runtime.max_logprobs,
              profiler_config,
@@ -281,18 +263,10 @@ index 15a6160fda5..59e7440b02b 100644
              self.runtime.language_model_only,
              self.runtime.disable_log_stats,
 diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
-index ca4a7801da0..dec8ab962da 100644
+index 047635207eb..dec8ab962da 100644
 --- a/rust/src/cmd/src/cli/tests.rs
 +++ b/rust/src/cmd/src/cli/tests.rs
-@@ -198,7 +198,6 @@ fn serve_args_forward_python_flags_with_separator() {
-                         lora_modules: [],
-                         chat_template_content_format: Auto,
-                         enable_log_requests: false,
--                        enable_per_request_metrics: false,
-                         enable_prompt_tokens_details: false,
-                         enable_per_request_metrics: false,
-                         enable_request_id_headers: false,
-@@ -228,6 +227,8 @@ fn serve_args_forward_python_flags_with_separator() {
+@@ -227,6 +227,8 @@ fn serve_args_forward_python_flags_with_separator() {
                              ssl_ciphers: None,
                          },
                          profiler_config: None,
@@ -301,15 +275,7 @@ index ca4a7801da0..dec8ab962da 100644
                      },
                      managed_engine: ManagedEngineArgs {
                          python: "../vllm/.venv/bin/python",
-@@ -1102,7 +1103,6 @@ fn frontend_args_accept_json() {
-                         lora_modules: [],
-                         chat_template_content_format: Auto,
-                         enable_log_requests: false,
--                        enable_per_request_metrics: false,
-                         enable_prompt_tokens_details: false,
-                         enable_per_request_metrics: false,
-                         enable_request_id_headers: false,
-@@ -1132,6 +1132,8 @@ fn frontend_args_accept_json() {
+@@ -1130,6 +1132,8 @@ fn frontend_args_accept_json() {
                              ssl_ciphers: None,
                          },
                          profiler_config: None,
@@ -318,15 +284,7 @@ index ca4a7801da0..dec8ab962da 100644
                      },
                  },
              ),
-@@ -1775,7 +1777,6 @@ fn serve_args_accept_handshake_aliases() {
-                         lora_modules: [],
-                         chat_template_content_format: Auto,
-                         enable_log_requests: false,
--                        enable_per_request_metrics: false,
-                         enable_prompt_tokens_details: false,
-                         enable_per_request_metrics: false,
-                         enable_request_id_headers: false,
-@@ -1805,6 +1806,8 @@ fn serve_args_accept_handshake_aliases() {
+@@ -1802,6 +1806,8 @@ fn serve_args_accept_handshake_aliases() {
                              ssl_ciphers: None,
                          },
                          profiler_config: None,
@@ -335,15 +293,7 @@ index ca4a7801da0..dec8ab962da 100644
                      },
                      managed_engine: ManagedEngineArgs {
                          python: "python3",
-@@ -1934,7 +1937,6 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
-             stream_interval: 1,
-             api_server_options: ApiServerOptions {
-                 enable_log_requests: false,
--                enable_per_request_metrics: false,
-                 enable_prompt_tokens_details: false,
-                 enable_per_request_metrics: false,
-                 enable_request_id_headers: false,
-@@ -1958,6 +1960,10 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
+@@ -1954,6 +1960,10 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
              manages_engine: true,
              keep_alive_timeout: 5s,
              profiler: None,
@@ -354,15 +304,7 @@ index ca4a7801da0..dec8ab962da 100644
          }
      "#]]
      .assert_debug_eq(&Config {
-@@ -2030,7 +2036,6 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
-             stream_interval: 1,
-             api_server_options: ApiServerOptions {
-                 enable_log_requests: false,
--                enable_per_request_metrics: false,
-                 enable_prompt_tokens_details: false,
-                 enable_per_request_metrics: false,
-                 enable_request_id_headers: false,
-@@ -2054,6 +2059,10 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
+@@ -2049,6 +2059,10 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
              manages_engine: true,
              keep_alive_timeout: 5s,
              profiler: None,
@@ -373,15 +315,7 @@ index ca4a7801da0..dec8ab962da 100644
          }
      "#]]
      .assert_debug_eq(&config);
-@@ -2170,7 +2179,6 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
-             stream_interval: 1,
-             api_server_options: ApiServerOptions {
-                 enable_log_requests: false,
--                enable_per_request_metrics: false,
-                 enable_prompt_tokens_details: false,
-                 enable_per_request_metrics: false,
-                 enable_request_id_headers: false,
-@@ -2194,6 +2202,10 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
+@@ -2188,6 +2202,10 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
              manages_engine: false,
              keep_alive_timeout: 5s,
              profiler: None,
@@ -392,7 +326,7 @@ index ca4a7801da0..dec8ab962da 100644
          }
      "#]]
      .assert_debug_eq(&config);
-@@ -2374,3 +2386,106 @@ fn serve_revision_reaches_frontend_and_managed_engine() {
+@@ -2368,3 +2386,106 @@ fn serve_revision_reaches_frontend_and_managed_engine() {
      let engine = args.to_managed_engine_config(1234);
      assert!(engine.python_args.windows(2).any(|args| args == ["--revision", "release"]));
  }
@@ -1037,18 +971,10 @@ index c3b6625d257..c35a5e5dcbb 100644
 
      let bind_address = format!("127.0.0.1:{port}");
 diff --git a/rust/src/server/src/config.rs b/rust/src/server/src/config.rs
-index fb1cec25a34..726a75daba8 100644
+index b8fbc09828e..726a75daba8 100644
 --- a/rust/src/server/src/config.rs
 +++ b/rust/src/server/src/config.rs
-@@ -54,7 +54,6 @@ pub enum CoordinatorMode {
- pub struct ApiServerOptions {
-     /// Log a summary line for each completed request.
-     pub enable_log_requests: bool,
--    pub enable_per_request_metrics: bool,
-     /// When `true`, include prompt token cache details in response usage.
-     pub enable_prompt_tokens_details: bool,
-     /// Include request timing metrics in OpenAI chat and completion responses.
-@@ -211,6 +210,31 @@ impl FromStr for LoraModulePath {
+@@ -210,6 +210,31 @@ impl FromStr for LoraModulePath {
      }
  }
 
@@ -1080,7 +1006,7 @@ index fb1cec25a34..726a75daba8 100644
  /// Normalized runtime configuration for the minimal OpenAI-compatible server.
  #[derive(Educe, Clone, PartialEq, Eq, Serialize)]
  #[educe(Debug)]
-@@ -294,6 +318,8 @@ pub struct Config {
+@@ -293,6 +318,8 @@ pub struct Config {
      /// Profiler mode that registers `/start_profile` and `/stop_profile`
      /// routes when present.
      pub profiler: Option<String>,
@@ -1089,7 +1015,7 @@ index fb1cec25a34..726a75daba8 100644
  }
 
  impl Config {
-@@ -310,6 +336,7 @@ impl Config {
+@@ -309,6 +336,7 @@ impl Config {
          if let Some(tls) = &self.tls {
              tls.validate()?;
          }

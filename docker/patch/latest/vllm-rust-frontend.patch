@@ -15,81 +15,6 @@ index 2daacbfc35b..da186ec81d6 100644
  }
 
  // Prompt info, returned in the first response
-diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
-index e6b329cfb4a..15a6160fda5 100644
---- a/rust/src/cmd/src/cli.rs
-+++ b/rust/src/cmd/src/cli.rs
-@@ -340,6 +340,10 @@ pub struct SharedRuntimeArgs {
-     #[serde(default)]
-     pub enable_log_requests: bool,
-
-+    #[arg(long, default_missing_value = "true", num_args = 0..=1)]
-+    #[serde(default)]
-+    pub enable_per_request_metrics: bool,
-+
-     /// Include prompt_tokens_details in usage when cached prompt tokens are
-     /// present.
-     #[arg(
-@@ -641,6 +645,7 @@ impl SharedRuntimeArgs {
-     fn api_server_options(&self) -> ApiServerOptions {
-         ApiServerOptions {
-             enable_log_requests: self.enable_log_requests,
-+            enable_per_request_metrics: self.enable_per_request_metrics,
-             enable_prompt_tokens_details: self.enable_prompt_tokens_details,
-             enable_per_request_metrics: self.enable_per_request_metrics,
-             enable_request_id_headers: self.enable_request_id_headers,
-diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
-index 047635207eb..ca4a7801da0 100644
---- a/rust/src/cmd/src/cli/tests.rs
-+++ b/rust/src/cmd/src/cli/tests.rs
-@@ -198,6 +198,7 @@ fn serve_args_forward_python_flags_with_separator() {
-                         lora_modules: [],
-                         chat_template_content_format: Auto,
-                         enable_log_requests: false,
-+                        enable_per_request_metrics: false,
-                         enable_prompt_tokens_details: false,
-                         enable_per_request_metrics: false,
-                         enable_request_id_headers: false,
-@@ -1101,6 +1102,7 @@ fn frontend_args_accept_json() {
-                         lora_modules: [],
-                         chat_template_content_format: Auto,
-                         enable_log_requests: false,
-+                        enable_per_request_metrics: false,
-                         enable_prompt_tokens_details: false,
-                         enable_per_request_metrics: false,
-                         enable_request_id_headers: false,
-@@ -1773,6 +1775,7 @@ fn serve_args_accept_handshake_aliases() {
-                         lora_modules: [],
-                         chat_template_content_format: Auto,
-                         enable_log_requests: false,
-+                        enable_per_request_metrics: false,
-                         enable_prompt_tokens_details: false,
-                         enable_per_request_metrics: false,
-                         enable_request_id_headers: false,
-@@ -1931,6 +1934,7 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
-             stream_interval: 1,
-             api_server_options: ApiServerOptions {
-                 enable_log_requests: false,
-+                enable_per_request_metrics: false,
-                 enable_prompt_tokens_details: false,
-                 enable_per_request_metrics: false,
-                 enable_request_id_headers: false,
-@@ -2026,6 +2030,7 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
-             stream_interval: 1,
-             api_server_options: ApiServerOptions {
-                 enable_log_requests: false,
-+                enable_per_request_metrics: false,
-                 enable_prompt_tokens_details: false,
-                 enable_per_request_metrics: false,
-                 enable_request_id_headers: false,
-@@ -2165,6 +2170,7 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
-             stream_interval: 1,
-             api_server_options: ApiServerOptions {
-                 enable_log_requests: false,
-+                enable_per_request_metrics: false,
-                 enable_prompt_tokens_details: false,
-                 enable_per_request_metrics: false,
-                 enable_request_id_headers: false,
 diff --git a/rust/src/engine-core-client/src/protocol/logprobs/array.rs b/rust/src/engine-core-client/src/protocol/logprobs/array.rs
 index 919ef80f46a..b4aa011d6f8 100644
 --- a/rust/src/engine-core-client/src/protocol/logprobs/array.rs
@@ -568,18 +493,6 @@ index cc6fd9d169f..e54c0245302 100644
      };
 
      let error = futures::stream::iter([Ok(output)]).collect_output().await.unwrap_err();
-diff --git a/rust/src/server/src/config.rs b/rust/src/server/src/config.rs
-index b8fbc09828e..fb1cec25a34 100644
---- a/rust/src/server/src/config.rs
-+++ b/rust/src/server/src/config.rs
-@@ -54,6 +54,7 @@ pub enum CoordinatorMode {
- pub struct ApiServerOptions {
-     /// Log a summary line for each completed request.
-     pub enable_log_requests: bool,
-+    pub enable_per_request_metrics: bool,
-     /// When `true`, include prompt token cache details in response usage.
-     pub enable_prompt_tokens_details: bool,
-     /// Include request timing metrics in OpenAI chat and completion responses.
 diff --git a/rust/src/server/src/grpc/convert.rs b/rust/src/server/src/grpc/convert.rs
 index 1eec1d0fe32..6d09676368a 100644
 --- a/rust/src/server/src/grpc/convert.rs
@@ -735,7 +648,7 @@ index 743c0a83f4e..794a76eb905 100644
 +    }
 +}
 diff --git a/rust/src/server/src/routes/inference/generate.rs b/rust/src/server/src/routes/inference/generate.rs
-index 5bf434f5220..3dbfb16bd10 100644
+index 5bf434f5220..4ede488c1b0 100644
 --- a/rust/src/server/src/routes/inference/generate.rs
 +++ b/rust/src/server/src/routes/inference/generate.rs
 @@ -26,7 +26,8 @@ use vllm_engine_core_client::protocol::logprobs::{Logprobs, PositionLogprobs};
@@ -1283,7 +1196,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          };
 
          let response = collect_generate(
-@@ -935,9 +1218,11 @@ mod tests {
+@@ -935,9 +1218,20 @@ mod tests {
                      length: 1,
                  }],
              )])),
@@ -1292,10 +1205,19 @@ index 5bf434f5220..3dbfb16bd10 100644
          .expect("response");
 
 +        assert_eq!(response.weight_version.as_deref(), Some("step-2"));
++        assert_eq!(
++            response.choices[0].sampling_mask_logprobs,
++            Some(vec![vec![-0.1, -0.2]])
++        );
++        let json = serde_json::to_value(&response).expect("serialize response");
++        assert_eq!(
++            json["choices"][0]["sampling_mask_logprobs"],
++            serde_json::json!([[-0.1_f32, -0.2_f32]])
++        );
          assert!(response.prompt_token_ids.is_none());
          assert!(response.mm_placeholders.is_none());
          assert_eq!(response.choices[0].sampling_mask, Some(vec![vec![30, 40]]));
-@@ -976,6 +1261,10 @@ mod tests {
+@@ -976,6 +1270,10 @@ mod tests {
              sampling_mask: None,
              spec_decode_metrics: Some(metrics.clone()),
              weight_versions: None,
@@ -1306,7 +1228,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          };
 
          let response = collect_generate(
-@@ -984,14 +1273,16 @@ mod tests {
+@@ -984,14 +1282,16 @@ mod tests {
              ApiServerOptions::default(),
              ResponseOptions::default(),
              None,
@@ -1326,7 +1248,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          );
          let json = serde_json::to_value(&response).expect("serialize response");
          let stats = &json["metrics"]["speculative_decoding"];
-@@ -1069,6 +1360,10 @@ mod tests {
+@@ -1069,6 +1369,10 @@ mod tests {
              sampling_mask: None,
              spec_decode_metrics: None,
              weight_versions: None,
@@ -1337,7 +1259,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          };
 
          let response = collect_generate(
-@@ -1080,6 +1375,7 @@ mod tests {
+@@ -1080,6 +1384,7 @@ mod tests {
                  ..Default::default()
              },
              None,
@@ -1345,7 +1267,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          )
          .expect("response");
 
-@@ -1105,6 +1401,10 @@ mod tests {
+@@ -1105,6 +1410,10 @@ mod tests {
              sampling_mask: None,
              spec_decode_metrics: None,
              weight_versions: None,
@@ -1356,7 +1278,7 @@ index 5bf434f5220..3dbfb16bd10 100644
              prompt_token_ids,
          };
 
-@@ -1117,6 +1417,7 @@ mod tests {
+@@ -1117,6 +1426,7 @@ mod tests {
                  ..Default::default()
              },
              None,
@@ -1364,7 +1286,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          )
          .expect("single-token prompt without payload maps to [None]");
          let prompt_logprobs = response.prompt_logprobs.expect("prompt logprobs present");
-@@ -1132,6 +1433,7 @@ mod tests {
+@@ -1132,6 +1442,7 @@ mod tests {
                  ..Default::default()
              },
              None,
@@ -1372,7 +1294,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          )
          .expect_err("multi-token prompt without payload is an engine failure");
      }
-@@ -1183,6 +1485,10 @@ mod tests {
+@@ -1183,6 +1494,10 @@ mod tests {
              sampling_mask: None,
              spec_decode_metrics: None,
              weight_versions: None,
@@ -1383,7 +1305,7 @@ index 5bf434f5220..3dbfb16bd10 100644
          };
 
          let response = collect_generate(
-@@ -1191,6 +1497,7 @@ mod tests {
+@@ -1191,6 +1506,7 @@ mod tests {
              ApiServerOptions::default(),
              ResponseOptions::default(),
              None,
