@@ -234,6 +234,8 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
         pod["hostNetwork"] = True
         pod["dnsPolicy"] = "ClusterFirstWithHostNet"
         pod["containers"][0]["securityContext"] = {"capabilities": {"add": ["IPC_LOCK", "SYS_RESOURCE"]}}
+        pod["volumes"].append({"name": "rdma", "hostPath": {"path": "/dev/infiniband", "type": "Directory"}})
+        pod["containers"][0]["volumeMounts"].append({"name": "rdma", "mountPath": "/dev/infiniband"})
     if test_file == "test_mooncake_memory_reregister.py":
         pod["volumes"].append({"name": "host-sys", "hostPath": {"path": "/sys", "type": "Directory"}})
         pod["containers"][0]["volumeMounts"].append({"name": "host-sys", "mountPath": "/host-sys", "readOnly": True})
