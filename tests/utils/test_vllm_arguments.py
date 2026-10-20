@@ -25,6 +25,15 @@ _unit_stubs.install_vllm_cli_stubs()
 NUM_GPUS = 0
 
 
+def test_python_executable_is_a_launcher_option(args_mod, monkeypatch):
+    _patch_device_config(monkeypatch)
+    parser = argparse.ArgumentParser()
+    args_mod.add_vllm_arguments(parser)
+    assert parser.parse_args([]).vllm_python_executable is None
+    executable = "/path with spaces/serve-python.sh"
+    assert parser.parse_args(["--vllm-python-executable", executable]).vllm_python_executable == executable
+
+
 @pytest.fixture(scope="module")
 def args_mod():
     from vime.backends.vllm_utils import arguments as mod  # noqa: PLC0415

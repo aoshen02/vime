@@ -137,11 +137,18 @@ class ServerGroup:
             )
         engines = self.all_engines[first : first + self.nodes_per_engine]
         shutdowns = [engine.shutdown.remote() for engine in engines if engine is not None]
-        if shutdowns:
-            ray.wait(shutdowns, num_returns=len(shutdowns), timeout=timeout)
-        for engine in engines:
-            if engine is not None:
-                ray.kill(engine, no_restart=True)
+        try:
+            if shutdowns:
+                if self.needs_offload:
+                    # Shared-GPU training must wait for confirmed server exit;
+                    # failed or timed-out shutdown must stop the handoff.
+                    ray.get(shutdowns, timeout=timeout)
+                else:
+                    ray.wait(shutdowns, num_returns=len(shutdowns), timeout=timeout)
+        finally:
+            for engine in engines:
+                if engine is not None:
+                    ray.kill(engine, no_restart=True)
         self.all_engines[first : first + self.nodes_per_engine] = [None] * self.nodes_per_engine
 
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:

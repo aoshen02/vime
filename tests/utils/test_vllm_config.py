@@ -11,6 +11,36 @@ import yaml
 
 NUM_GPUS = 0
 
+
+@pytest.mark.parametrize("node_rank", [0, 1])
+def test_isolated_server_launch_waits_for_node_zero(monkeypatch, node_rank):
+    from vime.backends.vllm_utils import vllm_engine
+
+    executable = "/path with spaces/serve-python.sh"
+    process = Mock()
+    process.poll.return_value = None
+    launch = Mock(return_value=process)
+    health = Mock()
+    monkeypatch.setattr(vllm_engine, "launch_server_subprocess", launch)
+    monkeypatch.setattr(vllm_engine, "_wait_server_healthy", health)
+    monkeypatch.setattr(vllm_engine, "prepare_server_environment", lambda environ: None)
+    monkeypatch.setattr(vllm_engine, "_build_subprocess_env", lambda args: {"CUDA_VISIBLE_DEVICES": "2"})
+    monkeypatch.setattr(
+        vllm_engine.multiprocessing, "Process", Mock(side_effect=AssertionError("wrong Python environment"))
+    )
+    args = {"model": "/checkpoint", "host": "[::1]", "port": 15000, "node_rank": node_rank}
+    result = vllm_engine.launch_server_process({**args, "_args": Namespace(vllm_python_executable=executable)})
+    assert result is process
+    launch.assert_called_once_with(executable, {**args, "host": "::1"}, environ={"CUDA_VISIBLE_DEVICES": "2"})
+    if node_rank == 0:
+        assert health.call_args.kwargs["base_url"] == "http://[::1]:15000"
+        assert health.call_args.kwargs["is_process_alive"]()
+        process.poll.return_value = 1
+        assert not health.call_args.kwargs["is_process_alive"]()
+    else:
+        health.assert_not_called()
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))

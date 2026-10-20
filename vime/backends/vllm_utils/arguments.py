@@ -39,6 +39,12 @@ def add_vllm_arguments(parser):
     parser.set_defaults(router_balance_abs_threshold=10, router_balance_rel_threshold=1.2)
     parser.add_argument("--vllm-server-concurrency", type=int, default=512)
     parser.add_argument(
+        "--vllm-python-executable",
+        default=None,
+        help="Python executable or activation wrapper used to start vLLM server subprocesses. "
+        "Must exist on every rollout node. Ray actors remain in the training environment.",
+    )
+    parser.add_argument(
         "--vllm-enable-deterministic-inference",
         action="store_true",
         default=False,

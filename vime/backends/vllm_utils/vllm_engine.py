@@ -1,9 +1,11 @@
 import argparse
 import base64
 import dataclasses
+import json
 import logging
 import multiprocessing
 import os
+import sys
 import time
 from threading import Thread
 from typing import Any
@@ -14,6 +16,11 @@ from urllib3.exceptions import NewConnectionError
 from vllm.utils.system_utils import kill_process_tree
 
 from vime.backends.vllm_utils.external import get_server_info
+from vime.backends.vllm_utils.runtime import (
+    launch_server_subprocess,
+    prepare_server_environment,
+    terminate_server_process,
+)
 from vime.backends.vllm_utils.server_control import unregister_worker
 from vime.ray.ray_actor import RayActor
 from vime.utils.http_utils import _wrap_ipv6, get_host_info
@@ -39,31 +46,28 @@ def get_base_gpu_id(args, rank):
     return start_index
 
 
-def launch_server_process(server_args_dict: dict) -> multiprocessing.Process:
-    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
-    os.environ.pop("PYTORCH_ALLOC_CONF", None)
-    # Mooncake's default RPC range (15000-17000) overlaps our HTTP port
-    # allocation. Its workers can bind a port before another server starts.
-    # Preserve explicit ranges, including the legacy PRC spelling.
-    if not any(f"MC_{bound}_{spelling}_PORT" in os.environ for bound in ("MIN", "MAX") for spelling in ("RPC", "PRC")):
-        os.environ["MC_MIN_PRC_PORT"] = "27000"
-        os.environ["MC_MAX_PRC_PORT"] = "28000"
+def launch_server_process(server_args_dict: dict):
+    prepare_server_environment(os.environ)
     env = _build_subprocess_env(server_args_dict)
     kwargs = {k: v for k, v in server_args_dict.items() if not k.startswith("_")}
     host = _wrap_ipv6(kwargs.get("host") or "127.0.0.1")
     kwargs["host"] = host.strip("[]")
     logger.info("Launching vLLM server: %s", kwargs)
 
-    multiprocessing.set_start_method("spawn", force=True)
-    p = multiprocessing.Process(target=_run_vllm_server, args=(kwargs, env))
-    p.start()
+    executable = getattr(server_args_dict["_args"], "vllm_python_executable", None)
+    if executable:
+        p = launch_server_subprocess(executable, kwargs, environ=env)
+    else:
+        multiprocessing.set_start_method("spawn", force=True)
+        p = multiprocessing.Process(target=_run_vllm_server, args=(kwargs, env))
+        p.start()
 
     if server_args_dict.get("node_rank", 0) != 0:
         return p
 
     _wait_server_healthy(
         base_url=f"http://{host}:{server_args_dict['port']}",
-        is_process_alive=lambda: p.is_alive(),
+        is_process_alive=lambda: p.poll() is None if executable else p.is_alive(),
     )
 
     return p
@@ -102,8 +106,9 @@ def _build_subprocess_env(server_args_dict: dict[str, Any]) -> dict[str, str]:
     return env
 
 
-def _run_vllm_server(kwargs: dict, env: dict) -> None:
+def _run_vllm_server(kwargs: dict, env: dict, *, config_keys=()) -> None:
     os.environ.update(env)
+    _prepare_server_stdin()
 
     parent = multiprocessing.parent_process()
     if parent is not None:
@@ -122,9 +127,32 @@ def _run_vllm_server(kwargs: dict, env: dict) -> None:
 
     ns = argparse.Namespace(**kwargs)
     parser = make_arg_parser(FlexibleArgumentParser())
-    args = parser.parse_args(args=[], namespace=ns)
+    config_args = [
+        argument for key in config_keys for argument in (f"--{key.replace('_', '-')}", json.dumps(kwargs[key]))
+    ]
+    args = parser.parse_args(args=config_args, namespace=ns)
     validate_parsed_serve_args(args)
     ServeSubcommand.cmd(args)
+
+
+def _prepare_server_stdin():
+    # Uvicorn passes stdin's fd to spawn workers. Ray's nested spawn can leave
+    # sys.stdin on a nonstandard fd that is absent in those workers.
+    try:
+        if sys.stdin.fileno() == 0:
+            os.fstat(0)
+            return
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        sys.stdin.close()
+    except (AttributeError, OSError):
+        pass
+    descriptor = os.open(os.devnull, os.O_RDONLY)
+    if descriptor != 0:
+        os.dup2(descriptor, 0)
+        os.close(descriptor)
+    sys.stdin = os.fdopen(0, "r", closefd=False)
 
 
 def _wait_server_healthy(base_url, is_process_alive):
@@ -355,7 +383,7 @@ class VLLMEngine(RayActor):
                 # Owner-side cleanup keeps the URL outside this actor for retry.
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
 
-        kill_process_tree(self.process.pid)
+        terminate_server_process(self.process)
 
     def get_weight_version(self):
         if self.node_rank != 0:
