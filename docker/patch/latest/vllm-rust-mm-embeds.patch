@@ -56,21 +56,6 @@ index 100c00a68ac..23c3853a695 100644
                          max_logprobs: None,
                          stream_interval: 1,
                          shutdown_timeout: 0,
-@@ -1193,10 +1195,10 @@ fn frontend_args_json_preserves_resolved_engine_config() {
-         "frontend",
-         "--listen-fd",
-         "3",
--        "--input-address",
--        "ipc:///tmp/input.sock",
--        "--output-address",
--        "ipc:///tmp/output.sock",
-+        "--input-listener-fd",
-+        "999999",
-+        "--output-listener-fd",
-+        "999998",
-         "--args-json",
-         &payload.to_string(),
-     ])
 @@ -1311,7 +1313,7 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
          "--output-listener-fd",
          "999998",
