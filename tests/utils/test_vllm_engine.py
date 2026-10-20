@@ -808,35 +808,6 @@ def test_spawned_server_selects_current_entrypoint(monkeypatch, encoder_only, pa
     assert calls[-2:] == ["joined", 123]
 
 
-def test_isolated_runtime_reconstructs_typed_config_with_serving_parser(monkeypatch):
-    import json
-    from unittest.mock import Mock
-
-    from vllm.config import CompilationConfig
-    from vllm.config.device import DeviceConfig
-    from vllm.entrypoints.cli.serve import ServeSubcommand
-
-    from vime.backends.vllm_utils import runtime
-
-    monkeypatch.setattr(DeviceConfig, "__post_init__", lambda self: setattr(self, "device_type", "cpu"))
-    process = Mock()
-    monkeypatch.setattr(runtime.subprocess, "Popen", Mock(return_value=process))
-    runtime.launch_server_subprocess(
-        "/serving/python", {"model": "/checkpoint", "compilation_config": CompilationConfig(mode=0)}
-    )
-    payload = json.loads(process.stdin.write.call_args.args[0])
-    assert payload["config_keys"] == ["compilation_config"]
-    assert payload["server_args"]["compilation_config"]["mode"] == 0
-    serve = Mock()
-    monkeypatch.setattr(mod.multiprocessing, "parent_process", lambda: None)
-    monkeypatch.setattr(mod, "_prepare_server_stdin", lambda: None)
-    monkeypatch.setattr(ServeSubcommand, "cmd", serve)
-    mod._run_vllm_server(payload["server_args"], {}, config_keys=payload["config_keys"])
-    parsed = serve.call_args.args[0]
-    assert isinstance(parsed.compilation_config, CompilationConfig)
-    assert parsed.compilation_config.mode == 0
-
-
 @pytest.mark.unit
 def test_get_base_gpu_id_with_critic_offset(vllm_args):
     vllm_args.colocate = False

@@ -172,5 +172,31 @@ def test_runtime_entrypoint_constructs_server_args_in_serving_process(monkeypatc
     assert engine._run_vllm_server.call_args.kwargs == {"config_keys": []}
 
 
+def test_isolated_runtime_reconstructs_typed_config_with_serving_parser(monkeypatch):
+    from vllm.config import CompilationConfig
+    from vllm.config.device import DeviceConfig
+    from vllm.entrypoints.cli.serve import ServeSubcommand
+
+    from vime.backends.vllm_utils import vllm_engine as mod
+
+    monkeypatch.setattr(DeviceConfig, "__post_init__", lambda self: setattr(self, "device_type", "cpu"))
+    process = Mock()
+    monkeypatch.setattr(runtime.subprocess, "Popen", Mock(return_value=process))
+    runtime.launch_server_subprocess(
+        "/serving/python", {"model": "/checkpoint", "compilation_config": CompilationConfig(mode=0)}
+    )
+    payload = json.loads(process.stdin.write.call_args.args[0])
+    assert payload["config_keys"] == ["compilation_config"]
+    assert payload["server_args"]["compilation_config"]["mode"] == 0
+    serve = Mock()
+    monkeypatch.setattr(mod.multiprocessing, "parent_process", lambda: None)
+    monkeypatch.setattr(mod, "_prepare_server_stdin", lambda: None)
+    monkeypatch.setattr(ServeSubcommand, "cmd", serve)
+    mod._run_vllm_server(payload["server_args"], {}, config_keys=payload["config_keys"])
+    parsed = serve.call_args.args[0]
+    assert isinstance(parsed.compilation_config, CompilationConfig)
+    assert parsed.compilation_config.mode == 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
