@@ -43,7 +43,8 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type deepscaler
+   --rm-type math
+   --custom-reward-post-process-path examples.multi_agent.agent_system.reward_post_process
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8

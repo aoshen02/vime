@@ -99,7 +99,7 @@ steps:
         python:3.11 bash -c '
           set -euo pipefail
           pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil wandb "straw-queue>=0.1.3"
+          pip install -q pytest numpy msgspec==0.22.0 packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil wandb "straw-queue>=0.1.3"
           pip install -q -e . --no-deps
           python tests/test_megatron_argument_validation.py
           python tests/test_megatron_tokenizer_init.py
@@ -154,7 +154,7 @@ steps:
         python:3.11 bash -c '
           set -euo pipefail
           pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard wandb
+          pip install -q pytest numpy msgspec==0.22.0 packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard wandb
           pip install -q openai openai-agents anthropic
           pip install -q -e . --no-deps
           python tests/test_agent/test_adapters.py
@@ -271,7 +271,7 @@ steps:
         python:3.11 bash -lc '
           set -euo pipefail
           pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil pydantic
+          pip install -q pytest numpy msgspec==0.22.0 packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil pydantic
           pip install -q -e . --no-deps
           python -m pytest tests/utils
         '
@@ -311,3 +311,4 @@ steps:
       queue: small_cpu_queue_premerge
     timeout_in_minutes: 10
     command: python3 .buildkite/gpu_suites.py | buildkite-agent pipeline upload
+

@@ -1,9 +1,9 @@
-ARG BASE_IMAGE=vllm/vllm-openai@sha256:a3bc7f09c1e2e72e068021feb75118c92e98c538706caa0c5d1acc0bb9252623
+ARG BASE_IMAGE=vllm/vllm-openai@sha256:cb12c3016938a4ee98ed176ac833984089460689a0982cff4b5a60bb45b3cded
 FROM rust:1.95-bookworm AS vllm-rust-frontend
 ENV CARGO_BUILD_JOBS=4
 ARG PATCH_VERSION=latest
-ARG VLLM_COMMIT=39983a5e7a5a575a7829f5d5ada50a33d9337ec1
-ARG VLLM_RS_BUILD_VERSION=0.32.0rc1.dev329+g39983a5e7
+ARG VLLM_COMMIT=83c078d955cd6e0c63d3b12abe669c8de936a370
+ARG VLLM_RS_BUILD_VERSION=0.32.1rc1.dev361+g83c078d95
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-frontend.patch /tmp/vllm-rust-frontend.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-observability.patch /tmp/vllm-rust-observability.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-multimodal.patch /tmp/vllm-rust-multimodal.patch
@@ -44,11 +44,13 @@ ENV PATH=/usr/local/cargo/bin:${PATH}
 ARG PATCH_VERSION=latest
 ARG VLLM_ROUTER_COMMIT=1fbcde7443d75b36befb61bc081f64c2a1f13a4b
 COPY docker/patch/${PATCH_VERSION}/router-health-check.patch /tmp/router-health-check.patch
+COPY docker/patch/${PATCH_VERSION}/router-pd-registration.patch /tmp/router-pd-registration.patch
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake pkg-config libssl-dev && \
     uv pip install --system setuptools-rust wheel && \
     git init /router && cd /router && git remote add origin https://github.com/vllm-project/router.git && \
     git fetch --depth 1 origin ${VLLM_ROUTER_COMMIT} && git checkout FETCH_HEAD && \
     git apply /tmp/router-health-check.patch && \
+    git apply /tmp/router-pd-registration.patch && \
     uv build --python /usr/bin/python3 --wheel --no-build-isolation --out-dir /wheels
 
 FROM ${BASE_IMAGE}
@@ -56,7 +58,7 @@ FROM ${BASE_IMAGE}
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG VLLM_COMMIT=39983a5e7a5a575a7829f5d5ada50a33d9337ec1
+ARG VLLM_COMMIT=83c078d955cd6e0c63d3b12abe669c8de936a370
 ARG MEGATRON_COMMIT=4b4acac9a1d28ea6829c8d4f566d75698a21249d
 ARG DEEPGEMM_COMMIT=8965e4a5cded4041c8dbbe8d35b0be31fd8da90b
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
@@ -227,7 +229,6 @@ RUN cd Megatron-LM && \
 # Patch vLLM with vime's local fixes. vLLM is a pip install (not a git checkout),
 # so apply the independently maintained patches in their validated order.
 COPY docker/patch/${PATCH_VERSION}/vllm-pull_weights.patch /tmp/vllm-pull_weights.patch
-COPY docker/patch/${PATCH_VERSION}/vllm.patch /tmp/vllm.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-score-centering.patch /tmp/vllm-score-centering.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-pd-request-metrics.patch /tmp/vllm-pd-request-metrics.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vllm-inflight-queue-diagnostics.patch
@@ -235,7 +236,6 @@ COPY docker/patch/${PATCH_VERSION}/vllm-generation-health.patch /tmp/vllm-genera
 COPY docker/patch/${PATCH_VERSION}/vllm-tensor-dump.patch /tmp/vllm-tensor-dump.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-nixl-peer-retirement.patch /tmp/vllm-nixl-peer-retirement.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-mooncake-prom-metrics.patch /tmp/vllm-mooncake-prom-metrics.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-host-cache-ratio.patch /tmp/vllm-host-cache-ratio.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-ec-dp-control.patch /tmp/vllm-ec-dp-control.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-mm-decoder-only.patch /tmp/vllm-mm-decoder-only.patch
@@ -243,10 +243,11 @@ COPY docker/patch/${PATCH_VERSION}/vllm-rust-server-info.patch /tmp/vllm-rust-se
 COPY docker/patch/${PATCH_VERSION}/vllm-deepgemm-bf16.patch /tmp/vllm-deepgemm-bf16.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepep-optional-shrink.patch /tmp/vllm-deepep-optional-shrink.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-glm5next-unbounded-gate.patch /tmp/vllm-glm5next-unbounded-gate.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-utility-rpc-cleanup.patch /tmp/vllm-utility-rpc-cleanup.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-tito-columnar-logprobs-render.patch /tmp/vllm-tito-columnar-logprobs-render.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
-    git apply -v --allow-empty /tmp/vllm.patch && \
     git apply -v /tmp/vllm-score-centering.patch && \
     git apply -v /tmp/vllm-pd-request-metrics.patch && \
     git apply -v /tmp/vllm-inflight-queue-diagnostics.patch && \
@@ -254,7 +255,6 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-tensor-dump.patch && \
     git apply -v /tmp/vllm-fine-grained-tracing.patch && \
     git apply -v /tmp/vllm-nixl-peer-retirement.patch && \
-    git apply -v /tmp/vllm-mooncake-prom-metrics.patch && \
     git apply -v /tmp/vllm-host-cache-ratio.patch && \
     git apply -v /tmp/vllm-ec-dp-control.patch && \
     git apply -v /tmp/vllm-mm-decoder-only.patch && \
@@ -262,7 +262,9 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-deepgemm-bf16.patch && \
     git apply -v /tmp/vllm-deepep-optional-shrink.patch && \
     git apply -v /tmp/vllm-glm5next-unbounded-gate.patch && \
-    rm /tmp/vllm-pull_weights.patch /tmp/vllm.patch \
+    git apply -v /tmp/vllm-utility-rpc-cleanup.patch && \
+    git apply -v /tmp/vllm-tito-columnar-logprobs-render.patch && \
+    rm /tmp/vllm-pull_weights.patch \
        /tmp/vllm-score-centering.patch \
        /tmp/vllm-pd-request-metrics.patch \
        /tmp/vllm-inflight-queue-diagnostics.patch \
@@ -270,14 +272,15 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
        /tmp/vllm-tensor-dump.patch \
        /tmp/vllm-fine-grained-tracing.patch \
        /tmp/vllm-nixl-peer-retirement.patch \
-       /tmp/vllm-mooncake-prom-metrics.patch \
        /tmp/vllm-host-cache-ratio.patch \
        /tmp/vllm-ec-dp-control.patch \
        /tmp/vllm-mm-decoder-only.patch \
        /tmp/vllm-rust-server-info.patch \
        /tmp/vllm-deepgemm-bf16.patch \
        /tmp/vllm-deepep-optional-shrink.patch \
-       /tmp/vllm-glm5next-unbounded-gate.patch
+       /tmp/vllm-glm5next-unbounded-gate.patch \
+       /tmp/vllm-utility-rpc-cleanup.patch \
+       /tmp/vllm-tito-columnar-logprobs-render.patch
 
 # ====================================== Install main package ============================================
 COPY --from=vllm-rust-frontend /build/rust/target/release/vllm-rs /usr/local/lib/python3.12/dist-packages/vllm/vllm-rs

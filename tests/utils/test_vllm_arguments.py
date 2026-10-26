@@ -25,6 +25,18 @@ _unit_stubs.install_vllm_cli_stubs()
 NUM_GPUS = 0
 
 
+@requires_vllm
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [([], None), (["--vllm-log-error-stack"], True), (["--no-vllm-log-error-stack"], False)],
+)
+def test_frontend_defaults_are_resolved_by_the_server(args_mod, monkeypatch, flags, expected):
+    _patch_device_config(monkeypatch)
+    parser = argparse.ArgumentParser()
+    args_mod.add_vllm_arguments(parser)
+    assert parser.parse_args(flags).vllm_log_error_stack is expected
+
+
 def test_python_executable_is_a_launcher_option(args_mod, monkeypatch):
     _patch_device_config(monkeypatch)
     parser = argparse.ArgumentParser()

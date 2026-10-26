@@ -208,13 +208,24 @@ def _observation_token_ids(
 ) -> list[int]:
     """Encode only the next user-turn boundary without re-rendering generated IDs."""
     kwargs = dict(template_kwargs or {})
-    prefix = tokenizer.apply_chat_template(
-        list(DUMMY_MESSAGES),
-        tools=tools,
-        tokenize=True,
-        add_generation_prompt=False,
-        **kwargs,
-    )
+    prefixes = [
+        _template_token_ids(
+            tokenizer.apply_chat_template(
+                [*DUMMY_MESSAGES, {"role": "user", "content": content}],
+                tools=tools,
+                tokenize=True,
+                add_generation_prompt=False,
+                **kwargs,
+            ),
+            field="dummy observation prefix",
+        )
+        for content in ("", "x")
+    ]
+    prefix_ids = []
+    for left, right in zip(*prefixes, strict=False):
+        if left != right:
+            break
+        prefix_ids.append(left)
     rendered = tokenizer.apply_chat_template(
         [*DUMMY_MESSAGES, message],
         tools=tools,
@@ -222,7 +233,6 @@ def _observation_token_ids(
         add_generation_prompt=True,
         **kwargs,
     )
-    prefix_ids = _template_token_ids(prefix, field="dummy observation prefix")
     rendered_ids = _template_token_ids(rendered, field="observation template")
     if rendered_ids[: len(prefix_ids)] != prefix_ids:
         raise ValueError("Observation template is not prefix-stable")

@@ -29,8 +29,8 @@ from aiohttp import web
 from vime.agent.parsing import parse_model_output
 from vime.agent.trajectory import REPLAY_FIELDS, TrajectoryManager, TurnRecord
 from vime.observability.trace_utils import TraceHandle, bind_trace_carrier, build_vllm_meta_trace_attrs, trace_span
-from vime.rollout.vllm_rollout import _inference_generate_meta_info, _score_centering_metadata
-from vime.utils.score_centering import score_centering_request
+from vime.rollout.vllm_rollout import _inference_generate_meta_info
+from vime.utils.score_centering import _score_centering_metadata, score_centering_request
 from vime.utils.types import Sample
 
 __all__ = ["TurnRecord"]

@@ -87,7 +87,6 @@ def execute():
     vllm_args = (
         f"--rollout-num-gpus-per-engine {NUM_GPUS} "
         "--router-policy consistent_hash "
-        "--vllm-max-model-len 32768 "
         "--vllm-enable-expert-parallel "
         "--vllm-gpu-memory-utilization 0.6 "
         "--vllm-generation-config vllm "

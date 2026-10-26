@@ -24,6 +24,6 @@ index 567f2d59c9f..6944f1142e2 100644
 +                envs.VLLM_EC_SIDE_CHANNEL_PORT
 +                + vllm_config.parallel_config.data_parallel_index
 +            )
-
+ 
          self._data = NixlDataTransport(
              agent_name=engine_id,

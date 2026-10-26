@@ -219,6 +219,7 @@ def _build_inference_sampling_params(sampling_params: dict[str, Any], logprobs: 
         "temperature": sampling_params["temperature"],
         "top_p": sampling_params["top_p"],
         "logprobs": logprobs,
+        "detokenize": bool(sampling_params.get("stop")),
     }
     tk = sampling_params.get("top_k")
     if tk is not None and (tk > 0 or tk == -1):
@@ -253,51 +254,6 @@ def _inference_generate_tokens_and_logprobs(choice: dict[str, Any]) -> tuple[lis
     content = content or []
     pairs = list(zip(token_ids, content, strict=False))
     return [token_id for token_id, _ in pairs], [float(item["logprob"]) for _, item in pairs]
-
-
-def _score_centering_metadata(
-    choice: dict[str, Any], token_ids: list[int], *, top_p: float, top_k: int
-) -> tuple[dict[str, Any], list[float] | None]:
-    content = (choice.get("logprobs") or {}).get("content") or []
-    if len(content) != len(token_ids):
-        raise ValueError("Score centering requires top logprobs for every generated token.")
-
-    if top_p == 1.0:
-        rows = []
-        for item in content:
-            row = {entry["token_id"]: float(entry["logprob"]) for entry in item.get("top_logprobs") or []}
-            rows.append(row)
-        heads = [sorted(row.items(), key=lambda item: item[1], reverse=True)[:top_k] for row in rows]
-        if any(len(head) != top_k for head in heads):
-            raise ValueError(f"Score centering requires {top_k} sampler top logprobs per token.")
-        return {
-            "score_centering_topk": (
-                np.asarray([[token_id for token_id, _ in head] for head in heads], dtype=np.int32),
-                np.asarray([[logprob for _, logprob in head] for head in heads], dtype=np.float32),
-            )
-        }, None
-
-    support = choice.get("sampling_mask")
-    if not isinstance(support, list) or len(support) != len(token_ids):
-        raise ValueError("Top-p score centering requires a sampling mask for every generated token.")
-    support_logprobs = choice.get("sampling_mask_logprobs")
-    if not isinstance(support_logprobs, list) or len(support_logprobs) != len(support):
-        raise ValueError("Top-p score centering requires logprobs aligned with the sampling mask.")
-    ids = np.asarray([token_id for row in support for token_id in row], dtype=np.int32)
-    offsets = np.cumsum([0, *(len(row) for row in support)], dtype=np.int32)
-    normalized_logprobs = []
-    sampled_logprobs = []
-    for sampled_token, support_ids, logprobs in zip(token_ids, support, support_logprobs, strict=True):
-        if len(support_ids) != len(logprobs):
-            raise ValueError("Top-p score centering requires logprobs aligned with the sampling mask.")
-        try:
-            sampled_logprobs.append(float(logprobs[support_ids.index(sampled_token)]))
-        except ValueError as error:
-            raise ValueError("Sampled token is missing from the top-p sampling mask.") from error
-        normalized_logprobs.extend(logprobs)
-    return {
-        "score_centering_top_p": (ids, offsets, np.asarray(normalized_logprobs, dtype=np.float32))
-    }, sampled_logprobs
 
 
 def _mm_render_response_to_generate_body(render_data: Any, model: str) -> dict[str, Any]:
@@ -417,6 +373,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
         score_centering_request(args, sampling_params)
     logprobs = args.score_centering_top_k + 1 if score_centering and args.rollout_top_p == 1 else 1
+    score_centering_top_k = (0 if args.rollout_top_p < 1 else args.score_centering_top_k) if score_centering else None
     inference_sampling_params = _build_inference_sampling_params(sampling_params, logprobs)
     routed_experts_start = 0
     if args.use_rollout_routing_replay and sample.response_length:
@@ -458,7 +415,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         generate_body["sampling_params"] = inference_sampling_params
         gen_url = f"{base}/inference/v1/generate"
         with trace_span(sample, "vllm_mm_generate", attrs={"max_tokens": sampling_params["max_new_tokens"]}):
-            output = await post(gen_url, generate_body, headers=headers)
+            output = await post(gen_url, generate_body, headers=headers, score_centering_top_k=score_centering_top_k)
     else:
         url = f"{base}/inference/v1/generate"
         payload = {
@@ -468,7 +425,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         }
 
         with trace_span(sample, "vllm_generate", attrs={"max_new_tokens": sampling_params["max_new_tokens"]}) as span:
-            output = await post(url, payload, headers=headers)
+            output = await post(url, payload, headers=headers, score_centering_top_k=score_centering_top_k)
             if hasattr(span, "update"):
                 span.update(build_vllm_meta_trace_attrs(output))
 
@@ -480,15 +437,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if routed_experts_start:
         meta_info["routed_experts_start_len"] = routed_experts_start
     if score_centering:
-        score_metadata, normalized_logprobs = _score_centering_metadata(
-            choice,
-            new_response_tokens,
-            top_p=args.rollout_top_p,
-            top_k=args.score_centering_top_k,
-        )
-        meta_info.update(score_metadata)
-        if normalized_logprobs is not None:
-            new_response_log_probs = normalized_logprobs
+        meta_info.update(output["meta_info"])
 
     # Decode text from token_ids
     skip_sp = sampling_params.get("skip_special_tokens")
@@ -525,8 +474,11 @@ def _inference_generate_meta_info(output: dict[str, Any]) -> dict[str, Any]:
     else:
         finish = {"type": "stop"}
     meta: dict[str, Any] = {"finish_reason": finish}
-    if output.get("weight_version") is not None:
-        meta["weight_version"] = str(output["weight_version"])
+    meta["weight_versions"] = [
+        span["version"] for span in choice.get("weight_versions") or [] if span["start"] < span["end"]
+    ]
+    if "weight_versions" not in choice and output.get("weight_version") is not None:
+        meta["weight_versions"] = [str(output["weight_version"])]
     usage = output.get("usage")
     if usage:
         meta["prompt_tokens"] = usage.get("prompt_tokens", 0)

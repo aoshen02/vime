@@ -1,5 +1,6 @@
 import argparse
 import logging
+from dataclasses import fields
 
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.utils.argparse_utils import FlexibleArgumentParser
@@ -109,9 +110,12 @@ def add_vllm_arguments(parser):
     parser.add_argument = _wrap_add_argument(old_add_argument)
     parser.add_argument_group = patched_add_argument_group
     AsyncEngineArgs.add_cli_args(parser)
-    from vllm.entrypoints.launchers.cli_args import FrontendArgs
+    from vllm.entrypoints.common.cli_args import FrontendArgs
 
     FrontendArgs.add_cli_args(parser)
+    parser.set_defaults(
+        **{f"vllm_{field.name}": None for field in fields(FrontendArgs) if field.name not in skipped_args}
+    )
     parser.add_argument = old_add_argument
     parser.add_argument_group = old_add_argument_group
 

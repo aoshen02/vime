@@ -1,8 +1,8 @@
 diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
-index 59e7440b02b..9217641e394 100644
+index 81b3036d01f..6b22b91d45c 100644
 --- a/rust/src/cmd/src/cli.rs
 +++ b/rust/src/cmd/src/cli.rs
-@@ -207,6 +207,10 @@ pub struct JsonStringList(pub Vec<String>);
+@@ -226,6 +226,10 @@ pub struct JsonStringList(pub Vec<String>);
  #[derive(Educe, Clone, Args, PartialEq, Eq, Deserialize)]
  #[educe(Debug)]
  pub struct SharedRuntimeArgs {
@@ -10,37 +10,37 @@ index 59e7440b02b..9217641e394 100644
 +    #[serde(default)]
 +    #[educe(Debug(ignore))]
 +    pub vllm_config: Option<Value>,
-     #[serde(rename = "model_tag")]
-     /// Model identifier or local model directory used for backend loading and
-     /// public model ID.
-@@ -557,6 +561,7 @@ impl SharedRuntimeArgs {
+     /// The model and the sources of its tokenizer and config files.
+     #[command(flatten)]
+     #[serde(flatten)]
+@@ -662,6 +666,7 @@ impl SharedRuntimeArgs {
                  Some(address) => CoordinatorMode::External { address },
                  None => CoordinatorMode::None,
              },
 +            vllm_config: self.vllm_config,
-             model: self.model,
-             revision: self.revision,
-             hf_overrides: self.hf_overrides,
-@@ -622,6 +627,7 @@ impl SharedRuntimeArgs {
+             model: model.id,
+             revision: model.revision,
+             tokenizer,
+@@ -740,6 +745,7 @@ impl SharedRuntimeArgs {
                  local_output_address,
              },
              coordinator_mode: CoordinatorMode::MaybeInProc,
 +            vllm_config: self.vllm_config,
-             model: self.model,
-             revision: self.revision,
-             hf_overrides: self.hf_overrides,
+             model: model.id,
+             revision: model.revision,
+             tokenizer,
 diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
-index dec8ab962da..100c00a68ac 100644
+index f0866f9c9e1..a50d7359fe4 100644
 --- a/rust/src/cmd/src/cli/tests.rs
 +++ b/rust/src/cmd/src/cli/tests.rs
-@@ -1171,9 +1171,45 @@ fn frontend_args_json_applies_defaults() {
+@@ -1312,9 +1312,45 @@ fn frontend_args_json_applies_defaults() {
      assert_eq!(args.runtime.renderer, RendererSelection::Auto);
      assert_eq!(args.runtime.max_logprobs, None);
      assert_eq!(args.runtime.shutdown_timeout, 0);
 +    assert_eq!(args.runtime.vllm_config, None);
      assert_eq!(args.into_config().transport_mode.data_parallel_size(), 4);
  }
-
+ 
 +#[test]
 +fn frontend_args_json_preserves_resolved_engine_config() {
 +    let resolved = serde_json::json!({
@@ -80,7 +80,7 @@ index dec8ab962da..100c00a68ac 100644
  fn frontend_args_json_ignores_engine_owned_max_model_len() {
      let cli = Cli::try_parse_from([
 diff --git a/rust/src/server/examples/external_engine_openai_qwen.rs b/rust/src/server/examples/external_engine_openai_qwen.rs
-index c35a5e5dcbb..c286055b727 100644
+index 69b07dfea73..c9938b79c7f 100644
 --- a/rust/src/server/examples/external_engine_openai_qwen.rs
 +++ b/rust/src/server/examples/external_engine_openai_qwen.rs
 @@ -51,6 +51,7 @@ async fn main() -> Result<()> {
@@ -92,10 +92,10 @@ index c35a5e5dcbb..c286055b727 100644
              handshake_address: args.handshake_address,
              advertised_host: args.host,
 diff --git a/rust/src/server/src/config.rs b/rust/src/server/src/config.rs
-index 726a75daba8..7a797080ddf 100644
+index d00c8c48ce4..c95112b68e0 100644
 --- a/rust/src/server/src/config.rs
 +++ b/rust/src/server/src/config.rs
-@@ -239,6 +239,9 @@ impl ObservabilityConfig {
+@@ -245,6 +245,9 @@ impl ObservabilityConfig {
  #[derive(Educe, Clone, PartialEq, Eq, Serialize)]
  #[educe(Debug)]
  pub struct Config {
@@ -118,11 +118,11 @@ index 24daa0ce8ce..e8b865aeee3 100644
 +        let vllm_config_json = config.vllm_config.clone().unwrap_or_else(|| {
 +            serde_json::to_value(config).expect("server info value must serialize")
 +        });
-
+ 
          Self {
              vllm_config_text: render_config_text(&vllm_config_json),
 diff --git a/vllm/entrypoints/cli/serve.py b/vllm/entrypoints/cli/serve.py
-index 94e6545c089..de29350450a 100644
+index 40f116514d3..a592dc6f2f6 100644
 --- a/vllm/entrypoints/cli/serve.py
 +++ b/vllm/entrypoints/cli/serve.py
 @@ -362,6 +362,7 @@ def run_multi_api_server(args: argparse.Namespace):
@@ -134,17 +134,17 @@ index 94e6545c089..de29350450a 100644
          else:
              # Start API server(s).
 diff --git a/vllm/v1/utils.py b/vllm/v1/utils.py
-index b8d98ff1cf7..9db442a595a 100644
+index 4a3a09d5a7f..9920170975f 100644
 --- a/vllm/v1/utils.py
 +++ b/vllm/v1/utils.py
 @@ -37,6 +37,7 @@ from vllm.v1.core.sched.output import SchedulerOutput
  if TYPE_CHECKING:
      import numpy as np
-
+ 
 +    from vllm.config import VllmConfig
      from vllm.v1.engine.coordinator import DPCoordinator
      from vllm.v1.engine.utils import CoreEngineActorManager, CoreEngineProcManager
-
+ 
 @@ -297,6 +298,7 @@ class RustFrontendProcessManager:
          data_parallel_size: int,
          stats_update_address: str | None = None,
@@ -159,11 +159,11 @@ index b8d98ff1cf7..9db442a595a 100644
          args_dict["http_timeout_keep_alive"] = envs.VLLM_HTTP_TIMEOUT_KEEP_ALIVE
 -        args_json = json.dumps(args_dict, sort_keys=True)
 -        cmd.extend(["--args-json", args_json])
-
+ 
          # The subprocess needs the real values, but the log must not carry
          # credentials such as api_key or hf_token.
-         from vllm.entrypoints.serve.utils.api_utils import redact_sensitive_args
-
+         from vllm.entrypoints.common.startup import redact_sensitive_args
+ 
          redacted_json = json.dumps(redact_sensitive_args(args_dict), sort_keys=True)
 +        if vllm_config is not None:
 +            from pydantic import TypeAdapter

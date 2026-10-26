@@ -1,8 +1,8 @@
 diff --git a/rust/src/cmd/src/cli.rs b/rust/src/cmd/src/cli.rs
-index 9217641e394..a9fdf3ec753 100644
+index 6b22b91d45c..185b432d706 100644
 --- a/rust/src/cmd/src/cli.rs
 +++ b/rust/src/cmd/src/cli.rs
-@@ -270,6 +270,9 @@ pub struct SharedRuntimeArgs {
+@@ -284,6 +284,9 @@ pub struct SharedRuntimeArgs {
      #[arg(long)]
      #[serde(default)]
      pub language_model_only: bool,
@@ -12,23 +12,23 @@ index 9217641e394..a9fdf3ec753 100644
      /// Maximum number of log probabilities to return when `logprobs` is
      /// specified in sampling parameters. `-1` means no cap.
      #[arg(long, value_parser = clap::value_parser!(i32).range(-1..), allow_negative_numbers = true)]
-@@ -574,6 +577,7 @@ impl SharedRuntimeArgs {
+@@ -681,6 +684,7 @@ impl SharedRuntimeArgs {
              tool_strict_level: self.tool_strict_level,
              renderer: self.renderer,
              language_model_only: self.language_model_only,
 +            enable_mm_embeds: self.enable_mm_embeds,
              chat_template: self.chat_template,
              default_chat_template_kwargs: self.default_chat_template_kwargs,
-             limit_mm_per_prompt: self.limit_mm_per_prompt,
-@@ -640,6 +644,7 @@ impl SharedRuntimeArgs {
+             trust_request_chat_template: self.trust_request_chat_template,
+@@ -760,6 +764,7 @@ impl SharedRuntimeArgs {
              tool_strict_level: self.tool_strict_level,
              renderer: self.renderer,
              language_model_only: self.language_model_only,
 +            enable_mm_embeds: self.enable_mm_embeds,
              chat_template: self.chat_template,
              default_chat_template_kwargs: self.default_chat_template_kwargs,
-             limit_mm_per_prompt: self.limit_mm_per_prompt,
-@@ -892,6 +897,7 @@ impl ServeArgs {
+             trust_request_chat_template: self.trust_request_chat_template,
+@@ -1053,6 +1058,7 @@ impl ServeArgs {
              self.runtime.collect_detailed_traces.clone(),
              reasoning_parser.as_deref(),
              self.runtime.language_model_only,
@@ -37,10 +37,10 @@ index 9217641e394..a9fdf3ec753 100644
              self.runtime.shutdown_timeout,
              handshake_port,
 diff --git a/rust/src/cmd/src/cli/tests.rs b/rust/src/cmd/src/cli/tests.rs
-index 100c00a68ac..23c3853a695 100644
+index 38f71590fe4..a288bf3c0a1 100644
 --- a/rust/src/cmd/src/cli/tests.rs
 +++ b/rust/src/cmd/src/cli/tests.rs
-@@ -188,6 +188,7 @@ fn serve_args_forward_python_flags_with_separator() {
+@@ -207,6 +207,7 @@ fn serve_args_forward_python_flags_with_separator() {
                          tool_strict_level: None,
                          renderer: Auto,
                          language_model_only: false,
@@ -48,7 +48,7 @@ index 100c00a68ac..23c3853a695 100644
                          max_logprobs: None,
                          stream_interval: 1,
                          shutdown_timeout: 0,
-@@ -1093,6 +1094,7 @@ fn frontend_args_accept_json() {
+@@ -1226,6 +1227,7 @@ fn frontend_args_accept_json() {
                          tool_strict_level: None,
                          renderer: Auto,
                          language_model_only: false,
@@ -56,7 +56,7 @@ index 100c00a68ac..23c3853a695 100644
                          max_logprobs: None,
                          stream_interval: 1,
                          shutdown_timeout: 0,
-@@ -1311,7 +1313,7 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
+@@ -1549,7 +1551,7 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
          "--output-listener-fd",
          "999998",
          "--args-json",
@@ -64,8 +64,8 @@ index 100c00a68ac..23c3853a695 100644
 +        r#"{"model_tag":"Qwen/Qwen3-0.6B","generation_config":"vllm","revision":"release","engine_ready_timeout_secs":42,"tool_call_parser":"hermes","reasoning_parser":"qwen3_thinking","tokenizer_mode":"deepseek_v32","language_model_only":true,"enable_mm_embeds":true,"max_logprobs":-1,"shutdown_timeout":3}"#,
      ])
      .unwrap();
-
-@@ -1331,8 +1333,10 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
+ 
+@@ -1569,8 +1571,10 @@ fn frontend_args_json_accepts_supported_non_default_fields() {
      );
      assert_eq!(args.runtime.renderer, RendererSelection::DeepSeekV32);
      assert!(args.runtime.language_model_only);
@@ -74,17 +74,17 @@ index 100c00a68ac..23c3853a695 100644
      assert_eq!(args.runtime.shutdown_timeout, 3);
 +    assert!(args.into_config().enable_mm_embeds);
  }
-
+ 
  #[test]
-@@ -1343,6 +1347,7 @@ fn serve_args_forward_auto_max_model_len_to_managed_engine() {
+@@ -1581,6 +1585,7 @@ fn serve_args_forward_auto_max_model_len_to_managed_engine() {
          "Qwen/Qwen3-0.6B",
          "--max-model-len",
          "auto",
 +        "--enable-mm-embeds",
      ])
      .unwrap();
-
-@@ -1358,6 +1363,7 @@ fn serve_args_forward_auto_max_model_len_to_managed_engine() {
+ 
+@@ -1596,6 +1601,7 @@ fn serve_args_forward_auto_max_model_len_to_managed_engine() {
              "auto",
              "--reasoning-parser",
              "qwen3",
@@ -92,7 +92,7 @@ index 100c00a68ac..23c3853a695 100644
          ]
      "#]]
      .assert_debug_eq(&config.python_args);
-@@ -1803,6 +1809,7 @@ fn serve_args_accept_handshake_aliases() {
+@@ -2179,6 +2185,7 @@ fn serve_args_accept_handshake_aliases() {
                          tool_strict_level: None,
                          renderer: Auto,
                          language_model_only: false,
@@ -100,50 +100,35 @@ index 100c00a68ac..23c3853a695 100644
                          max_logprobs: None,
                          stream_interval: 1,
                          shutdown_timeout: 0,
-@@ -1964,6 +1971,7 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
+@@ -2350,6 +2357,7 @@ fn serve_frontend_config_uses_dp_address_as_advertised_host() {
              tool_strict_level: None,
              renderer: Auto,
              language_model_only: false,
 +            enable_mm_embeds: false,
              chat_template: None,
              default_chat_template_kwargs: None,
-             limit_mm_per_prompt: {},
-@@ -2063,6 +2071,7 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
+             trust_request_chat_template: false,
+@@ -2461,6 +2469,7 @@ fn serve_frontend_config_keeps_tcp_transport_for_non_local_only_topology() {
              tool_strict_level: None,
              renderer: Auto,
              language_model_only: false,
 +            enable_mm_embeds: false,
              chat_template: None,
              default_chat_template_kwargs: None,
-             limit_mm_per_prompt: {},
-@@ -2206,6 +2215,7 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
+             trust_request_chat_template: false,
+@@ -2660,6 +2669,7 @@ fn frontend_config_uses_external_coordinator_when_coordinator_address_is_present
              tool_strict_level: None,
              renderer: Auto,
              language_model_only: false,
 +            enable_mm_embeds: false,
              chat_template: None,
              default_chat_template_kwargs: None,
-             limit_mm_per_prompt: {},
-@@ -2458,10 +2468,10 @@ fn frontend_args_json_accepts_graduated_otlp_endpoint() {
-         "frontend",
-         "--listen-fd",
-         "3",
--        "--input-address",
--        "ipc:///tmp/input.sock",
--        "--output-address",
--        "ipc:///tmp/output.sock",
-+        "--input-listener-fd",
-+        "999999",
-+        "--output-listener-fd",
-+        "999998",
-         "--args-json",
-         r#"{"model_tag":"Qwen/Qwen3-0.6B","otlp_traces_endpoint":"localhost:4317"}"#,
-     ])
+             trust_request_chat_template: false,
 diff --git a/rust/src/managed-engine/src/cli.rs b/rust/src/managed-engine/src/cli.rs
-index 8aeae9067ae..4e42d2bf8b1 100644
+index a3c3a5893c9..9d1e8519835 100644
 --- a/rust/src/managed-engine/src/cli.rs
 +++ b/rust/src/managed-engine/src/cli.rs
-@@ -91,6 +91,7 @@ impl ManagedEngineArgs {
+@@ -90,6 +90,7 @@ impl ManagedEngineArgs {
          collect_detailed_traces: Option<String>,
          reasoning_parser: Option<&str>,
          language_model_only: bool,
@@ -151,7 +136,7 @@ index 8aeae9067ae..4e42d2bf8b1 100644
          disable_log_stats: bool,
          shutdown_timeout: u64,
          handshake_port: u16,
-@@ -130,6 +131,9 @@ impl ManagedEngineArgs {
+@@ -125,6 +126,9 @@ impl ManagedEngineArgs {
          if language_model_only {
              python_args.push("--language-model-only".to_string());
          }
@@ -162,22 +147,22 @@ index 8aeae9067ae..4e42d2bf8b1 100644
              python_args.push("--disable-log-stats".to_string());
          }
 diff --git a/rust/src/server/examples/external_engine_openai_qwen.rs b/rust/src/server/examples/external_engine_openai_qwen.rs
-index c286055b727..80d13c02451 100644
+index c9938b79c7f..3a1bad29a82 100644
 --- a/rust/src/server/examples/external_engine_openai_qwen.rs
 +++ b/rust/src/server/examples/external_engine_openai_qwen.rs
-@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
+@@ -78,6 +78,7 @@ async fn main() -> Result<()> {
          tool_strict_level: None,
          renderer: RendererSelection::Auto,
          language_model_only: false,
 +        enable_mm_embeds: false,
          chat_template: None,
          default_chat_template_kwargs: None,
-         limit_mm_per_prompt: HashMap::new(),
+         trust_request_chat_template: false,
 diff --git a/rust/src/server/src/config.rs b/rust/src/server/src/config.rs
-index 7a797080ddf..73e86b29466 100644
+index c95112b68e0..f69d2dba0d6 100644
 --- a/rust/src/server/src/config.rs
 +++ b/rust/src/server/src/config.rs
-@@ -274,6 +274,7 @@ pub struct Config {
+@@ -284,6 +284,7 @@ pub struct Config {
      /// Disable frontend-side multimodal preprocessing and render the model as
      /// language-only.
      pub language_model_only: bool,
@@ -186,15 +171,15 @@ index 7a797080ddf..73e86b29466 100644
      /// template.
      pub chat_template: Option<String>,
 diff --git a/rust/src/server/src/lib.rs b/rust/src/server/src/lib.rs
-index 0630c4f429f..e5c72df11a7 100644
+index 348c7cf36bc..120682f645d 100644
 --- a/rust/src/server/src/lib.rs
 +++ b/rust/src/server/src/lib.rs
-@@ -91,7 +91,7 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
+@@ -98,7 +98,7 @@ async fn build_state(config: &Config) -> Result<Arc<AppState>> {
              hf_overrides: config.hf_overrides.clone(),
              generation_config: config.generation_config,
              renderer: config.renderer,
 -            language_model_only: config.language_model_only,
 +            language_model_only: config.language_model_only && !config.enable_mm_embeds,
              chat_template: config.chat_template.clone(),
+             trust_request_chat_template: config.trust_request_chat_template,
              chat_template_content_format: config.chat_template_content_format,
-             default_chat_template_kwargs: config

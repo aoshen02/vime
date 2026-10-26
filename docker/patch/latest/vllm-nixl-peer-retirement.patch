@@ -5,7 +5,7 @@ index e6a3cd2f841..095e166c4af 100644
 @@ -793,6 +793,12 @@ class KVConnectorBase_V1(ABC):
          """
          return None
-
+ 
 +    def get_idle_timeout(self) -> float | None:
 +        return None
 +
@@ -14,7 +14,7 @@ index e6a3cd2f841..095e166c4af 100644
 +
      def reset_cache(self) -> bool | None:
          """Reset the connector's internal cache.
-
+ 
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py
 index 70f9454a62b..24f8f8ff039 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/multi_connector.py
@@ -22,7 +22,7 @@ index 70f9454a62b..24f8f8ff039 100644
 @@ -751,6 +751,18 @@ class MultiConnector(KVConnectorBase_V1, SupportsHMA):
              prom_metrics,
          )
-
+ 
 +    def get_idle_timeout(self) -> float | None:
 +        intervals = [
 +            interval
@@ -39,30 +39,30 @@ index 70f9454a62b..24f8f8ff039 100644
          results = [c.reset_cache() is not False for c in self._connectors]
          return all(results)
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
-index 0ada1bb6fe2..81ac2d6b583 100644
+index 4388e7c4eea..6998a9d183a 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py
-@@ -125,6 +125,10 @@ def _share_storage_and_block_stride(caches: list[torch.Tensor]) -> bool:
+@@ -126,6 +126,10 @@ def _share_storage_and_block_stride(caches: list[torch.Tensor]) -> bool:
      return len(block_strides) == len(storage_ptrs) == 1
-
-
+ 
+ 
 +def _is_remote_disconnect(error: Exception) -> bool:
 +    return type(error).__name__ == "nixlRemoteDisconnectError"
 +
 +
  class NixlBaseConnectorWorker:
      """Base implementation of Worker side methods shared by pull and push."""
-
-@@ -702,6 +746,8 @@ class NixlBaseConnectorWorker:
-                 else nixl_agent_config(num_threads=num_threads, capture_telemetry=True)
-             )
-
+ 
+@@ -744,6 +748,8 @@ class NixlBaseConnectorWorker:
+         sleep_mode = vllm_config.model_config.enable_sleep_mode and config is not None
+         if sleep_mode:
+             config = nixl_agent_config(backends=[], capture_telemetry=True)
 +        if "UCX" in self.nixl_backends:
 +            os.environ.setdefault("UCX_CUDA_IPC_CACHE", "n")
          self.nixl_wrapper = nixl_wrapper_cls(str(uuid.uuid4()), config)
-         # Map of engine_id -> {(pp_rank, tp_rank): agent_name, ...}.
-         # non-PP remote uses pp_rank 0, i.e. (0, tp_rank).
-@@ -905,6 +951,14 @@ class NixlBaseConnectorWorker:
+         if sleep_mode:
+             # Keep slept pages unpinned, for this agent only; UCX_* env vars win.
+@@ -957,6 +963,14 @@ class NixlBaseConnectorWorker:
          )
          # Map of pull peer (host, port) -> engine_id currently serving it.
          self._engine_by_address: dict[tuple[str, int], EngineId] = {}
@@ -74,18 +74,18 @@ index 0ada1bb6fe2..81ac2d6b583 100644
 +            )
 +        )
 +        self._next_engine_heartbeat: float = 0.0
-
+ 
          self.model_config = vllm_config.model_config
-
-@@ -3134,6 +3188,7 @@ class NixlBaseConnectorWorker:
+ 
+@@ -3329,6 +3343,7 @@ class NixlBaseConnectorWorker:
          self._reap_expired_send_leases(done_sending)
-
+ 
          self._cleanup_remote_engines()
 +        self._release_unreachable_remote_engines()
          return KVConnectorTransferResults(
              finished_sending=done_sending,
              finished_recving=done_recving,
-@@ -3363,7 +3418,10 @@ class NixlBaseConnectorWorker:
+@@ -3558,7 +3573,10 @@ class NixlBaseConnectorWorker:
              for agent_name in self._remote_agents[engine_id].values():
                  try:
                      self.nixl_wrapper.send_notif(agent_name, notif_msg=hb_msg)
@@ -97,10 +97,10 @@ index 0ada1bb6fe2..81ac2d6b583 100644
                      logger.debug(
                          "Failed to send heartbeat to engine %s",
                          engine_id,
-@@ -3837,6 +3895,58 @@ class NixlBaseConnectorWorker:
+@@ -4032,6 +4050,58 @@ class NixlBaseConnectorWorker:
              f" and a {backoff:.0f}s backoff" if backoff else "",
          )
-
+ 
 +    def _release_unreachable_remote_engines(self) -> None:
 +        """Release peers that failed heartbeat, once no reads are in flight."""
 +        if self._TRANSFER_MODE != "pull":
@@ -157,13 +157,13 @@ index 0ada1bb6fe2..81ac2d6b583 100644
          self, engine_id: EngineId, *, log_eviction: bool = True
      ) -> None:
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py
-index b42e2809023..36413894d06 100644
+index cedcd3597a1..b5ae9bfecb4 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py
-@@ -374,6 +374,18 @@ class NixlPullConnector(NixlBaseConnector):
-                 vllm_config, self.engine_id, kv_cache_config
-             )
-
+@@ -388,6 +388,18 @@ class NixlPullConnector(NixlBaseConnector):
+         assert self.connector_worker is not None
+         self.connector_worker.restore_kv_caches()
+ 
 +    def get_idle_timeout(self) -> float | None:
 +        interval = float(
 +            self.kv_transfer_config.get_from_extra_config(
@@ -180,10 +180,10 @@ index b42e2809023..36413894d06 100644
          assert self.connector_worker is not None
          assert isinstance(self.connector_worker, NixlPullConnectorWorker)
 diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
-index 53a2c9f74f2..99948118884 100644
+index 1593c4ad6ed..734d9b89fde 100644
 --- a/vllm/v1/engine/core.py
 +++ b/vllm/v1/engine/core.py
-@@ -1148,6 +1148,7 @@ class EngineCoreProc(EngineCore):
+@@ -1173,6 +1173,7 @@ class EngineCoreProc(EngineCore):
          engine_index: int = 0,
      ):
          self.input_queue = queue.Queue[tuple[EngineCoreRequestType, Any]]()
@@ -191,10 +191,10 @@ index 53a2c9f74f2..99948118884 100644
          self.output_queue = queue.Queue[tuple[int, EngineCoreOutputs] | bytes]()
          executor_fail_callback = lambda: self.input_queue.put_nowait(
              (EngineCoreRequestType.EXECUTOR_FAILED, b"")
-@@ -1606,10 +1607,24 @@ class EngineCoreProc(EngineCore):
+@@ -1635,10 +1636,24 @@ class EngineCoreProc(EngineCore):
              )
              self.output_queue.put_nowait((-1, EngineCoreOutputs(scheduler_stats=stats)))
-
+ 
 +    def _progress_idle_kv_connector(self, interval: float | None) -> None:
 +        if (
 +            interval is not None
@@ -216,17 +216,18 @@ index 53a2c9f74f2..99948118884 100644
              # Notify callbacks waiting for engine to become idle.
              self._notify_idle_state_callbacks()
              if self.input_queue.empty():
-@@ -1621,9 +1636,16 @@ class EngineCoreProc(EngineCore):
+@@ -1650,10 +1665,17 @@ class EngineCoreProc(EngineCore):
                      waited = True
              block = self.process_input_queue_block
              try:
--                req = self.input_queue.get(block=block)
 +                timeout = (
 +                    max(0.0, self._kv_idle_deadline - time.monotonic())
 +                    if block and idle_timeout is not None
 +                    else None
 +                )
-+                req = self.input_queue.get(block=block, timeout=timeout)
+                 with get_watch_dog().disable():
+-                    req = self.input_queue.get(block=block)
++                    req = self.input_queue.get(block=block, timeout=timeout)
                  self._handle_client_request(*req)
              except queue.Empty:
 +                if block and idle_timeout is not None:
@@ -235,13 +236,13 @@ index 53a2c9f74f2..99948118884 100644
              if not block:
                  break
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index 734f14120c3..6310c23e75b 100644
+index f02a4a4b13b..ac93142d054 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
-@@ -828,6 +828,10 @@ class Worker(WorkerBase):
+@@ -831,6 +831,10 @@ class Worker(WorkerBase):
              getattr(self.parallel_config, "_api_process_count", 1),
          )
-
+ 
 +    def on_kv_connector_idle(self) -> None:
 +        if has_kv_transfer_group():
 +            get_kv_transfer_group().on_idle()
@@ -256,7 +257,7 @@ index e1a4eaf2910..c807342e2bb 100644
 @@ -122,6 +122,9 @@ class WorkerBase:
          """
          raise NotImplementedError
-
+ 
 +    def on_kv_connector_idle(self) -> None:
 +        return
 +

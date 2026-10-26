@@ -250,7 +250,14 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
     if agent_e2e:
         step["command"] = "bash -c " + shlex.quote(command)
         step["timeout_in_minutes"] = 35
-        step["artifact_paths"] = ".agent-e2e/**/*"
+        step["artifact_paths"] = [
+            f".agent-e2e/run/{directory}*.{suffix}"
+            for directory in ("", "agents/**/", "sandboxes/**/")
+            for suffix in ("json", "jsonl", "log", "pt")
+        ] + [
+            ".agent-e2e/run/node/*/supervisor.log",
+            ".agent-e2e/run/node/.trash/*/supervisor.log",
+        ]
         step["plugins"][0]["kubernetes"]["podSpec"]["containers"][0]["securityContext"] = {"privileged": True}
     return step
 

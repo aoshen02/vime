@@ -783,7 +783,7 @@ def test_launch_server_process_brackets_ipv6_health_url(vllm_args, monkeypatch):
 @pytest.mark.parametrize("parent_alive", [False, True])
 def test_spawned_server_selects_current_entrypoint(monkeypatch, encoder_only, parent_alive):
     from vllm.entrypoints.cli.serve import ServeSubcommand
-    from vllm.entrypoints.launchers import cli_args
+    from vllm.entrypoints.common import cli_args
 
     calls = []
     watchers = []

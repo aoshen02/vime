@@ -490,8 +490,11 @@ class Sample:
         # Collect prefix cache statistics
         self.prefix_cache_info.add(meta_info=meta_info)
 
-        if new_token_count > 0 and "weight_version" in meta_info:
-            self.weight_versions.append(meta_info["weight_version"])
+        if new_token_count > 0:
+            if "weight_versions" in meta_info:
+                self.weight_versions.extend(meta_info["weight_versions"])
+            elif "weight_version" in meta_info:
+                self.weight_versions.append(meta_info["weight_version"])
 
         match meta_info["finish_reason"]["type"]:
             case "length":

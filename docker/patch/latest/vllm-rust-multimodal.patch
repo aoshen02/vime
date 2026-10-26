@@ -1,5 +1,5 @@
 diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
-index 027ba1c5926..8671bf5df1c 100644
+index 2432b0323bc..c1b36f0d4bb 100644
 --- a/rust/src/server/src/routes.rs
 +++ b/rust/src/server/src/routes.rs
 @@ -10,6 +10,7 @@ mod kv_event_sources;
@@ -10,11 +10,21 @@ index 027ba1c5926..8671bf5df1c 100644
  pub(crate) mod openai;
  mod pause;
  mod profile;
-@@ -136,7 +137,16 @@ fn build_router_with_options(
+@@ -46,8 +47,6 @@ const SCALE_OUT_DISABLED_MESSAGE: &str =
+ /// `/inference/v1/generate` but the Rust frontend does not implement yet.
+ const UNIMPLEMENTED_SCALE_OUT_ROUTES: &[&str] = &[
+     "/inference/v1/abort_requests",
+-    "/v1/chat/completions/render",
+-    "/v1/completions/render",
+     "/v1/messages/render",
+     "/v1/responses/render",
+     "/v1/chat/completions/derender",
+@@ -181,14 +180,25 @@ fn build_router_with_options(
      }
-
+ 
      if scale_out_endpoints_enabled {
 -        router = router.route("/inference/v1/generate", post(inference::generate));
+-        // TODO: implement the remaining scale-out routes.
 +        router = router
 +            .route("/inference/v1/generate", post(inference::generate))
 +            .route(
@@ -25,17 +35,27 @@ index 027ba1c5926..8671bf5df1c 100644
 +                "/v1/completions/render",
 +                post(render::serve_render_completion),
 +            );
+         for path in UNIMPLEMENTED_SCALE_OUT_ROUTES {
+             router = router.route(path, post(not_supported));
+         }
      } else {
          info!("{SCALE_OUT_DISABLED_MESSAGE}");
-         router = router.route("/inference/v1/generate", post(disabled_scale_out));
+-        router = router.route("/inference/v1/generate", post(disabled_scale_out));
++        router = router
++            .route("/inference/v1/generate", post(disabled_scale_out))
++            .route("/v1/chat/completions/render", post(disabled_scale_out))
++            .route("/v1/completions/render", post(disabled_scale_out));
+         for path in UNIMPLEMENTED_SCALE_OUT_ROUTES {
+             router = router.route(path, post(disabled_scale_out));
+         }
 diff --git a/rust/src/server/src/routes/inference/generate.rs b/rust/src/server/src/routes/inference/generate.rs
-index 3dbfb16bd10..3648b624e49 100644
+index 137b7f296ef..3aec9c8c73e 100644
 --- a/rust/src/server/src/routes/inference/generate.rs
 +++ b/rust/src/server/src/routes/inference/generate.rs
 @@ -57,10 +57,30 @@ pub async fn generate(
      let request_context = resolve_request_context(&headers, body.request_id.as_deref());
      let lora_resolution = state.resolve_model_with_loras(body.model.as_deref()).await;
-
+ 
 -    let mm_features = if let Some(parts) = body.content_parts.take() {
 +    if body.features.is_some() && body.content_parts.as_ref().is_some_and(|parts| !parts.is_empty())
 +    {
@@ -66,18 +86,18 @@ index 3dbfb16bd10..3648b624e49 100644
              .await
          {
 diff --git a/rust/src/server/src/routes/inference/generate/types.rs b/rust/src/server/src/routes/inference/generate/types.rs
-index ed609879640..44b9c7bff95 100644
+index 95b709572ae..aff1a49a46e 100644
 --- a/rust/src/server/src/routes/inference/generate/types.rs
 +++ b/rust/src/server/src/routes/inference/generate/types.rs
-@@ -12,6 +12,7 @@ use vllm_engine_core_client::protocol::request::ReasoningParserKwargs;
+@@ -13,6 +13,7 @@ use vllm_engine_core_client::protocol::request::ReasoningParserKwargs;
  use vllm_llm::WeightVersionSpan;
  use vllm_text::SamplingParams;
-
+ 
 +use crate::routes::multimodal_features::MultiModalFeatures;
- use crate::routes::openai::utils::types::{Normalizable, StreamOptions, Usage};
-
+ use crate::routes::openai::utils::types::{Normalizable, StreamOptions, StringOrArray, Usage};
+ 
  /// Sampling parameters for the token-in/token-out generate API.
-@@ -47,6 +48,7 @@ pub struct GenerateRequest {
+@@ -62,6 +63,7 @@ pub struct GenerateRequest {
      pub priority: i32,
      pub kv_transfer_params: Option<HashMap<String, Value>>,
      pub ec_transfer_params: Option<HashMap<String, Value>>,
@@ -350,19 +370,19 @@ index 00000000000..374936a79f3
 +    }
 +}
 diff --git a/rust/src/server/src/routes/render.rs b/rust/src/server/src/routes/render.rs
-index 2736641cdeb..cc24d48ab9a 100644
+index 68294e1aea0..a43a96a9dec 100644
 --- a/rust/src/server/src/routes/render.rs
 +++ b/rust/src/server/src/routes/render.rs
-@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, StatusCode};
- use axum::routing::{get, post};
+@@ -13,7 +13,7 @@ use axum::routing::{get, post};
+ use serde_json::Value;
  use thiserror_ext::AsReport as _;
  use vllm_engine_core_client::protocol::request::ReasoningParserKwargs;
 -use vllm_text::TextRequest;
 +use vllm_text::{TextRequest, TextRequestProcessor};
-
+ 
  use crate::DEFAULT_REQUEST_BODY_LIMIT_BYTES;
  use crate::error::{ApiError, text_submit_error};
-@@ -20,11 +20,13 @@ use crate::render::RenderState;
+@@ -22,11 +22,13 @@ use crate::render::RenderState;
  use crate::routes::inference::generate::{
      GenerateRequest, GenerateSamplingParams, validate_request_compat as validate_generate_request,
  };
@@ -374,11 +394,11 @@ index 2736641cdeb..cc24d48ab9a 100644
  };
 +use crate::state::AppState;
  use crate::utils::{resolve_request_context, unix_timestamp};
-
+ 
  pub(crate) fn build_router(state: Arc<RenderState>) -> Router {
-@@ -79,14 +81,14 @@ fn response_model(state: &RenderState, requested_model: Option<&str>) -> String
+@@ -81,15 +83,15 @@ fn response_model(state: &RenderState, requested_model: Option<&str>) -> String
  }
-
+ 
  fn lower_render_request(
 -    state: &RenderState,
 +    text: &TextRequestProcessor,
@@ -387,6 +407,7 @@ index 2736641cdeb..cc24d48ab9a 100644
      model: String,
      stream: bool,
      stream_options: Option<StreamOptions>,
+     return_token_ids: Option<bool>,
  ) -> Result<GenerateRequest, ApiError> {
 -    let prepared = state
 -        .text
@@ -394,19 +415,19 @@ index 2736641cdeb..cc24d48ab9a 100644
          .prepare(text_request)
          .map_err(|error| text_submit_error("failed to prepare render request", error))?;
      let token_ids = prepared.generate_request.prompt_token_ids;
-@@ -106,6 +108,11 @@ fn lower_render_request(
+@@ -115,6 +117,11 @@ fn lower_render_request(
          priority: text_request.priority,
-         kv_transfer_params: None,
-         ec_transfer_params: None,
+         kv_transfer_params,
+         ec_transfer_params,
 +        features: prepared
 +            .generate_request
 +            .mm_features
 +            .map(MultiModalFeatures::from_features)
 +            .transpose()?,
          content_parts: None,
-         return_token_ids: None,
-         // Carry what the chat route would pass to the engine, so the engine
-@@ -116,7 +123,7 @@ fn lower_render_request(
+         return_token_ids,
+         output_mode: None,
+@@ -126,7 +133,7 @@ fn lower_render_request(
          .then_some(text_request.reasoning_parser_kwargs),
          other: Default::default(),
      };
@@ -414,8 +435,8 @@ index 2736641cdeb..cc24d48ab9a 100644
 +    validate_generate_request(&request, served_model_names)?;
      Ok(request)
  }
-
-@@ -136,7 +143,8 @@ async fn render_chat(
+ 
+@@ -171,7 +178,8 @@ async fn render_chat(
          .await
          .map_err(|error| ApiError::invalid_request(error.to_report_string(), None))?;
      Ok(Json(lower_render_request(
@@ -425,7 +446,7 @@ index 2736641cdeb..cc24d48ab9a 100644
          text_request,
          model,
          stream,
-@@ -161,10 +169,62 @@ async fn render_completion(
+@@ -198,7 +206,8 @@ async fn render_completion(
          tokenizer.as_ref(),
      )?;
      Ok(Json(vec![lower_render_request(
@@ -435,7 +456,8 @@ index 2736641cdeb..cc24d48ab9a 100644
          text_request,
          model,
          stream,
-         stream_options,
+@@ -206,3 +215,58 @@ async fn render_completion(
+         return_token_ids,
      )?]))
  }
 +
@@ -447,6 +469,7 @@ index 2736641cdeb..cc24d48ab9a 100644
 +    let model = body.model.clone().unwrap_or_else(|| state.primary_model_name().to_owned());
 +    let stream = body.stream;
 +    let stream_options = body.stream_options.clone();
++    let return_token_ids = body.return_token_ids;
 +    let context = resolve_request_context(&headers, body.request_id.as_deref());
 +    let resolution = state.resolve_model_with_loras(Some(&model)).await;
 +    let request = lower_chat_request(body, &resolution, context)?;
@@ -464,6 +487,7 @@ index 2736641cdeb..cc24d48ab9a 100644
 +        model,
 +        stream,
 +        stream_options,
++        return_token_ids,
 +    )?))
 +}
 +
@@ -475,6 +499,7 @@ index 2736641cdeb..cc24d48ab9a 100644
 +    let model = body.model.clone().unwrap_or_else(|| state.primary_model_name().to_owned());
 +    let stream = body.stream;
 +    let stream_options = body.stream_options.clone();
++    let return_token_ids = body.return_token_ids;
 +    let context = resolve_request_context(&headers, body.request_id.as_deref());
 +    let resolution = state.resolve_model_with_loras(Some(&model)).await;
 +    let text = state.chat.text().request_processor();
@@ -487,16 +512,51 @@ index 2736641cdeb..cc24d48ab9a 100644
 +        model,
 +        stream,
 +        stream_options,
++        return_token_ids,
 +    )?]))
 +}
 diff --git a/rust/src/server/src/routes/tests.rs b/rust/src/server/src/routes/tests.rs
-index 29a5a25f5fa..cb4c5e3162b 100644
+index 99e10fe04ee..2bd6c1c49af 100644
 --- a/rust/src/server/src/routes/tests.rs
 +++ b/rust/src/server/src/routes/tests.rs
-@@ -1588,6 +1588,58 @@ async fn render_chat_response_can_be_submitted_to_generate_unchanged() {
+@@ -948,7 +948,7 @@ async fn scale_out_generate_route_can_be_enabled() {
+ 
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+ #[serial]
+-async fn unimplemented_scale_out_routes_follow_scale_out_gate() {
++async fn scale_out_routes_follow_scale_out_gate() {
+     const ROUTES: [&str; 7] = [
+         "/inference/v1/abort_requests",
+         "/v1/chat/completions/render",
+@@ -968,7 +968,23 @@ async fn unimplemented_scale_out_routes_follow_scale_out_gate() {
+ 
+     let enabled = build_router_with_scale_out_endpoints(state.clone(), true);
+     for uri in ROUTES {
+-        assert_route_not_supported(&enabled, "POST", uri, uri).await;
++        if matches!(uri, "/v1/chat/completions/render" | "/v1/completions/render") {
++            let response = enabled
++                .clone()
++                .call(
++                    Request::builder()
++                        .method("POST")
++                        .uri(uri)
++                        .header("content-type", "application/json")
++                        .body(Body::from("{}"))
++                        .expect("build request"),
++                )
++                .await
++                .expect("call app");
++            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
++        } else {
++            assert_route_not_supported(&enabled, "POST", uri, uri).await;
++        }
+     }
+ 
+     let disabled = build_router_with_scale_out_endpoints(state, false);
+@@ -1827,6 +1843,58 @@ async fn render_chat_response_can_be_submitted_to_generate_unchanged() {
      engine_task.finish().await;
  }
-
+ 
 +#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 +#[serial]
 +async fn combined_render_multimodal_response_can_be_submitted_to_generate_unchanged() {

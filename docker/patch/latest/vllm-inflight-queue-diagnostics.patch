@@ -1,5 +1,5 @@
 diff --git a/vllm/engine/protocol.py b/vllm/engine/protocol.py
-index 492f8a2ce15..b6f2050ddb5 100644
+index 149a5a54a11..60a8a9f00b7 100644
 --- a/vllm/engine/protocol.py
 +++ b/vllm/engine/protocol.py
 @@ -333,3 +333,7 @@ class EngineClient(ABC):
@@ -15,8 +15,8 @@ index 64201db3f3d..16f1d7bdac1 100644
 --- a/vllm/entrypoints/serve/instrumentator/basic.py
 +++ b/vllm/entrypoints/serve/instrumentator/basic.py
 @@ -28,7 +28,9 @@ def engine_client(request: Request) -> EngineClient:
-
-
+ 
+ 
  @router.get("/load")
 -async def get_server_load_metrics(request: Request):
 +async def get_server_load_metrics(
@@ -36,11 +36,11 @@ index 64201db3f3d..16f1d7bdac1 100644
 +            request
 +        ).get_inflight_queue_diagnostics(inflight_limit)
 +    return JSONResponse(content=content)
-
-
+ 
+ 
  @router.get("/version")
 diff --git a/vllm/v1/core/sched/interface.py b/vllm/v1/core/sched/interface.py
-index 4c51ff4c04f..da89f7681f0 100644
+index f9761d2e239..424837742ec 100644
 --- a/vllm/v1/core/sched/interface.py
 +++ b/vllm/v1/core/sched/interface.py
 @@ -3,7 +3,7 @@
@@ -49,13 +49,13 @@ index 4c51ff4c04f..da89f7681f0 100644
  from collections.abc import Iterable
 -from typing import TYPE_CHECKING
 +from typing import TYPE_CHECKING, Any
-
+ 
  from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
-
-@@ -244,6 +244,11 @@ class SchedulerInterface(ABC):
+ 
+@@ -249,6 +249,11 @@ class SchedulerInterface(ABC):
          """Returns (num_running_reqs, num_waiting_reqs)."""
          raise NotImplementedError
-
+ 
 +    @abstractmethod
 +    def get_inflight_queue_diagnostics(self, limit: int) -> dict[str, Any]:
 +        """Return a bounded snapshot of in-flight request queues."""
@@ -65,13 +65,13 @@ index 4c51ff4c04f..da89f7681f0 100644
          """Returns the fraction of the KV cache currently in use (0.0-1.0)."""
          return 0.0
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index fe248b6b0b7..e1d75cce65f 100644
+index 844f29e0134..2dfdce04f06 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -2721,6 +2721,45 @@ class Scheduler(SchedulerInterface):
+@@ -2769,6 +2769,49 @@ class Scheduler(SchedulerInterface):
          """Returns (num_running_reqs, num_waiting_reqs)."""
          return len(self.running), len(self.waiting) + len(self.kv_holding_waiting)
-
+ 
 +    def get_inflight_queue_diagnostics(self, limit: int) -> dict[str, Any]:
 +        """Return a bounded snapshot of in-flight request queues."""
 +        now = time.time()
@@ -84,7 +84,11 @@ index fe248b6b0b7..e1d75cce65f 100644
 +            ("kv_holding_waiting", self.kv_holding_waiting),
 +            (
 +                "finished_pending_cleanup",
-+                [request for request in self.requests.values() if request.is_finished()],
++                [
++                    request
++                    for request in self.requests.values()
++                    if request.is_finished()
++                ],
 +            ),
 +        ):
 +            entries = []
@@ -115,48 +119,48 @@ index fe248b6b0b7..e1d75cce65f 100644
          """Returns the fraction of the KV cache currently in use (0.0-1.0)."""
          return self.kv_cache_manager.usage
 diff --git a/vllm/v1/engine/async_llm.py b/vllm/v1/engine/async_llm.py
-index 8b7f913b43c..1b554296359 100644
+index 0ca5a45c335..4a85ebfd31e 100644
 --- a/vllm/v1/engine/async_llm.py
 +++ b/vllm/v1/engine/async_llm.py
-@@ -1428,3 +1428,6 @@ class AsyncLLM(EngineClient):
-
+@@ -1443,3 +1443,6 @@ class AsyncLLM(EngineClient):
+ 
      def get_kv_event_sources(self) -> dict[int, KVEventsConfig]:
          return self.engine_core.get_kv_event_sources()
 +
 +    async def get_inflight_queue_diagnostics(self, limit: int) -> list[dict[str, Any]]:
 +        return await self.engine_core.get_inflight_queue_diagnostics_async(limit)
 diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
-index 7ce9391409b..53a2c9f74f2 100644
+index a667db454b0..11428ef4474 100644
 --- a/vllm/v1/engine/core.py
 +++ b/vllm/v1/engine/core.py
-@@ -1086,6 +1086,9 @@ class EngineCore:
+@@ -1111,6 +1111,9 @@ class EngineCore:
          """Return the latest committed weight version."""
          return self._weight_version
-
+ 
 +    def get_inflight_queue_diagnostics(self, limit: int) -> dict[str, Any]:
 +        return self.scheduler.get_inflight_queue_diagnostics(limit)
 +
      def preprocess_add_request(self, request: EngineCoreRequest) -> tuple[Request, int]:
          """Preprocess the request.
-
+ 
 diff --git a/vllm/v1/engine/core_client.py b/vllm/v1/engine/core_client.py
-index 0c87c9a0521..57d94a46cf9 100644
+index d9210feeebf..5a7deb90486 100644
 --- a/vllm/v1/engine/core_client.py
 +++ b/vllm/v1/engine/core_client.py
 @@ -225,6 +225,9 @@ class EngineCoreClient(ABC):
      def get_weight_version(self) -> str:
          raise NotImplementedError
-
+ 
 +    def get_inflight_queue_diagnostics(self, limit: int) -> list[dict[str, Any]]:
 +        raise NotImplementedError
 +
      async def execute_dummy_batch_async(self) -> None:
          raise NotImplementedError
-
+ 
 @@ -234,6 +237,11 @@ class EngineCoreClient(ABC):
      async def get_weight_version_async(self) -> str:
          raise NotImplementedError
-
+ 
 +    async def get_inflight_queue_diagnostics_async(
 +        self, limit: int
 +    ) -> list[dict[str, Any]]:
@@ -164,31 +168,70 @@ index 0c87c9a0521..57d94a46cf9 100644
 +
      def abort_requests(self, request_ids: list[str]) -> None:
          raise NotImplementedError
-
+ 
 @@ -464,6 +472,9 @@ class InprocClient(EngineCoreClient):
      def get_weight_version(self) -> str:
          return self.engine_core.get_weight_version()
-
+ 
 +    def get_inflight_queue_diagnostics(self, limit: int) -> list[dict[str, Any]]:
 +        return [self.engine_core.get_inflight_queue_diagnostics(limit)]
 +
      def add_lora(self, lora_request: LoRARequest) -> bool:
          return self.engine_core.add_lora(lora_request)
-
-@@ -1125,6 +1136,9 @@ class SyncMPClient(MPClient):
+ 
+@@ -1035,20 +1046,31 @@ class SyncMPClient(MPClient):
+             self.engines_running = False
+         return outputs
+ 
+-    def _send_input(self, request_type: EngineCoreRequestType, request: Any):
++    def _send_input(
++        self,
++        request_type: EngineCoreRequestType,
++        request: Any,
++        engine: EngineIdentity | None = None,
++    ):
+         self.ensure_alive()
++        if engine is None:
++            engine = self.core_engine
+         # (Identity, RequestType, SerializedRequest)
+-        msg = (self.core_engine, request_type.value, *self.encoder.encode(request))
++        msg = (engine, request_type.value, *self.encoder.encode(request))
+         # Any zero-copy tensor/ndarray frames are kept alive by zmq itself
+         # until it's finished sending them (there is a ref chain from the underlying
+         # memoryview back to the original owning tensor/ndarray).
+         self.input_socket.send_multipart(msg, copy=False)
+ 
+-    def call_utility(self, method: str, *args) -> Any:
++    def call_utility(
++        self, method: str, *args, engine: EngineIdentity | None = None
++    ) -> Any:
+         call_id = uuid.uuid1().int >> 64
+         future: Future[Any] = Future()
+         self.utility_results[call_id] = future
+-        self._send_input(EngineCoreRequestType.UTILITY, (0, call_id, method, args))
++        self._send_input(
++            EngineCoreRequestType.UTILITY, (0, call_id, method, args), engine
++        )
+ 
+         return future.result()
+ 
+@@ -1125,6 +1147,12 @@ class SyncMPClient(MPClient):
      def get_weight_version(self) -> str:
          return self.call_utility("get_weight_version")
-
+ 
 +    def get_inflight_queue_diagnostics(self, limit: int) -> list[dict[str, Any]]:
-+        return [self.call_utility("get_inflight_queue_diagnostics", limit)]
++        return [
++            self.call_utility("get_inflight_queue_diagnostics", limit, engine=engine)
++            for engine in self.core_engines
++        ]
 +
      def collective_rpc(
          self,
          method: str | Callable[..., _R],
-@@ -1401,6 +1415,12 @@ class AsyncMPClient(MPClient):
+@@ -1406,6 +1434,12 @@ class AsyncMPClient(MPClient):
      async def get_weight_version_async(self) -> str:
          return await self.call_utility_consensus_async("get_weight_version")
-
+ 
 +    async def get_inflight_queue_diagnostics_async(
 +        self, limit: int
 +    ) -> list[dict[str, Any]]:
@@ -197,11 +240,11 @@ index 0c87c9a0521..57d94a46cf9 100644
 +
      async def add_lora_async(self, lora_request: LoRARequest) -> bool:
          return await self.call_utility_async("add_lora", lora_request)
-
-@@ -1802,6 +1822,18 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
+ 
+@@ -1807,6 +1841,18 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
          # Only the result from the first engine is returned.
          return (await self.call_utility_all_async(method, *args))[0]
-
+ 
 +    async def get_inflight_queue_diagnostics_async(
 +        self, limit: int
 +    ) -> list[dict[str, Any]]:
@@ -224,10 +267,10 @@ index 330c114a86d..0992d3455ce 100644
 @@ -498,6 +498,9 @@ class LLMEngine:
          """Return the latest committed weight version."""
          return self.engine_core.get_weight_version()
-
+ 
 +    def get_inflight_queue_diagnostics(self, limit: int) -> list[dict[str, Any]]:
 +        return self.engine_core.get_inflight_queue_diagnostics(limit)
 +
      def apply_model(self, func: Callable[[nn.Module], _R]) -> list[_R]:
          return self.collective_rpc("apply_model", args=(func,))
-
+ 

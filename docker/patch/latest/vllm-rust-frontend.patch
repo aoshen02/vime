@@ -13,7 +13,7 @@ index 2daacbfc35b..da186ec81d6 100644
 +message SamplingMaskLogprobs {
 +  repeated float values = 1;
  }
-
+ 
  // Prompt info, returned in the first response
 diff --git a/rust/src/engine-core-client/src/protocol/logprobs/array.rs b/rust/src/engine-core-client/src/protocol/logprobs/array.rs
 index 919ef80f46a..b4aa011d6f8 100644
@@ -22,7 +22,7 @@ index 919ef80f46a..b4aa011d6f8 100644
 @@ -78,6 +78,22 @@ pub(crate) fn decode_array1_u32(
      Ok(data)
  }
-
+ 
 +pub(crate) fn decode_array1_f32(
 +    value: WireNdArray,
 +    field: &str,
@@ -43,27 +43,24 @@ index 919ef80f46a..b4aa011d6f8 100644
      value: WireNdArray,
      field: &str,
 diff --git a/rust/src/engine-core-client/src/protocol/output.rs b/rust/src/engine-core-client/src/protocol/output.rs
-index d269f249116..f99c41b915d 100644
+index c6cfa8fd324..bc0753ea47e 100644
 --- a/rust/src/engine-core-client/src/protocol/output.rs
 +++ b/rust/src/engine-core-client/src/protocol/output.rs
-@@ -143,6 +143,12 @@ pub struct EngineCoreOutput {
-     /// the first output of a request that asked for them.
+@@ -149,6 +149,10 @@ pub struct EngineCoreOutput {
+     /// when a paused engine rejects a request.
      #[serde(default)]
-     pub prompt_token_id_logprobs: Option<Box<WireNdArray>>,
-+    #[serde(default)]
-+    pub weight_version: Option<String>,
+     pub error: Option<Box<RequestError>>,
 +    #[serde(default)]
 +    pub remote_kv_wait_time: Option<f64>,
 +    #[serde(default)]
 +    pub kv_transfer_metrics: Option<serde_json::Value>,
  }
-
- /// Raw per-sequence speculative-decoding accumulator.
-@@ -556,6 +562,9 @@ mod tests {
-                             new_sampling_mask: None,
+ 
+ /// A request-level error that does not mark the engine as unhealthy.
+@@ -595,6 +599,8 @@ mod tests {
                              spec_decode_metrics: None,
                              prompt_token_id_logprobs: None,
-+                            weight_version: None,
+                             error: None,
 +                            remote_kv_wait_time: None,
 +                            kv_transfer_metrics: None,
                          },
@@ -75,12 +72,12 @@ index 7f5c4592a7d..a1eede0f28d 100644
 +++ b/rust/src/engine-core-client/src/protocol/sampling_mask.rs
 @@ -9,13 +9,30 @@ use serde::{Deserialize, Deserializer, Serialize};
  use serde_tuple::{Deserialize_tuple, Serialize_tuple};
-
+ 
  use crate::error::{Error, Result, bail_ext_value_decode};
 -use crate::protocol::logprobs::array::decode_array1_u32;
 +use crate::protocol::logprobs::array::{decode_array1_f32, decode_array1_u32};
  use crate::protocol::tensor::WireNdArray;
-
+ 
 -/// Decoded sampling-mask support sets, one row per generated token position.
 -#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 +/// Decoded sampling support and optional aligned logprobs, one row per token.
@@ -105,7 +102,7 @@ index 7f5c4592a7d..a1eede0f28d 100644
 +        }
 +    }
  }
-
+ 
  /// Python `SamplingMaskLists` tuple before ndarray raw views are resolved.
 @@ -26,6 +43,8 @@ pub struct WireSamplingMask {
      offsets: Option<WireNdArray>,
@@ -114,7 +111,7 @@ index 7f5c4592a7d..a1eede0f28d 100644
 +    #[serde(default)]
 +    logprobs: Option<WireNdArray>,
  }
-
+ 
  /// Sampling-mask field while it transitions from Python wire data to rows.
 @@ -95,11 +114,21 @@ impl WireSamplingMask {
                  value.rows.len()
@@ -137,9 +134,9 @@ index 7f5c4592a7d..a1eede0f28d 100644
 +                .transpose()?,
          })
      }
-
+ 
 @@ -112,9 +141,17 @@ impl WireSamplingMask {
-
+ 
          let token_ids =
              decode_array1_u32(self.token_ids, &format!("{field_prefix}.token_ids"), frames)?;
 +        let logprobs = self
@@ -159,7 +156,7 @@ index 7f5c4592a7d..a1eede0f28d 100644
 @@ -132,14 +169,21 @@ impl WireSamplingMask {
              );
          }
-
+ 
 -        let rows = offsets
 -            .windows(2)
 -            .map(|pair| token_ids[pair[0] as usize..pair[1] as usize].to_vec())
@@ -171,7 +168,7 @@ index 7f5c4592a7d..a1eede0f28d 100644
 +        })
      }
  }
-
+ 
 +/// Split CSR values into per-request rows using validated offsets.
 +fn split_rows<T: Clone>(values: &[T], offsets: &[u32]) -> Vec<Vec<T>> {
 +    offsets
@@ -194,7 +191,7 @@ index 7f5c4592a7d..a1eede0f28d 100644
 @@ -164,12 +209,24 @@ mod tests {
          assert_eq!(decoded.into_direct().unwrap().rows, vec![vec![2, 12, 16]]);
      }
-
+ 
 +    #[test]
 +    fn decodes_legacy_mask_without_logprobs() {
 +        let token_ids = WireNdArray::from_i64(vec![2], vec![2, 12]).unwrap();
@@ -244,7 +241,7 @@ index 7f5c4592a7d..a1eede0f28d 100644
 +            .into_iter()
 +            .flat_map(f32::to_le_bytes)
 +            .collect::<Vec<_>>();
-
+ 
          let decoded = decode_engine_core_outputs(&[
              Bytes::from(primary),
              Bytes::from(token_ids),
@@ -255,7 +252,7 @@ index 7f5c4592a7d..a1eede0f28d 100644
          let mask = decoded.as_request_batch().unwrap().outputs[0]
 @@ -233,5 +301,9 @@ mod tests {
              .unwrap();
-
+ 
          assert_eq!(mask.rows, vec![vec![2, 12], vec![16, 18]]);
 +        assert_eq!(
 +            mask.logprobs,
@@ -264,48 +261,36 @@ index 7f5c4592a7d..a1eede0f28d 100644
      }
  }
 diff --git a/rust/src/engine-core-client/src/tests/client.rs b/rust/src/engine-core-client/src/tests/client.rs
-index c2216168b83..5f6d8c73159 100644
+index 16e8494ac7b..43ee8c7ca80 100644
 --- a/rust/src/engine-core-client/src/tests/client.rs
 +++ b/rust/src/engine-core-client/src/tests/client.rs
-@@ -2899,6 +2899,11 @@ fn python_msgpack_fixtures_match_rust_encoding() {
-                         new_sampling_mask: None,
-                         spec_decode_metrics: None,
-                         prompt_token_id_logprobs: None,
-+                        weight_version: Some(
-+                            "step-7",
-+                        ),
+@@ -2921,6 +2921,8 @@ fn python_msgpack_fixtures_match_rust_encoding() {
+                                 retryable: true,
+                             },
+                         ),
 +                        remote_kv_wait_time: None,
 +                        kv_transfer_metrics: None,
                      },
                  ],
                  scheduler_stats: None,
 diff --git a/rust/src/engine-core-client/src/tests/python_compat.py b/rust/src/engine-core-client/src/tests/python_compat.py
-index c0ca97dbe63..783fe00eb9c 100755
+index a784ad67cfb..f73380851b7 100755
 --- a/rust/src/engine-core-client/src/tests/python_compat.py
 +++ b/rust/src/engine-core-client/src/tests/python_compat.py
-@@ -117,6 +117,9 @@ class EngineCoreOutput(
-     new_sampling_mask: object | None = None
+@@ -125,6 +125,8 @@ class EngineCoreOutput(
      spec_decode_metrics: object | None = None
      prompt_token_id_logprobs: object | None = None
-+    weight_version: str | None = None
+     error: RequestError | None = None
 +    remote_kv_wait_time: float | None = None
 +    kv_transfer_metrics: dict[str, float] | None = None
-
-
+ 
+ 
  class ExtendedEngineCoreOutput(EngineCoreOutput):
-@@ -238,6 +241,7 @@ outputs = EngineCoreOutputs(
-             request_id="req-1",
-             new_token_ids=[7, 8],
-             finish_reason=FinishReason.LENGTH,
-+            weight_version="step-7",
-         )
-     ],
-     finished_requests={"req-1"},
 diff --git a/rust/src/llm/src/lib.rs b/rust/src/llm/src/lib.rs
-index 1e15f11c12e..9e71669c44b 100644
+index 2bf1fc7212b..11460e2c885 100644
 --- a/rust/src/llm/src/lib.rs
 +++ b/rust/src/llm/src/lib.rs
-@@ -16,7 +16,7 @@ mod request_metrics;
+@@ -18,7 +18,7 @@ mod request_metrics;
  pub use error::{Error, Result};
  pub use output::{
      CollectedGenerateOutput, FinishReason, GenerateOutput, GenerateOutputStream,
@@ -315,13 +300,13 @@ index 1e15f11c12e..9e71669c44b 100644
  pub use request::GenerateRequest;
  pub use request_metrics::{RequestTimestamps, current_unix_timestamp_secs};
 diff --git a/rust/src/llm/src/output.rs b/rust/src/llm/src/output.rs
-index 3f0b0300626..a1f176f6b1f 100644
+index 302b17083d3..bbc94ebd089 100644
 --- a/rust/src/llm/src/output.rs
 +++ b/rust/src/llm/src/output.rs
 @@ -44,6 +44,15 @@ pub struct TokenUsage {
      pub cached_token_count: usize,
  }
-
+ 
 +#[derive(Debug, Clone, Copy, Default, PartialEq)]
 +pub struct RequestTimingStats {
 +    pub queued_ts: f64,
@@ -334,59 +319,74 @@ index 3f0b0300626..a1f176f6b1f 100644
  /// Final raw token output plus terminal stream metadata.
  #[derive(Debug, Clone, PartialEq)]
  pub struct CollectedGenerateOutput {
-@@ -65,6 +74,10 @@ pub struct CollectedGenerateOutput {
-     /// Per-request speculative-decoding metrics from the terminal output.
-     pub spec_decode_metrics: Option<RequestSpecDecodeMetrics>,
+@@ -67,6 +76,9 @@ pub struct CollectedGenerateOutput {
      pub weight_versions: Option<Vec<WeightVersionSpan>>,
-+    pub weight_version: Option<String>,
+     /// Routed-expert rows for the whole request.
+     pub routed_experts: Option<WireNdArray>,
 +    pub remote_kv_wait_time: Option<f64>,
 +    pub kv_transfer_metrics: Option<serde_json::Value>,
 +    pub request_timings: Option<RequestTimingStats>,
  }
-
+ 
  /// Prompt-scoped metadata emitted only once on the first [`GenerateOutput`] for
-@@ -190,6 +203,10 @@ pub struct GenerateOutput {
+@@ -196,6 +208,9 @@ pub struct GenerateOutput {
      /// request locally after matching a stop string, before the engine emits a
      /// terminal output.
      pub timestamps: RequestTimestamps,
-+    pub weight_version: Option<String>,
 +    pub remote_kv_wait_time: Option<f64>,
 +    pub kv_transfer_metrics: Option<serde_json::Value>,
 +    pub request_timings: Option<RequestTimingStats>,
  }
-
+ 
  impl GenerateOutput {
-@@ -275,6 +292,10 @@ impl GenerateOutput {
-             spec_decode_metrics: None,
+@@ -240,7 +255,7 @@ impl GenerateOutput {
+         }
+         if let Some(next_mask) = next.sampling_mask {
+             match &mut self.sampling_mask {
+-                Some(mask) => mask.rows.extend(next_mask.rows),
++                Some(mask) => mask.append(next_mask),
+                 None => self.sampling_mask = Some(next_mask),
+             }
+         }
+@@ -252,6 +267,9 @@ impl GenerateOutput {
+         self.weight_versions = next.weight_versions;
+         self.routed_experts = next.routed_experts;
+         self.timestamps = next.timestamps;
++        self.remote_kv_wait_time = next.remote_kv_wait_time;
++        self.kv_transfer_metrics = next.kv_transfer_metrics;
++        self.request_timings = next.request_timings;
+     }
+ }
+ 
+@@ -283,6 +301,9 @@ impl GenerateOutput {
              weight_versions: None,
+             routed_experts: None,
              timestamps: RequestTimestamps::default(),
-+            weight_version: None,
 +            remote_kv_wait_time: None,
 +            kv_transfer_metrics: None,
 +            request_timings: None,
          }
      }
  }
-@@ -398,6 +419,7 @@ impl GenerateOutputStream {
+@@ -422,6 +443,7 @@ impl GenerateOutputStream {
          } else {
              None
          };
 +        let request_timings = finish_reason.as_ref().map(|_| self.request_metrics.snapshot());
-
+ 
          let output = GenerateOutput {
              request_id: raw.request_id,
-@@ -412,6 +434,10 @@ impl GenerateOutputStream {
-             spec_decode_metrics: raw.spec_decode_metrics,
+@@ -437,6 +459,9 @@ impl GenerateOutputStream {
              weight_versions,
+             routed_experts,
              timestamps: self.request_metrics.timestamps(),
-+            weight_version: raw.weight_version,
 +            remote_kv_wait_time: raw.remote_kv_wait_time,
 +            kv_transfer_metrics: raw.kv_transfer_metrics,
 +            request_timings,
          };
-
+ 
          Ok(output)
-@@ -518,8 +544,8 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
+@@ -571,8 +596,8 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
                              existing.logprobs = Some(step_logprobs);
                          }
                      }
@@ -397,22 +397,20 @@ index 3f0b0300626..a1f176f6b1f 100644
                      }
                  } else {
                      collected = Some(CollectedGenerateOutput {
-@@ -540,6 +566,10 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
-                         sampling_mask,
+@@ -594,6 +619,9 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
                          spec_decode_metrics: None,
                          weight_versions: None,
-+                        weight_version: output.weight_version.clone(),
+                         routed_experts: None,
 +                        remote_kv_wait_time: None,
 +                        kv_transfer_metrics: None,
 +                        request_timings: None,
                      });
                  }
-
-@@ -555,6 +585,10 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
-                     collected.ec_transfer_params = output.ec_transfer_params.map(|value| *value);
+ 
+@@ -610,6 +638,9 @@ impl<T: Stream<Item = Result<GenerateOutput>> + Send> T {
                      collected.spec_decode_metrics = output.spec_decode_metrics.map(|value| *value);
                      collected.weight_versions = output.weight_versions;
-+                    collected.weight_version = output.weight_version;
+                     collected.routed_experts = output.routed_experts.map(|value| *value);
 +                    collected.remote_kv_wait_time = output.remote_kv_wait_time;
 +                    collected.kv_transfer_metrics = output.kv_transfer_metrics;
 +                    collected.request_timings = output.request_timings;
@@ -420,22 +418,22 @@ index 3f0b0300626..a1f176f6b1f 100644
                          && mask.rows.len() != collected.token_ids.len()
                      {
 diff --git a/rust/src/llm/src/request_metrics.rs b/rust/src/llm/src/request_metrics.rs
-index eebf0596b0d..ed463cc29b7 100644
+index 271c5b41175..e82c6ae70c8 100644
 --- a/rust/src/llm/src/request_metrics.rs
 +++ b/rust/src/llm/src/request_metrics.rs
 @@ -12,7 +12,7 @@ use vllm_metrics::{
      U64Counter,
  };
-
+ 
 -use crate::FinishReason;
 +use crate::{FinishReason, RequestTimingStats};
-
+ 
  const PROMPT_TOKEN_SOURCE_LOCAL_COMPUTE: &str = "local_compute";
  const PROMPT_TOKEN_SOURCE_LOCAL_CACHE_HIT: &str = "local_cache_hit";
 @@ -182,6 +182,16 @@ impl RequestMetricsTracker {
          }
      }
-
+ 
 +    pub(crate) fn snapshot(&self) -> RequestTimingStats {
 +        RequestTimingStats {
 +            queued_ts: self.queued_ts,
@@ -450,10 +448,35 @@ index eebf0596b0d..ed463cc29b7 100644
      /// observed.
      ///
 diff --git a/rust/src/llm/tests/generate.rs b/rust/src/llm/tests/generate.rs
-index cc6fd9d169f..e54c0245302 100644
+index 4aa04410a04..06236395c23 100644
 --- a/rust/src/llm/tests/generate.rs
 +++ b/rust/src/llm/tests/generate.rs
-@@ -469,6 +469,7 @@ async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
+@@ -364,6 +364,10 @@ async fn generate_merges_outputs_by_stream_interval() {
+                         Some(token_logprobs(token_ids)),
+                         None,
+                     );
++                    if output.finish_reason.is_some() {
++                        output.remote_kv_wait_time = Some(0.25);
++                        output.kv_transfer_metrics = Some(serde_json::json!({"recv_time_ms": 2.0}));
++                    }
+                     // One [layer, top_k] = [1, 2] routing row per token.
+                     let rows: Vec<u8> = token_ids.iter().flat_map(|&id| [id as u8, 0]).collect();
+                     output.routed_experts = Some(Box::new(WireNdArray::from_raw(
+@@ -428,6 +432,13 @@ async fn generate_merges_outputs_by_stream_interval() {
+     for output in &outputs {
+         assert_eq!(output.logprobs, Some(token_logprobs(&output.token_ids)));
+     }
++    let terminal = outputs.last().unwrap();
++    assert_eq!(terminal.remote_kv_wait_time, Some(0.25));
++    assert_eq!(
++        terminal.kv_transfer_metrics,
++        Some(serde_json::json!({"recv_time_ms": 2.0}))
++    );
++    assert!(terminal.request_timings.is_some());
+     let span = |version: &str, start, end| WeightVersionSpan {
+         version: version.into(),
+         start,
+@@ -493,6 +504,7 @@ async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
                                  new_sampling_mask: Some(MaybeWireSamplingMask::Direct(
                                      SamplingMask {
                                          rows: vec![vec![1, 33, 99]],
@@ -461,7 +484,7 @@ index cc6fd9d169f..e54c0245302 100644
                                      },
                                  )),
                                  ..request_output_with_logprobs(
-@@ -483,6 +484,7 @@ async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
+@@ -507,6 +519,7 @@ async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
                                  new_sampling_mask: Some(MaybeWireSamplingMask::Direct(
                                      SamplingMask {
                                          rows: vec![vec![2, 44, 88]],
@@ -469,7 +492,7 @@ index cc6fd9d169f..e54c0245302 100644
                                      },
                                  )),
                                  ..request_output_with_logprobs_and_kv(
-@@ -531,6 +533,7 @@ async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
+@@ -555,6 +568,7 @@ async fn collect_output_aggregates_raw_tokens_logprobs_and_terminal_metadata() {
          collected.sampling_mask,
          Some(SamplingMask {
              rows: vec![vec![1, 33, 99], vec![2, 44, 88]],
@@ -477,7 +500,7 @@ index cc6fd9d169f..e54c0245302 100644
          })
      );
  }
-@@ -552,10 +555,15 @@ async fn collect_output_rejects_partial_sampling_mask() {
+@@ -576,11 +590,15 @@ async fn collect_output_rejects_partial_sampling_mask() {
          ec_transfer_params: None,
          sampling_mask: Some(SamplingMask {
              rows: vec![vec![1, 33, 99]],
@@ -485,19 +508,132 @@ index cc6fd9d169f..e54c0245302 100644
          }),
          spec_decode_metrics: None,
          weight_versions: None,
+         routed_experts: None,
          timestamps: Default::default(),
-+        weight_version: None,
 +        remote_kv_wait_time: None,
 +        kv_transfer_metrics: None,
 +        request_timings: None,
      };
-
+ 
      let error = futures::stream::iter([Ok(output)]).collect_output().await.unwrap_err();
+@@ -594,6 +612,112 @@ async fn collect_output_rejects_partial_sampling_mask() {
+     ));
+ }
+ 
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn stream_interval_sampling_mask_with_paired_scores() {
++    assert_stream_interval_sampling_mask(true).await;
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn stream_interval_sampling_mask_without_paired_scores() {
++    assert_stream_interval_sampling_mask(false).await;
++}
++
++async fn assert_stream_interval_sampling_mask(paired_scores: bool) {
++    let ipc = IpcNamespace::new().unwrap();
++    let handshake_address = ipc.handshake_endpoint();
++    let engine_id = b"engine-stream-interval-mask".to_vec();
++    let (shutdown_tx, engine_task) =
++        spawn_mock_engine_task(handshake_address.clone(), engine_id, move |dealer, push| {
++            Box::pin(async move {
++                let add = recv_engine_message(dealer).await;
++                let request: EngineCoreRequest = rmp_serde::from_slice(&add[1]).unwrap();
++                for token_id in 1..=5 {
++                    let mut output = request_output(&request.request_id, vec![token_id], None);
++                    output.new_sampling_mask = Some(MaybeWireSamplingMask::Direct(SamplingMask {
++                        rows: vec![vec![token_id, token_id + 10]],
++                        logprobs: paired_scores
++                            .then_some(vec![vec![-(token_id as f32), -(token_id as f32) - 0.5]]),
++                    }));
++                    send_outputs(
++                        push,
++                        RequestBatchOutputs {
++                            outputs: vec![output],
++                            ..Default::default()
++                        }
++                        .into(),
++                    )
++                    .await;
++                }
++                send_outputs(
++                    push,
++                    RequestBatchOutputs {
++                        outputs: vec![request_output(
++                            &request.request_id,
++                            vec![],
++                            Some(EngineCoreFinishReason::Length),
++                        )],
++                        ..Default::default()
++                    }
++                    .into(),
++                )
++                .await;
++            })
++        });
++
++    let llm = connect_async_llm_with_ipc(handshake_address, 5, "test-model", &ipc).await;
++    let mut request = sample_generate_request("req-stream-interval-mask", 5);
++    request.sampling_params.stream_interval = NonZeroU32::new(3);
++    let outputs: Vec<_> = llm
++        .generate(request)
++        .await
++        .unwrap()
++        .map(|output| output.unwrap())
++        .collect()
++        .await;
++
++    let _ = shutdown_tx.send(());
++    engine_task.await.unwrap();
++    llm.shutdown().await.unwrap();
++
++    let actual: Vec<_> = outputs
++        .into_iter()
++        .map(|output| (output.token_ids, output.sampling_mask, output.finish_reason))
++        .collect();
++    assert_eq!(
++        actual,
++        [
++            (
++                vec![1],
++                Some(SamplingMask {
++                    rows: vec![vec![1, 11]],
++                    logprobs: paired_scores.then_some(vec![vec![-1.0, -1.5]]),
++                }),
++                None,
++            ),
++            (
++                vec![2, 3, 4],
++                Some(SamplingMask {
++                    rows: vec![vec![2, 12], vec![3, 13], vec![4, 14]],
++                    logprobs: paired_scores.then_some(vec![
++                        vec![-2.0, -2.5],
++                        vec![-3.0, -3.5],
++                        vec![-4.0, -4.5]
++                    ]),
++                }),
++                None,
++            ),
++            (
++                vec![5],
++                Some(SamplingMask {
++                    rows: vec![vec![5, 15]],
++                    logprobs: paired_scores.then_some(vec![vec![-5.0, -5.5]]),
++                }),
++                Some(FinishReason::Length),
++            ),
++        ]
++    );
++}
++
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+ async fn generate_propagates_unexpected_close_errors() {
+     let ipc = IpcNamespace::new().unwrap();
 diff --git a/rust/src/server/src/grpc/convert.rs b/rust/src/server/src/grpc/convert.rs
-index 1eec1d0fe32..6d09676368a 100644
+index 47b9a5cac68..b772f81c4fa 100644
 --- a/rust/src/server/src/grpc/convert.rs
 +++ b/rust/src/server/src/grpc/convert.rs
-@@ -355,6 +355,17 @@ pub fn to_sequence_output(
+@@ -356,6 +356,17 @@ pub fn to_sequence_output(
          .and_then(|finished| finished.sampling_mask.as_ref())
          .map(|mask| mask.rows.iter().map(|row| pb::TokenIds { ids: row.clone() }).collect())
          .unwrap_or_default();
@@ -512,26 +648,26 @@ index 1eec1d0fe32..6d09676368a 100644
 +                .collect()
 +        })
 +        .unwrap_or_default();
-
+ 
      Ok(pb::SequenceOutput {
          index: 0, // TODO: multi-sequence (n > 1) not supported
-@@ -374,6 +385,7 @@ pub fn to_sequence_output(
+@@ -375,6 +386,7 @@ pub fn to_sequence_output(
          candidate_tokens: candidates,
          finish_info,
          sampling_mask,
 +        sampling_mask_logprobs,
      })
  }
-
-@@ -1042,6 +1054,7 @@ mod tests {
+ 
+@@ -1099,6 +1111,7 @@ mod tests {
          let mut fin = finished(FinishReason::Length);
          fin.sampling_mask = Some(SamplingMask {
              rows: vec![vec![1, 10], vec![2, 20]],
 +            logprobs: Some(vec![vec![-0.1, -2.0], vec![-0.2, -1.8]]),
          });
-
+ 
          let terminal =
-@@ -1057,7 +1070,19 @@ mod tests {
+@@ -1114,7 +1127,19 @@ mod tests {
                  pb::TokenIds { ids: vec![2, 20] }
              ]
          );
@@ -549,13 +685,13 @@ index 1eec1d0fe32..6d09676368a 100644
          assert!(intermediate.sampling_mask.is_empty());
 +        assert!(intermediate.sampling_mask_logprobs.is_empty());
      }
-
+ 
      #[test]
 diff --git a/rust/src/server/src/routes.rs b/rust/src/server/src/routes.rs
-index 23c4244c821..a86d7bbc25a 100644
+index 106ff539c4b..0b59c8cec33 100644
 --- a/rust/src/server/src/routes.rs
 +++ b/rust/src/server/src/routes.rs
-@@ -109,6 +109,7 @@ fn build_router_with_options(
+@@ -143,6 +143,7 @@ fn build_router_with_options(
      let mut router = Router::new()
          // Health & monitoring
          .route("/health", get(health::health))
@@ -569,10 +705,10 @@ index 743c0a83f4e..794a76eb905 100644
 +++ b/rust/src/server/src/routes/health.rs
 @@ -2,12 +2,31 @@
  // SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-
+ 
  use std::sync::Arc;
 +use std::time::{SystemTime, UNIX_EPOCH};
-
+ 
  use axum::extract::State;
  use axum::http::StatusCode;
 +use futures::StreamExt;
@@ -581,9 +717,9 @@ index 743c0a83f4e..794a76eb905 100644
 +use uuid::Uuid;
 +use vllm_engine_core_client::protocol::request::EngineCoreRequest;
 +use vllm_engine_core_client::protocol::sampling::EngineCoreSamplingParams;
-
+ 
  use crate::state::AppState;
-
+ 
 +#[derive(Deserialize)]
 +struct QueueLoad {
 +    num_requests: usize,
@@ -648,7 +784,7 @@ index 743c0a83f4e..794a76eb905 100644
 +    }
 +}
 diff --git a/rust/src/server/src/routes/inference/generate.rs b/rust/src/server/src/routes/inference/generate.rs
-index 5bf434f5220..4ede488c1b0 100644
+index 62d781b183b..22d1da018e9 100644
 --- a/rust/src/server/src/routes/inference/generate.rs
 +++ b/rust/src/server/src/routes/inference/generate.rs
 @@ -26,7 +26,8 @@ use vllm_engine_core_client::protocol::logprobs::{Logprobs, PositionLogprobs};
@@ -659,7 +795,7 @@ index 5bf434f5220..4ede488c1b0 100644
 +    CollectedGenerateOutput, FinishReason, GenerateOutput, GenerateOutputStreamExt as _,
 +    RequestTimingStats, TokenUsage,
  };
-
+ 
  use self::convert::{ResponseOptions, prepare_generate_request};
 @@ -34,7 +35,7 @@ use self::types::{
      GenerateLogProb, GenerateLogProbs, GenerateLogProbsContent, GenerateLogprob, GenerateResponse,
@@ -673,7 +809,7 @@ index 5bf434f5220..4ede488c1b0 100644
 @@ -81,6 +82,11 @@ pub async fn generate(
          .then(|| extract_mm_placeholders(mm_features.as_deref()))
          .flatten();
-
+ 
 +    let prefill_metrics = body
 +        .kv_transfer_params
 +        .as_ref()
@@ -689,7 +825,7 @@ index 5bf434f5220..4ede488c1b0 100644
 +            prefill_metrics,
          );
          let sse_stream = generate_sse_stream(chunk_stream).instrument(request_span);
-
+ 
 @@ -138,6 +145,7 @@ pub async fn generate(
          api_server_options,
          prepared.options,
@@ -714,13 +850,12 @@ index 5bf434f5220..4ede488c1b0 100644
      mut y: TryYielder<GenerateStreamResponse, ApiError>,
  ) -> Result<(), ApiError> {
      pin_mut!(stream);
-@@ -171,10 +181,22 @@ async fn generate_chunk_stream(
+@@ -171,10 +181,20 @@ async fn generate_chunk_stream(
      let mut prompt_token_ids = None;
      let mut usage = TokenUsage::default();
      let mut spec_decode_metrics = None;
-+    let mut weight_version = None;
 +    let mut kv_transfer_metrics = serde_json::Map::new();
-
+ 
      while let Some(next) = stream.next().await {
          match next {
              Ok(output) => {
@@ -733,12 +868,11 @@ index 5bf434f5220..4ede488c1b0 100644
 +                        prefill_metrics.as_ref(),
 +                    );
 +                }
-+                weight_version = output.weight_version.clone();
                  if let Some(metrics) = output.spec_decode_metrics {
                      spec_decode_metrics = Some(SpeculativeDecodingMetrics::from(*metrics));
                  }
-@@ -226,6 +248,9 @@ async fn generate_chunk_stream(
-
+@@ -226,6 +246,9 @@ async fn generate_chunk_stream(
+ 
                  let stop_reason =
                      finish_reason.as_ref().and_then(|reason| reason.as_stop_reason().cloned());
 +                let (sampling_mask, sampling_mask_logprobs) = output
@@ -747,10 +881,10 @@ index 5bf434f5220..4ede488c1b0 100644
                  let prompt_token_ids = prompt_token_ids.take();
                  y.yield_ok(GenerateStreamResponse {
                      request_id: request_id.clone(),
-@@ -235,14 +260,16 @@ async fn generate_chunk_stream(
-                         finish_reason: finish_reason.map(|reason| reason.as_str().to_string()),
-                         stop_reason,
-                         token_ids,
+@@ -240,8 +263,9 @@ async fn generate_chunk_stream(
+                             .as_deref()
+                             .map(npy_base64)
+                             .transpose()?,
 -                        sampling_mask: output.sampling_mask.map(|mask| mask.rows),
                          weight_versions: output.weight_versions,
 +                        sampling_mask,
@@ -758,14 +892,7 @@ index 5bf434f5220..4ede488c1b0 100644
                      }],
                      usage: include_continuous_usage
                          .then(|| Usage::from_token_usage(usage, enable_prompt_tokens_details)),
-                     mm_placeholders: prompt_token_ids.as_ref().and_then(|_| mm_placeholders.take()),
-                     prompt_token_ids,
-                     metrics: None,
-+                    weight_version: output.weight_version,
-                 })
-                 .await;
-             }
-@@ -263,11 +290,12 @@ async fn generate_chunk_stream(
+@@ -268,11 +292,11 @@ async fn generate_chunk_stream(
              usage: Some(Usage::from_token_usage(usage, enable_prompt_tokens_details)),
              prompt_token_ids: None,
              mm_placeholders: None,
@@ -779,11 +906,10 @@ index 5bf434f5220..4ede488c1b0 100644
 +                kv_transfer_metrics,
 +            )
 +            .map(StreamingPerRequestMetrics::from),
-+            weight_version,
          })
          .await;
      }
-@@ -280,6 +308,7 @@ fn collect_generate(
+@@ -285,6 +309,7 @@ fn collect_generate(
      request_id: String,
      ApiServerOptions {
          enable_log_requests,
@@ -791,28 +917,28 @@ index 5bf434f5220..4ede488c1b0 100644
          ..
      }: ApiServerOptions,
      ResponseOptions {
-@@ -292,6 +321,7 @@ fn collect_generate(
+@@ -297,6 +322,7 @@ fn collect_generate(
          return_token_ids,
      }: ResponseOptions,
      mm_placeholders: Option<MultiModalPlaceholders>,
 +    prefill_metrics: Option<serde_json::Value>,
  ) -> Result<GenerateResponse, ApiError> {
-     let logprobs = if include_logprobs {
-         let logprobs = collected.logprobs.as_ref().ok_or_else(|| {
-@@ -321,6 +351,9 @@ fn collect_generate(
+     // Like Python, which raises every engine-typed error, a typed error fails
+     // the request; an untyped one is reported as finish reason `error`.
+@@ -331,6 +357,9 @@ fn collect_generate(
      };
      let finish_reason = collected.finish_reason.as_str().to_string();
      let stop_reason = collected.finish_reason.as_stop_reason().cloned();
 +    let (sampling_mask, sampling_mask_logprobs) = collected
 +        .sampling_mask
 +        .map_or((None, None), |mask| (Some(mask.rows), mask.logprobs));
-
+ 
      if enable_log_requests {
          info!(
-@@ -331,6 +364,35 @@ fn collect_generate(
+@@ -341,6 +370,35 @@ fn collect_generate(
          );
      }
-
+ 
 +    let kv_transfer_metrics = build_per_request_metrics(
 +        enable_per_request_metrics,
 +        collected.request_timings,
@@ -845,10 +971,10 @@ index 5bf434f5220..4ede488c1b0 100644
      Ok(GenerateResponse {
          request_id,
          choices: vec![GenerateResponseChoice {
-@@ -339,8 +401,9 @@ fn collect_generate(
-             finish_reason: Some(finish_reason),
+@@ -350,8 +408,9 @@ fn collect_generate(
              stop_reason,
              token_ids: collected.token_ids,
+             routed_experts: collected.routed_experts.as_ref().map(npy_base64).transpose()?,
 -            sampling_mask: collected.sampling_mask.map(|mask| mask.rows),
              weight_versions: collected.weight_versions,
 +            sampling_mask,
@@ -856,7 +982,7 @@ index 5bf434f5220..4ede488c1b0 100644
          }],
          prompt_logprobs,
          prompt_token_id_logprobs: collected
-@@ -350,14 +413,74 @@ fn collect_generate(
+@@ -361,14 +420,73 @@ fn collect_generate(
              .transpose()?,
          prompt_token_ids: return_token_ids.then_some(collected.prompt_token_ids),
          mm_placeholders: return_token_ids.then_some(mm_placeholders).flatten(),
@@ -867,10 +993,9 @@ index 5bf434f5220..4ede488c1b0 100644
 -            speculative_decoding: SpeculativeDecodingMetrics::from(metrics),
 -        }),
 +        metrics: PerRequestMetrics::new(speculative_decoding, kv_transfer_metrics),
-+        weight_version: collected.weight_version,
      })
  }
-
+ 
 +fn build_per_request_metrics(
 +    enabled: bool,
 +    timings: Option<RequestTimingStats>,
@@ -935,29 +1060,27 @@ index 5bf434f5220..4ede488c1b0 100644
  fn extract_mm_placeholders(features: Option<&[MmFeatureSpec]>) -> Option<MultiModalPlaceholders> {
      let features = features?;
      if features.is_empty() {
-@@ -640,6 +763,10 @@ mod tests {
-                 spec_decode_metrics: None,
+@@ -664,6 +782,9 @@ mod tests {
                  weight_versions: None,
+                 routed_experts: None,
                  timestamps: Default::default(),
-+                weight_version: None,
 +                remote_kv_wait_time: None,
 +                kv_transfer_metrics: None,
 +                request_timings: None,
              }),
              Ok(GenerateOutput {
                  request_id: String::new(),
-@@ -658,6 +785,10 @@ mod tests {
-                 spec_decode_metrics: None,
+@@ -683,6 +804,9 @@ mod tests {
                  weight_versions: None,
+                 routed_experts: None,
                  timestamps: Default::default(),
-+                weight_version: Some("step-2".to_string()),
 +                remote_kv_wait_time: None,
 +                kv_transfer_metrics: None,
 +                request_timings: None,
              }),
          ]);
-
-@@ -682,12 +813,15 @@ mod tests {
+ 
+@@ -707,6 +831,7 @@ mod tests {
                  ..Default::default()
              },
              Some(mm_placeholders.clone()),
@@ -965,29 +1088,51 @@ index 5bf434f5220..4ede488c1b0 100644
          )
          .try_collect()
          .await
-         .expect("collect chunks");
-
-         assert_eq!(chunks.len(), 2);
-+        assert_eq!(chunks[0].weight_version.as_deref(), Some("step-2"));
-+        assert_eq!(chunks[1].weight_version.as_deref(), Some("step-2"));
-         assert_eq!(chunks[0].prompt_token_ids, Some(vec![11, 22]));
-         assert_eq!(chunks[0].mm_placeholders, Some(mm_placeholders));
-         assert!(chunks[1].prompt_token_ids.is_none());
-@@ -722,6 +856,142 @@ mod tests {
+@@ -747,6 +872,172 @@ mod tests {
          );
      }
-
+ 
 +    #[tokio::test]
-+    async fn generate_chunk_stream_tracks_weight_updates() {
-+        let mut first = stream_output(Some(&[11]), vec![33], None);
-+        first.weight_version = Some("step-1".to_string());
++    async fn generate_chunk_stream_returns_native_weight_spans() {
++        let first = stream_output(Some(&[11]), vec![33], None);
 +        let mut second = stream_output(None, vec![44], Some(FinishReason::Length));
-+        second.weight_version = Some("step-2".to_string());
++        let spans = vec![
++            vllm_llm::WeightVersionSpan {
++                version: "step-1".into(),
++                start: 0,
++                end: 1,
++            },
++            vllm_llm::WeightVersionSpan {
++                version: "step-2".into(),
++                start: 1,
++                end: 2,
++            },
++        ];
++        second.weight_versions = Some(spans.clone());
 +
-+        let chunks = collect_chunks(vec![first, second], false, None).await;
++        let chunks: Vec<_> = generate_chunk_stream(
++            stream::iter(vec![Ok(first), Ok(second)]),
++            "native-spans".to_string(),
++            ApiServerOptions::default(),
++            ResponseOptions {
++                include_usage: true,
++                ..Default::default()
++            },
++            None,
++            None,
++        )
++        .try_collect()
++        .await
++        .expect("collect chunks");
 +
-+        assert_eq!(chunks[0].weight_version.as_deref(), Some("step-1"));
-+        assert_eq!(chunks[1].weight_version.as_deref(), Some("step-2"));
++        assert_eq!(chunks.len(), 3);
++        assert_eq!(chunks[0].choices[0].weight_versions, None);
++        assert_eq!(chunks[1].choices[0].weight_versions, Some(spans));
++        assert!(chunks[2].choices.is_empty());
++        for chunk in &chunks {
++            let json = serde_json::to_value(chunk).expect("serialize chunk");
++            assert!(json.get("weight_version").is_none());
++        }
 +    }
 +
 +    #[tokio::test]
@@ -1116,18 +1261,17 @@ index 5bf434f5220..4ede488c1b0 100644
      fn stream_output(
          prompt_token_ids: Option<&[u32]>,
          token_ids: Vec<u32>,
-@@ -746,6 +1016,10 @@ mod tests {
-             spec_decode_metrics: None,
+@@ -772,6 +1063,9 @@ mod tests {
              weight_versions: None,
+             routed_experts: None,
              timestamps: Default::default(),
-+            weight_version: None,
 +            remote_kv_wait_time: None,
 +            kv_transfer_metrics: None,
 +            request_timings: None,
          }
      }
-
-@@ -763,6 +1037,7 @@ mod tests {
+ 
+@@ -789,6 +1083,7 @@ mod tests {
                  ..Default::default()
              },
              mm_placeholders,
@@ -1135,9 +1279,9 @@ index 5bf434f5220..4ede488c1b0 100644
          )
          .try_collect()
          .await
-@@ -770,15 +1045,16 @@ mod tests {
+@@ -796,15 +1091,16 @@ mod tests {
      }
-
+ 
      #[tokio::test]
 -    async fn generate_chunk_stream_returns_sampling_mask() {
 +    async fn generate_chunk_stream_returns_aligned_sampling_mask_logprobs() {
@@ -1154,9 +1298,9 @@ index 5bf434f5220..4ede488c1b0 100644
 +        assert_eq!(choice.sampling_mask, Some(vec![vec![33, 44]]));
 +        assert_eq!(choice.sampling_mask_logprobs, Some(vec![vec![-0.1, -0.2]]));
      }
-
+ 
      #[tokio::test]
-@@ -846,6 +1122,7 @@ mod tests {
+@@ -872,6 +1168,7 @@ mod tests {
                      ..Default::default()
                  },
                  None,
@@ -1164,7 +1308,7 @@ index 5bf434f5220..4ede488c1b0 100644
              )
              .try_collect()
              .await
-@@ -856,11 +1133,12 @@ mod tests {
+@@ -882,11 +1179,12 @@ mod tests {
                  assert!(chunks[1].choices.is_empty());
                  assert_eq!(
                      chunks[1].metrics,
@@ -1181,35 +1325,44 @@ index 5bf434f5220..4ede488c1b0 100644
                  );
                  let json = serde_json::to_value(&chunks[1]).expect("serialize chunk");
                  let stats = &json["metrics"]["speculative_decoding"];
-@@ -918,9 +1196,14 @@ mod tests {
+@@ -944,10 +1242,18 @@ mod tests {
              prompt_token_ids: vec![10, 20],
              sampling_mask: Some(SamplingMask {
                  rows: vec![vec![30, 40]],
 +                logprobs: Some(vec![vec![-0.1, -0.2]]),
              }),
              spec_decode_metrics: None,
-             weight_versions: None,
-+            weight_version: Some("step-2".to_string()),
+-            weight_versions: None,
++            weight_versions: Some(vec![vllm_llm::WeightVersionSpan {
++                version: "step-2".into(),
++                start: 0,
++                end: 1,
++            }]),
+             routed_experts: None,
 +            remote_kv_wait_time: None,
 +            kv_transfer_metrics: None,
 +            request_timings: None,
          };
-
+ 
          let response = collect_generate(
-@@ -935,9 +1218,20 @@ mod tests {
+@@ -962,9 +1268,24 @@ mod tests {
                      length: 1,
                  }],
              )])),
 +            None,
          )
          .expect("response");
-
-+        assert_eq!(response.weight_version.as_deref(), Some("step-2"));
+ 
 +        assert_eq!(
 +            response.choices[0].sampling_mask_logprobs,
 +            Some(vec![vec![-0.1, -0.2]])
 +        );
 +        let json = serde_json::to_value(&response).expect("serialize response");
++        assert!(json.get("weight_version").is_none());
++        assert_eq!(
++            json["choices"][0]["weight_versions"],
++            serde_json::json!([{"version": "step-2", "start": 0, "end": 1}])
++        );
 +        assert_eq!(
 +            json["choices"][0]["sampling_mask_logprobs"],
 +            serde_json::json!([[-0.1_f32, -0.2_f32]])
@@ -1217,25 +1370,24 @@ index 5bf434f5220..4ede488c1b0 100644
          assert!(response.prompt_token_ids.is_none());
          assert!(response.mm_placeholders.is_none());
          assert_eq!(response.choices[0].sampling_mask, Some(vec![vec![30, 40]]));
-@@ -976,6 +1270,10 @@ mod tests {
-             sampling_mask: None,
+@@ -1054,6 +1375,9 @@ mod tests {
              spec_decode_metrics: Some(metrics.clone()),
              weight_versions: None,
-+            weight_version: None,
+             routed_experts: None,
 +            remote_kv_wait_time: None,
 +            kv_transfer_metrics: None,
 +            request_timings: None,
          };
-
+ 
          let response = collect_generate(
-@@ -984,14 +1282,16 @@ mod tests {
+@@ -1062,14 +1386,16 @@ mod tests {
              ApiServerOptions::default(),
              ResponseOptions::default(),
              None,
 +            None,
          )
          .expect("response");
-
+ 
          assert_eq!(
              response.metrics,
 -            Some(PerRequestMetrics {
@@ -1248,37 +1400,35 @@ index 5bf434f5220..4ede488c1b0 100644
          );
          let json = serde_json::to_value(&response).expect("serialize response");
          let stats = &json["metrics"]["speculative_decoding"];
-@@ -1069,6 +1369,10 @@ mod tests {
-             sampling_mask: None,
+@@ -1148,6 +1474,9 @@ mod tests {
              spec_decode_metrics: None,
              weight_versions: None,
-+            weight_version: None,
+             routed_experts: None,
 +            remote_kv_wait_time: None,
 +            kv_transfer_metrics: None,
 +            request_timings: None,
          };
-
+ 
          let response = collect_generate(
-@@ -1080,6 +1384,7 @@ mod tests {
+@@ -1159,6 +1488,7 @@ mod tests {
                  ..Default::default()
              },
              None,
 +            None,
          )
          .expect("response");
-
-@@ -1105,6 +1410,10 @@ mod tests {
-             sampling_mask: None,
+ 
+@@ -1185,6 +1515,9 @@ mod tests {
              spec_decode_metrics: None,
              weight_versions: None,
-+            weight_version: None,
+             routed_experts: None,
 +            remote_kv_wait_time: None,
 +            kv_transfer_metrics: None,
 +            request_timings: None,
              prompt_token_ids,
          };
-
-@@ -1117,6 +1426,7 @@ mod tests {
+ 
+@@ -1197,6 +1530,7 @@ mod tests {
                  ..Default::default()
              },
              None,
@@ -1286,7 +1436,7 @@ index 5bf434f5220..4ede488c1b0 100644
          )
          .expect("single-token prompt without payload maps to [None]");
          let prompt_logprobs = response.prompt_logprobs.expect("prompt logprobs present");
-@@ -1132,6 +1442,7 @@ mod tests {
+@@ -1212,6 +1546,7 @@ mod tests {
                  ..Default::default()
              },
              None,
@@ -1294,62 +1444,121 @@ index 5bf434f5220..4ede488c1b0 100644
          )
          .expect_err("multi-token prompt without payload is an engine failure");
      }
-@@ -1183,6 +1494,10 @@ mod tests {
-             sampling_mask: None,
+@@ -1264,6 +1599,9 @@ mod tests {
              spec_decode_metrics: None,
              weight_versions: None,
-+            weight_version: None,
+             routed_experts: None,
 +            remote_kv_wait_time: None,
 +            kv_transfer_metrics: None,
 +            request_timings: None,
          };
-
+ 
          let response = collect_generate(
-@@ -1191,6 +1506,7 @@ mod tests {
+@@ -1272,6 +1610,7 @@ mod tests {
              ApiServerOptions::default(),
              ResponseOptions::default(),
              None,
 +            None,
          )
          .expect("response");
-
+ 
+diff --git a/rust/src/server/src/routes/inference/generate/convert.rs b/rust/src/server/src/routes/inference/generate/convert.rs
+index 1c4a24ad3db..2d2e0de695f 100644
+--- a/rust/src/server/src/routes/inference/generate/convert.rs
++++ b/rust/src/server/src/routes/inference/generate/convert.rs
+@@ -60,6 +60,13 @@ pub(super) fn prepare_generate_request(
+     let include_prompt_logprobs = request.sampling_params.inner.prompt_logprobs.is_some();
+     let return_token_ids = request.return_token_ids.unwrap_or(false);
+     let mut sampling_params = request.sampling_params.inner;
++    sampling_params.temperature.get_or_insert(1.0);
++    sampling_params.top_p.get_or_insert(1.0);
++    sampling_params.top_k.get_or_insert(0);
++    sampling_params.min_p.get_or_insert(0.0);
++    sampling_params.repetition_penalty.get_or_insert(1.0);
++    sampling_params.presence_penalty.get_or_insert(0.0);
++    sampling_params.frequency_penalty.get_or_insert(0.0);
+     sampling_params.vllm_xargs = merge_kv_transfer_params(
+         sampling_params.vllm_xargs,
+         request.kv_transfer_params.as_ref(),
+@@ -131,6 +138,7 @@ mod tests {
+                 "max_tokens": 7,
+                 "logprobs": 2,
+                 "prompt_logprobs": 1,
++                "repetition_penalty": 1.3,
+                 "ignore_eos": true,
+                 "routed_experts_prompt_start": 2
+             },
+@@ -154,6 +162,10 @@ mod tests {
+         );
+         assert_eq!(prepared.text_request.sampling_params.max_tokens, Some(7));
+         assert_eq!(prepared.text_request.sampling_params.logprobs, Some(2));
++        assert_eq!(
++            prepared.text_request.sampling_params.repetition_penalty,
++            Some(1.3)
++        );
+         assert_eq!(
+             prepared.text_request.sampling_params.prompt_logprobs,
+             Some(1)
+@@ -192,6 +204,28 @@ mod tests {
+         )
+         .expect("prepare request");
+ 
++        let params = &prepared.text_request.sampling_params;
++        assert_eq!(
++            (
++                params.temperature,
++                params.top_p,
++                params.top_k,
++                params.min_p,
++                params.repetition_penalty,
++                params.presence_penalty,
++                params.frequency_penalty,
++            ),
++            (
++                Some(1.0),
++                Some(1.0),
++                Some(0),
++                Some(0.0),
++                Some(1.0),
++                Some(0.0),
++                Some(0.0),
++            )
++        );
++
+         let xargs = prepared.text_request.sampling_params.vllm_xargs.expect("xargs");
+         assert_eq!(xargs.get("custom"), Some(&json!(1)));
+         assert_eq!(
 diff --git a/rust/src/server/src/routes/inference/generate/types.rs b/rust/src/server/src/routes/inference/generate/types.rs
-index d2737b5bce6..ed609879640 100644
+index 49e27c4aa60..eab62f9bbbb 100644
 --- a/rust/src/server/src/routes/inference/generate/types.rs
 +++ b/rust/src/server/src/routes/inference/generate/types.rs
-@@ -76,6 +76,7 @@ pub(super) struct GenerateResponseChoice {
-     pub token_ids: Vec<u32>,
+@@ -105,6 +105,7 @@ pub(super) struct GenerateResponseChoice {
+     pub routed_experts: Option<String>,
      pub sampling_mask: Option<Vec<Vec<u32>>>,
      pub weight_versions: Option<Vec<WeightVersionSpan>>,
 +    pub sampling_mask_logprobs: Option<Vec<Vec<f32>>>,
  }
-
+ 
  /// Mirrors the Python vLLM `GenerateResponseStreamChoice` class.
-@@ -90,6 +91,7 @@ pub(super) struct GenerateResponseStreamChoice {
+@@ -122,6 +123,7 @@ pub(super) struct GenerateResponseStreamChoice {
      pub sampling_mask: Option<Vec<Vec<u32>>>,
      /// Set on the final chunk only; covers the whole output.
      pub weight_versions: Option<Vec<WeightVersionSpan>>,
 +    pub sampling_mask_logprobs: Option<Vec<Vec<f32>>>,
  }
-
+ 
  /// Mirrors the Python vLLM `GenerateStreamResponse` class.
-@@ -101,7 +103,8 @@ pub(super) struct GenerateStreamResponse {
+@@ -133,7 +135,7 @@ pub(super) struct GenerateStreamResponse {
      pub usage: Option<Usage>,
      pub prompt_token_ids: Option<Vec<u32>>,
      pub mm_placeholders: Option<MultiModalPlaceholders>,
 -    pub metrics: Option<PerRequestMetrics<StreamingSpeculativeDecodingMetrics>>,
 +    pub metrics: Option<StreamingPerRequestMetrics<StreamingSpeculativeDecodingMetrics>>,
-+    pub weight_version: Option<String>,
  }
-
+ 
  /// Mirrors the Python vLLM `GenerateResponse` class.
-@@ -117,11 +120,68 @@ pub(super) struct GenerateResponse {
-     pub kv_transfer_params: Option<Value>,
-     pub ec_transfer_params: Option<Value>,
-     pub metrics: Option<PerRequestMetrics<SpeculativeDecodingMetrics>>,
-+    pub weight_version: Option<String>,
- }
-
+@@ -153,7 +155,63 @@ pub(super) struct GenerateResponse {
+ 
  #[derive(Debug, Clone, PartialEq, Serialize)]
  pub(super) struct PerRequestMetrics<T> {
 -    pub speculative_decoding: T,
@@ -1411,7 +1620,7 @@ index d2737b5bce6..ed609879640 100644
 +        }
 +    }
  }
-
+ 
  /// Mirrors the Python vLLM `SpeculativeDecodingMetrics` class.
 diff --git a/rust/src/server/src/routes/load.rs b/rust/src/server/src/routes/load.rs
 index de1bd2ee988..087c4be512b 100644
@@ -1419,14 +1628,14 @@ index de1bd2ee988..087c4be512b 100644
 +++ b/rust/src/server/src/routes/load.rs
 @@ -4,18 +4,54 @@
  use std::sync::Arc;
-
+ 
  use axum::Json;
 -use axum::extract::State;
 -use serde::Serialize;
 +use axum::extract::{Query, State};
 +use serde::{Deserialize, Serialize};
 +use serde_json::Value;
-
+ 
 +use crate::error::ApiError;
  use crate::state::AppState;
 +use crate::utils::utility_call_error;
@@ -1442,14 +1651,14 @@ index de1bd2ee988..087c4be512b 100644
 +fn default_inflight_limit() -> i32 {
 +    100
 +}
-
+ 
  #[derive(Serialize)]
  pub(crate) struct ServerLoadResponse {
      server_load: u64,
 +    #[serde(skip_serializing_if = "Option::is_none")]
 +    inflight: Option<Vec<Value>>,
  }
-
+ 
 -pub async fn load(State(state): State<Arc<AppState>>) -> Json<ServerLoadResponse> {
 -    Json(ServerLoadResponse {
 +pub async fn load(
@@ -1478,13 +1687,13 @@ index de1bd2ee988..087c4be512b 100644
 +    }))
  }
 diff --git a/rust/src/server/src/routes/openai/utils/types.rs b/rust/src/server/src/routes/openai/utils/types.rs
-index e2187bae673..9994eed71f5 100644
+index 0a937c244ce..5a17ac17793 100644
 --- a/rust/src/server/src/routes/openai/utils/types.rs
 +++ b/rust/src/server/src/routes/openai/utils/types.rs
 @@ -22,22 +22,7 @@ pub fn default_true() -> bool {
      true
  }
-
+ 
 -/// Deserialize an OpenAI request `top_k` while preserving explicit disable.
 -///
 -/// Null remains `None` so model generation defaults apply. Explicit `-1` and
@@ -1502,14 +1711,14 @@ index e2187bae673..9994eed71f5 100644
 -    }
 -}
 +pub use vllm_text::deserialize_request_top_k;
-
+ 
  /// Effort level for reasoning models.
  ///
 diff --git a/rust/src/server/src/routes/render.rs b/rust/src/server/src/routes/render.rs
-index aceb28f4993..2736641cdeb 100644
+index a2de402dac2..68294e1aea0 100644
 --- a/rust/src/server/src/routes/render.rs
 +++ b/rust/src/server/src/routes/render.rs
-@@ -30,6 +30,7 @@ use crate::utils::{resolve_request_context, unix_timestamp};
+@@ -32,6 +32,7 @@ use crate::utils::{resolve_request_context, unix_timestamp};
  pub(crate) fn build_router(state: Arc<RenderState>) -> Router {
      Router::new()
          .route("/health", get(health))
@@ -1518,13 +1727,13 @@ index aceb28f4993..2736641cdeb 100644
          .route("/v1/models", get(list_models))
          .route("/v1/chat/completions/render", post(render_chat))
 diff --git a/rust/src/server/src/routes/tests.rs b/rust/src/server/src/routes/tests.rs
-index d1e9a55d16c..c04f148f2c2 100644
+index 40e34e42c6d..d4108774011 100644
 --- a/rust/src/server/src/routes/tests.rs
 +++ b/rust/src/server/src/routes/tests.rs
-@@ -3582,6 +3582,104 @@ async fn health_endpoint_returns_ok_with_empty_body_when_client_is_healthy() {
+@@ -4008,6 +4008,104 @@ async fn health_endpoint_returns_ok_with_empty_body_when_client_is_healthy() {
      engine_task.await.expect("mock engine task");
  }
-
+ 
 +#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 +#[serial]
 +async fn generation_health_requires_scheduler_reply_and_probes_only_idle_engines() {
@@ -1640,7 +1849,7 @@ index c3a8449617a..6a6ba16e822 100644
          Some(interval) => sse
              .keep_alive(KeepAlive::new().interval(interval).text("keep-alive"))
 diff --git a/rust/src/text/src/lib.rs b/rust/src/text/src/lib.rs
-index a6aed592b79..3c5113fe6a9 100644
+index d20d7bcd24b..968dc35629a 100644
 --- a/rust/src/text/src/lib.rs
 +++ b/rust/src/text/src/lib.rs
 @@ -22,7 +22,9 @@ pub use output::{
@@ -1666,14 +1875,14 @@ index 6308bdf6e11..17bd25f73fb 100644
 +                mask.truncate(num_tokens);
              }
          }
-
+ 
          output_token_count += new_token_ids.len();
 -        if let Some(mut mask) = new_sampling_mask {
 -            sampling_mask.get_or_insert_default().rows.append(&mut mask.rows);
 +        if let Some(mask) = new_sampling_mask {
 +            sampling_mask.get_or_insert_default().append(mask);
          }
-
+ 
          let decoded_logprobs = new_logprobs
 @@ -417,11 +417,13 @@ mod tests {
          let mut first = GenerateOutput::for_test(Some(prompt), vec![b'a' as u32], None);
@@ -1688,7 +1897,7 @@ index 6308bdf6e11..17bd25f73fb 100644
 +            logprobs: Some(vec![vec![-0.3, -0.4]]),
          });
          let tokenizer: DynTokenizer = Arc::new(TestTokenizer::new());
-
+ 
 @@ -440,6 +442,7 @@ mod tests {
              collected.sampling_mask,
              Some(SamplingMask {
@@ -1704,7 +1913,7 @@ index 6308bdf6e11..17bd25f73fb 100644
 +            ..Default::default()
          });
          let tokenizer: DynTokenizer = Arc::new(TestTokenizer::new());
-
+ 
 @@ -721,6 +725,7 @@ mod tests {
          });
          raw.sampling_mask = Some(SamplingMask {
@@ -1712,7 +1921,7 @@ index 6308bdf6e11..17bd25f73fb 100644
 +            ..Default::default()
          });
          let tokenizer: DynTokenizer = Arc::new(TestTokenizer::new());
-
+ 
 @@ -748,6 +753,7 @@ mod tests {
                      vec![b'c' as u32, b'c' as u32 + 100],
                      vec![b'x' as u32, b'x' as u32 + 100],
@@ -1722,12 +1931,12 @@ index 6308bdf6e11..17bd25f73fb 100644
          );
          assert_eq!(output.usage.output_token_count, 4);
 diff --git a/rust/src/text/src/request.rs b/rust/src/text/src/request.rs
-index c3efcde496f..37dbb5f4da4 100644
+index 88c9ad47bb9..bf9ba939cd7 100644
 --- a/rust/src/text/src/request.rs
 +++ b/rust/src/text/src/request.rs
 @@ -5,7 +5,7 @@ use std::collections::HashMap;
  use std::num::NonZeroU32;
-
+ 
  use enum_as_inner::EnumAsInner;
 -use serde::{Deserialize, Serialize};
 +use serde::{Deserialize, Deserializer, Serialize};
@@ -1737,7 +1946,7 @@ index c3efcde496f..37dbb5f4da4 100644
 @@ -36,6 +36,25 @@ pub fn normalize_top_k(value: i64) -> std::result::Result<Option<u32>, String> {
      }
  }
-
+ 
 +/// Deserialize a request `top_k` while preserving explicit disable.
 +///
 +/// Null remains `None` so model generation defaults apply. Explicit `-1` and
@@ -1760,7 +1969,7 @@ index c3efcde496f..37dbb5f4da4 100644
  /// One raw text-generation prompt.
  ///
  /// This supports either ordinary text that still needs tokenization or
-@@ -77,6 +96,7 @@ pub struct SamplingParams {
+@@ -78,6 +97,7 @@ pub struct SamplingParams {
      /// Cumulative probability threshold for nucleus sampling.
      pub top_p: Option<f32>,
      /// Maximum number of top tokens to consider. `Some(0)` means all tokens.
@@ -1768,10 +1977,10 @@ index c3efcde496f..37dbb5f4da4 100644
      pub top_k: Option<u32>,
      /// Random seed used by the sampler when present.
      pub seed: Option<i64>,
-@@ -309,6 +329,27 @@ impl TextRequest {
- mod tests {
-     use super::*;
-
+@@ -356,6 +376,27 @@ mod tests {
+         }
+     }
+ 
 +    #[test]
 +    fn sampling_params_preserve_explicit_top_k_disable() {
 +        for (value, expected) in [

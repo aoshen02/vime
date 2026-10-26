@@ -535,6 +535,8 @@ class TestZeroGpuRolloutConfig:
         groups = servers["default"].server_groups
         assert [group.worker_type for group in groups] == ["prefill", "decode"]
         assert init_handles == ["prefill-init-0", "decode-init-1"]
+        assert all(group.router_ip == servers["default"].router_ip for group in groups)
+        assert all(group.router_port == servers["default"].router_port for group in groups)
 
     def test_start_rollout_servers_waits_for_epd_encoder_before_non_encoder(self, monkeypatch):
         from vime.backends.vllm_utils import deployment, disaggregation

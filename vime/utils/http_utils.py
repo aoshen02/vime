@@ -186,7 +186,7 @@ class _ShardedHTTPTransport(httpx.AsyncBaseTransport):
         await asyncio.gather(*(transport.aclose() for transport in self._transports))
 
 
-async def _post(client, url, payload, max_retries=60, headers=None, timeout=None):
+async def _post(client, url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
     retry_count = 0
     while retry_count < max_retries:
         response = None
@@ -198,7 +198,12 @@ async def _post(client, url, payload, max_retries=60, headers=None, timeout=None
             response.raise_for_status()
             content = await response.aread()
             try:
-                output = json.loads(content)
+                if score_centering_top_k is not None:
+                    from vime.utils.score_centering import decode_score_centering_response
+
+                    output = await asyncio.to_thread(decode_score_centering_response, content, score_centering_top_k)
+                else:
+                    output = json.loads(content)
             except json.JSONDecodeError:
                 output = content.decode() if isinstance(content, bytes) else content
         except Exception as e:
@@ -289,8 +294,16 @@ def _init_ray_distributed_post(args):
                 trust_env=False,  # internal vLLM comm only — never route through system proxy
             )
 
-        async def do_post(self, url, payload, max_retries=60, headers=None, timeout=None):
-            return await _post(self._client, url, payload, max_retries, headers=headers, timeout=timeout)
+        async def do_post(self, url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
+            return await _post(
+                self._client,
+                url,
+                payload,
+                max_retries,
+                headers=headers,
+                timeout=timeout,
+                score_centering_top_k=score_centering_top_k,
+            )
 
     # Create actors per node
     created = []
@@ -315,7 +328,7 @@ def _init_ray_distributed_post(args):
     _post_actors = created
 
 
-async def post(url, payload, max_retries=60, headers=None, timeout=None):
+async def post(url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
     # If distributed mode is enabled and actors exist, dispatch via Ray.
     if _distributed_post_enabled and _post_actors:
         try:
@@ -327,13 +340,28 @@ async def post(url, payload, max_retries=60, headers=None, timeout=None):
                 # `min(32, cpu+4)`), which becomes a hard upper bound on the
                 # number of in-flight POSTs that can be waited on in parallel
                 # and produces large tail latencies under high concurrency.
-                obj_ref = actor.do_post.remote(url, payload, max_retries, headers=headers, timeout=timeout)
+                obj_ref = actor.do_post.remote(
+                    url,
+                    payload,
+                    max_retries,
+                    headers=headers,
+                    timeout=timeout,
+                    score_centering_top_k=score_centering_top_k,
+                )
                 return await obj_ref
         except Exception as e:
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
-    return await _post(_http_client, url, payload, max_retries, headers=headers, timeout=timeout)
+    return await _post(
+        _http_client,
+        url,
+        payload,
+        max_retries,
+        headers=headers,
+        timeout=timeout,
+        score_centering_top_k=score_centering_top_k,
+    )
 
 
 async def get(url, *, timeout=None):

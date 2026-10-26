@@ -115,7 +115,7 @@ CUSTOM_ARGS=(
 )
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-NUM_GPUS=2
+NUM_GPUS=4
 
 ray start --head \
   --node-ip-address "${MASTER_ADDR}" \

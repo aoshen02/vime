@@ -152,6 +152,9 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
                 prefill_urls=prefill_urls,
                 decode_urls=decode_urls,
             )
+            for group in server_groups:
+                group.router_ip = router_ip
+                group.router_port = router_port
 
         servers[model_config.name] = RolloutServer(
             server_groups=server_groups,

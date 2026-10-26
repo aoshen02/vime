@@ -149,7 +149,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     call_log_probs: list[float] = []
     last_choice: dict[str, Any] | None = None
     last_usage: dict[str, Any] | None = None
-    weight_version: str | None = None
+    weight_versions: list[str] = []
     response_metrics: dict[str, Any] = {}
     trace_metadata: dict[str, Any] = {}
     finish_reason: Any = None
@@ -174,8 +174,6 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                     logger.warning("vllm_streaming: skipping non-JSON chunk: %r", data_str[:120])
                     continue
 
-                if chunk.get("weight_version") is not None:
-                    weight_version = str(chunk["weight_version"])
                 chunk_metrics = _inference_generate_metrics(chunk)
                 if chunk_metrics:
                     response_metrics.update(chunk_metrics)
@@ -192,6 +190,9 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                     continue
                 choice = choices[0]
                 last_choice = choice
+                chunk_meta = _inference_generate_meta_info(chunk)
+                if "weight_versions" in choice or chunk.get("weight_version") is not None:
+                    weight_versions = chunk_meta["weight_versions"]
                 if chunk.get("usage"):
                     last_usage = chunk["usage"]
                 if choice.get("finish_reason"):
@@ -221,7 +222,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                     sample.loss_mask = base_loss_mask + [1] * len(call_tokens)
                 sample._apply_meta_info(
                     args,
-                    _inference_generate_meta_info(chunk),
+                    chunk_meta,
                     new_token_count=len(delta_tokens),
                     update_terminal_info=False,
                 )
@@ -247,8 +248,6 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
         else:
             finish = {"type": "stop"}
         meta: dict[str, Any] = {"finish_reason": finish}
-        if weight_version is not None:
-            meta["weight_version"] = weight_version
         if last_usage:
             meta["prompt_tokens"] = last_usage.get("prompt_tokens", 0)
             meta["completion_tokens"] = last_usage.get("completion_tokens", 0)
@@ -271,12 +270,12 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
             raw = base64.b64decode(last_choice["routed_experts"].encode("ascii"), validate=True)
             meta["routed_experts"] = np.load(io.BytesIO(raw), allow_pickle=False)
         # tokens already accumulated above; finalize metadata only (no token re-append).
-        if weight_version is not None and call_tokens:
-            sample.weight_versions.append(weight_version)
+        if call_tokens:
+            sample.weight_versions.extend(weight_versions)
         sample.append_response_tokens(args, meta_info=meta)
     elif state.aborted:
-        if weight_version is not None:
-            sample.weight_versions.append(weight_version)
+        if call_tokens:
+            sample.weight_versions.extend(weight_versions)
         sample.status = Sample.Status.ABORTED
     else:
         raise RuntimeError("vLLM streaming response ended without a terminal finish_reason.")

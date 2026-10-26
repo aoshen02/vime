@@ -1,11 +1,11 @@
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index 53b9784dadb..bc0086b930c 100644
+index 4bcc5148417..c1d2a344311 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
-@@ -2057,6 +2057,13 @@ class VllmConfig:
+@@ -2069,6 +2069,13 @@ class VllmConfig:
          self._resolve_mm_video_decode_device()
          self._validate_mm_processor_device()
-
+ 
 +        from vllm.utils.debug_utils.dumper import dumper
 +
 +        if dumper.may_enable and (
@@ -21,9 +21,9 @@ index d8254cb3354..6408f8dc7bb 100644
 --- a/vllm/entrypoints/serve/__init__.py
 +++ b/vllm/entrypoints/serve/__init__.py
 @@ -21,6 +21,10 @@ def register_vllm_serve_api_routers(app: FastAPI):
-
+ 
      register_instrumentator_api_routers(app)
-
+ 
 +    from .tensor_dump.api_router import attach_router as attach_tensor_dump_router
 +
 +    attach_tensor_dump_router(app)
@@ -38,11 +38,11 @@ index 0a0c1daeec4..eb928fa2055 100644
 @@ -8,7 +8,7 @@ from starlette.datastructures import Headers
  from starlette.responses import JSONResponse
  from starlette.types import ASGIApp, Receive, Scope, Send
-
+ 
 -GUARDED_PREFIX = ("/v1", "/v2", "/inference", "/cohere")
 +GUARDED_PREFIX = ("/v1", "/v2", "/inference", "/cohere", "/dumper")
-
-
+ 
+ 
  class AuthenticationMiddleware:
 diff --git a/vllm/entrypoints/serve/tensor_dump/__init__.py b/vllm/entrypoints/serve/tensor_dump/__init__.py
 new file mode 100644
@@ -3070,10 +3070,10 @@ index 00000000000..9ff44cba6e0
 +    def restore(self) -> None:
 +        self.target_fn.__code__ = self.original_code
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index b8d583cc905..2ac72df1c93 100644
+index 56fc63a2916..327ef3f639d 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -65,6 +65,7 @@ from vllm.multimodal.encoder_budget import (
+@@ -66,6 +66,7 @@ from vllm.multimodal.encoder_budget import (
  from vllm.platforms import current_platform
  from vllm.sequence import IntermediateTensors
  from vllm.tasks import SupportedTask
@@ -3081,15 +3081,15 @@ index b8d583cc905..2ac72df1c93 100644
  from vllm.utils.gc_utils import freeze_gc_for_cudagraph_capture
  from vllm.utils.mem_utils import DeviceMemoryProfiler, format_gib
  from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE, async_tensor_h2d
-@@ -210,6 +211,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -212,6 +213,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
          )
          self.observability_config = vllm_config.observability_config
          self.jit_warmup_registry = JitWarmupRegistry(vllm_config)
 +        self.tensor_dumper = dumper if dumper.may_enable else None
-
+ 
          self.device = device
          self.dtype = self.model_config.dtype
-@@ -423,6 +425,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -425,6 +427,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                      eplb_models_added = self.eplb.maybe_register_speculator(
                          self.speculator, self.speculative_config, load_dummy_weights
                      )
@@ -3097,12 +3097,12 @@ index b8d583cc905..2ac72df1c93 100644
 +                self.tensor_dumper.apply_source_patches()
 +                self.tensor_dumper.register_non_intrusive_dumper(self.model)
          time_after_load = time.perf_counter()
-
+ 
          self.model_memory_usage = m.consumed_memory
-@@ -2002,6 +2007,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -2013,6 +2018,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              model_inputs["intermediate_tensors"] = IntermediateTensors(new_tensors)
              del intermediate_tensors
-
+ 
 +        if not dummy_run and self.tensor_dumper is not None:
 +            with set_current_vllm_config(self.vllm_config):
 +                self.tensor_dumper.dump_dict("forward_batch_info", input_batch)
@@ -3110,23 +3110,23 @@ index b8d583cc905..2ac72df1c93 100644
          # Update the EPLB meta.
          ubatch_slices = ubatch_state.slices if ubatch_state is not None else None
          self.eplb.prepare_forward(
-@@ -2063,6 +2072,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -2074,6 +2083,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                      model_output = self.model(**model_inputs)
-
+ 
          self.kv_connector.finish_forward()
 +        if not dummy_run and self.tensor_dumper is not None:
 +            self.tensor_dumper.step()
-
+ 
          if self.is_last_pp_rank:
              if self.use_aux_hidden_state_outputs:
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index 21a27cf5a3e..734f14120c3 100644
+index acdbb97094c..f02a4a4b13b 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
-@@ -1477,6 +1477,11 @@ class Worker(WorkerBase):
+@@ -1492,6 +1492,11 @@ class Worker(WorkerBase):
      def pin_lora(self, lora_id: int) -> bool:
          return self.model_runner.pin_lora(lora_id)
-
+ 
 +    def dumper_control(self, action: str, body: str = "{}") -> dict:
 +        if not self.use_v2_model_runner or self.model_runner.tensor_dumper is None:
 +            raise RuntimeError("Dumper was not enabled at startup.")

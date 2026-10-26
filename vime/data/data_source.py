@@ -171,7 +171,7 @@ class RolloutDataSource(DataSource):
     def save(self, rollout_id):
         path = Path(self.args.save) / "rollout" / f"global_dataset_state_dict_{rollout_id}.pt"
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self.state_dict(), path)
+        torch.save(self.state_dict(), path, pickle_protocol=5)
 
     def load(self, rollout_id=None):
         if self.args.load is None:

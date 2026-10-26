@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import re
+import sys
 from typing import Any
 from urllib.parse import quote
 
@@ -15,6 +17,17 @@ DEFAULT_ABORT_TIMEOUT_SECONDS = 180.0
 DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 10.0
 
 
+def _worker_base_url(worker_url: str) -> str:
+    """Resolve native router @usize identities without rewriting malformed suffixes."""
+    parts = worker_url.split("@")
+    if len(parts) == 2 and re.fullmatch(r"\+?[0-9]+", parts[1]):
+        rank = parts[1].lstrip("+0") or "0"
+        max_rank = 2 * sys.maxsize + 1
+        if len(rank) <= len(str(max_rank)) and int(rank) <= max_rank:
+            return parts[0]
+    return worker_url
+
+
 def unregister_worker(router_url: str, worker_url: str, *, timeout: float) -> None:
     """Remove a worker even when its engine actor can no longer answer RPCs."""
     with requests.Session() as client:
@@ -22,8 +35,8 @@ def unregister_worker(router_url: str, worker_url: str, *, timeout: float) -> No
         response = client.get(f"{router_url}/workers", timeout=timeout)
         response.raise_for_status()
         for worker in response.json()["workers"]:
-            if worker["url"] == worker_url:
-                response = client.delete(f"{router_url}/workers/{quote(worker_url, safe='')}", timeout=timeout)
+            if worker["url"] == worker_url or _worker_base_url(worker["url"]) == worker_url:
+                response = client.delete(f"{router_url}/workers/{quote(worker['url'], safe='')}", timeout=timeout)
                 # Another health check may already have removed this worker.
                 if response.status_code != 404:
                     response.raise_for_status()
@@ -42,7 +55,7 @@ async def get_live_router_workers(router_url: str, *, timeout: float) -> list[di
 
         async def check(worker):
             try:
-                response = await client.get(f"{worker['url']}/health_generate")
+                response = await client.get(f"{_worker_base_url(worker['url'])}/health_generate")
                 response.raise_for_status()
             except httpx.HTTPError as error:
                 # A registered URL is not proof of a live server. Remove it
@@ -141,6 +154,7 @@ async def abort_server_until_idle(
     if timeout <= 0 or request_timeout <= 0:
         raise ValueError("abort and control-request timeouts must be positive")
 
+    url = _worker_base_url(url)
     loop = asyncio.get_running_loop()
     # Abort acknowledgements do not prove the scheduler is idle. Bound retries
     # with one overall deadline while checking all outstanding request queues.
@@ -208,6 +222,7 @@ async def abort_servers_until_idle(
     timeout: float = DEFAULT_ABORT_TIMEOUT_SECONDS,
     request_timeout: float = DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS,
 ) -> None:
+    urls = list(dict.fromkeys(_worker_base_url(url) for url in urls))
     # Let every server finish its own bounded drain, then report all failures.
     # Proceeding after only some servers became idle would make controls unsafe.
     results = await asyncio.gather(

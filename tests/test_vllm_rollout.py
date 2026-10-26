@@ -147,7 +147,7 @@ def _generate_response(
         "usage": {"prompt_tokens": 3, "completion_tokens": len(tids)},
     }
     if weight_version is not None:
-        response["weight_version"] = weight_version
+        response["choices"][0]["weight_versions"] = [{"version": weight_version, "start": 0, "end": len(tids)}]
     metrics = dict(request_metrics or {})
     if request_spec_decode_stats is not None:
         metrics["speculative_decoding"] = request_spec_decode_stats
@@ -235,9 +235,9 @@ def test_geo3k_turn_preserves_sampling_metadata(monkeypatch):
                         "token_ids": [65],
                         "logprobs": {"content": [{"logprob": -0.1}]},
                         "sampling_mask": [[65, 66]],
+                        "weight_versions": [{"version": "7", "start": 0, "end": 1}],
                     }
                 ],
-                "weight_version": "7",
             }
         ),
     )
@@ -283,12 +283,14 @@ def test_build_inference_sampling_params_maps_rollout_fields():
     assert sp["skip_special_tokens"] is False
     assert sp["spaces_between_special_tokens"] is False
     assert sp["logprobs"] == 1
+    assert sp["detokenize"] is True
 
 
 @pytest.mark.unit
 def test_build_inference_sampling_params_forwards_disabled_top_k():
     sp = mod._build_inference_sampling_params({"max_new_tokens": 8, "temperature": 0.0, "top_p": 1.0, "top_k": -1})
     assert sp["top_k"] == -1
+    assert sp["detokenize"] is False
 
 
 @pytest.mark.unit
@@ -385,7 +387,8 @@ def test_mm_render_response_empty_engine_prompts_raises():
 
 
 @pytest.mark.unit
-def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
+@pytest.mark.parametrize("legacy_scalar", [False, True])
+def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch, legacy_scalar):
     post_mock = AsyncMock(
         return_value=_generate_response(
             [50, 51],
@@ -406,6 +409,9 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
             },
         )
     )
+    if legacy_scalar:
+        post_mock.return_value["choices"][0].pop("weight_versions")
+        post_mock.return_value["weight_version"] = "step-7"
     monkeypatch.setattr(mod, "post", post_mock)
 
     sample = Sample(index=0, prompt="abc")
@@ -452,12 +458,64 @@ def test_generate_text_path_updates_sample(patch_generate_state, monkeypatch):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("versions", "expected_staleness"),
+    [(["3", "7"], 7), (["7", "3"], 7), (["3", "11"], None), (["step-7"], None), ([], None), (None, None)],
+)
+def test_native_weight_versions_preserve_staleness(versions, expected_staleness):
+    from vime.utils.staleness import sample_staleness
+
+    output = _generate_response([50, 51])
+    output["weight_version"] = "ignored-legacy-field"
+    output["choices"][0]["weight_versions"] = [
+        {"version": version, "start": index, "end": index + 1} for index, version in enumerate(versions or [])
+    ] + [{"version": "unused", "start": 2, "end": 2}]
+    if versions is None:
+        output["choices"][0]["weight_versions"] = None
+    sample = Sample()
+    sample._apply_meta_info(_rollout_args(), mod._inference_generate_meta_info(output), new_token_count=2)
+
+    assert sample.weight_versions == (versions or [])
+    assert sample_staleness(sample, 10) == expected_staleness
+    sample._apply_meta_info(_rollout_args(), {"weight_versions": ["9"]}, new_token_count=0)
+    assert sample.weight_versions == (versions or [])
+
+
+@pytest.mark.unit
+def test_native_weight_versions_accumulate_across_partial_calls():
+    sample = Sample()
+    for version, finish_reason in [("3", "abort"), ("7", "stop")]:
+        output = _generate_response([50], weight_version=version)
+        output["choices"][0]["finish_reason"] = finish_reason
+        sample._apply_meta_info(_rollout_args(), mod._inference_generate_meta_info(output), new_token_count=1)
+    assert sample.weight_versions == ["3", "7"]
+    assert sample.status == Sample.Status.COMPLETED
+
+
+@pytest.mark.unit
+def test_custom_generator_scalar_weight_version_remains_supported():
+    sample = Sample()
+    sample._apply_meta_info(
+        _rollout_args(), {"weight_version": "3", "finish_reason": {"type": "stop"}}, new_token_count=1
+    )
+    assert sample.weight_versions == ["3"]
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("terminal_only", [False, True])
 @pytest.mark.parametrize("with_encoder", [False, True])
-def test_generate_streaming_records_weight_version(patch_generate_state, monkeypatch, terminal_only, with_encoder):
+@pytest.mark.parametrize(("mixed_versions", "legacy_scalar"), [(False, False), (True, False), (False, True)])
+def test_generate_streaming_records_weight_version(
+    patch_generate_state, monkeypatch, terminal_only, with_encoder, mixed_versions, legacy_scalar
+):
     from vime.rollout import vllm_streaming_rollout as streaming
 
     ec_params = {"caller-media": {"peer_host": "encoder", "peer_port": 9000, "metadata": {}}}
+    versions = (
+        [{"version": "3", "start": 0, "end": 1}, {"version": "7", "start": 1, "end": 2}]
+        if mixed_versions
+        else [{"version": "step-7", "start": 0, "end": 2}]
+    )
 
     class FakeStreamResponse:
         async def __aenter__(self):
@@ -473,7 +531,6 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
             chunks = [
                 {
                     "request_id": "stream-7",
-                    "weight_version": "step-7",
                     "metrics": {
                         "speculative_decoding": {
                             "num_accepted_tokens": 6,
@@ -491,12 +548,12 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
                     ],
                 },
                 {
-                    "weight_version": "step-7",
                     "choices": [
                         {
                             "token_ids": [51],
                             "sampling_mask": [[2, 3, 51]],
                             "finish_reason": "stop",
+                            "weight_versions": versions,
                             "logprobs": {"content": [{"logprob": -0.2}]},
                         }
                     ],
@@ -511,8 +568,17 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
             ]
             if terminal_only:
                 chunks[1]["choices"][0]["finish_reason"] = None
-                chunks.insert(2, {"choices": [{"token_ids": [], "finish_reason": "stop"}]})
+                chunks[1]["choices"][0].pop("weight_versions")
+                chunks.insert(
+                    2, {"choices": [{"token_ids": [], "finish_reason": "stop", "weight_versions": versions}]}
+                )
             for chunk in chunks:
+                chunk["weight_version"] = "step-7" if legacy_scalar else "ignored-legacy-field"
+                for choice in chunk.get("choices", []):
+                    if legacy_scalar:
+                        choice.pop("weight_versions", None)
+                    else:
+                        choice.setdefault("weight_versions", None)
                 yield f"data: {json.dumps(chunk)}"
             yield "data: [DONE]"
 
@@ -543,7 +609,7 @@ def test_generate_streaming_records_weight_version(patch_generate_state, monkeyp
     assert result.rollout_log_probs == pytest.approx([-0.1, -0.2])
     assert result.rollout_top_p_token_ids.tolist() == [1, 50, 2, 3, 51]
     assert result.rollout_top_p_token_offsets.tolist() == [0, 2, 5]
-    assert result.weight_versions == ["step-7"]
+    assert result.weight_versions == (["3", "7"] if mixed_versions else ["step-7"])
     assert result.spec_info.spec_accept_token_num == 6
     assert result.spec_info.spec_draft_token_num == 8
     assert result.spec_info.spec_verify_ct == 2

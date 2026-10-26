@@ -69,7 +69,7 @@ PERF_ARGS=(
 
    --recompute-granularity full
    --recompute-method uniform
-   --recompute-num-layers 36
+   --recompute-num-layers 1
 
    --use-dynamic-batch-size
    --log-probs-chunk-size 1024

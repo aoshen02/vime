@@ -1,6 +1,8 @@
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -9,6 +11,137 @@ from vime.backends.vllm_utils import server_control
 from vime.utils import http_utils
 
 NUM_GPUS = 0
+
+
+@pytest.mark.parametrize("worker_type", ["prefill", "decode"])
+@pytest.mark.parametrize("suffixes", [("",), ("@0", "@1"), ("@+1", "@01"), (f"@{2 * sys.maxsize + 1}",)])
+def test_unregister_worker_removes_only_matching_router_slots(monkeypatch, worker_type, suffixes):
+    base_url = f"http://{worker_type}:8000"
+    matched_urls = [base_url + suffix for suffix in suffixes]
+    unrelated_urls = [
+        "http://other:8000@0",
+        base_url + "-other@0",
+        *[
+            base_url + suffix
+            for suffix in ("@", "@abc", "@-1", "@1.0", "@1@0", "@ 1", "@１", "@1_0", f"@{2 * sys.maxsize + 2}")
+        ],
+    ]
+    workers = [
+        {"id": str(index), "url": url, "worker_type": worker_type}
+        for index, url in enumerate(matched_urls + unrelated_urls)
+    ]
+    calls = []
+
+    def send(client, request, **kwargs):
+        assert not client.trust_env
+        assert kwargs["timeout"] == 0.1
+        calls.append((request.method, request.url))
+        response = server_control.requests.Response()
+        response.url = request.url
+        response.status_code = 200
+        if request.method == "GET":
+            response._content = json.dumps({"workers": workers}).encode()
+        elif request.url == f"http://router/workers/{quote(matched_urls[0], safe='')}":
+            response.status_code = 404
+        return response
+
+    monkeypatch.setattr(server_control.requests.Session, "send", send)
+    server_control.unregister_worker("http://router", base_url, timeout=0.1)
+
+    assert calls == [("GET", "http://router/workers")] + [
+        ("DELETE", f"http://router/workers/{quote(url, safe='')}") for url in matched_urls
+    ]
+
+
+@pytest.mark.parametrize("failed_type", ["prefill", "decode"])
+def test_dp_worker_health_prunes_slots_and_drains_base_servers(monkeypatch, failed_type):
+    bases = {"prefill": "http://prefill:8000", "decode": "http://decode:9000"}
+    workers = [
+        {"id": f"{worker_type}-{rank}", "url": f"{base}@{rank}", "worker_type": worker_type}
+        for worker_type, base in bases.items()
+        for rank in range(2)
+    ] + [{"id": "plain", "url": "http://plain:7000", "worker_type": "regular"}]
+    calls = []
+    rpc_calls = []
+
+    async def respond(request):
+        calls.append((request.method, str(request.url)))
+        if request.url.path == "/workers":
+            return httpx.Response(200, json={"workers": workers})
+        if request.method == "DELETE":
+            return httpx.Response(404 if str(request.url).endswith("%400") else 200)
+        assert str(request.url) in {f"{base}/health_generate" for base in [*bases.values(), "http://plain:7000"]}
+        return httpx.Response(503 if str(request.url) == f"{bases[failed_type]}/health_generate" else 200)
+
+    async def post(url, payload, **kwargs):
+        rpc_calls.append(("POST", url))
+        assert payload == {}
+
+    async def get(url, **kwargs):
+        rpc_calls.append(("GET", url))
+        return {"server_load": 0}
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(server_control.httpx, "AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr(server_control, "post", post)
+    monkeypatch.setattr(server_control, "get", get)
+
+    async def prune_and_drain():
+        live = await server_control.get_live_router_workers("http://router", timeout=0.1)
+        await server_control.abort_servers_until_idle([worker["url"] for worker in live])
+        return live
+
+    live = asyncio.run(prune_and_drain())
+    assert live == [worker for worker in workers if worker["worker_type"] != failed_type]
+    assert sorted(url for method, url in calls if method == "DELETE") == sorted(
+        f"http://router/workers/{quote(worker['url'], safe='')}"
+        for worker in workers
+        if worker["worker_type"] == failed_type
+    )
+    live_bases = [base for worker_type, base in bases.items() if worker_type != failed_type] + ["http://plain:7000"]
+    assert sorted(rpc_calls) == sorted(
+        [("POST", f"{base}/abort_requests") for base in live_bases]
+        + [("GET", f"{base}/load?include_inflight=true&inflight_limit=100") for base in live_bases]
+    )
+
+
+def test_abort_dp_worker_list_drains_each_base_once_without_health_pruning(monkeypatch):
+    bases = ["http://prefill:8000", "http://decode:9000", "http://plain:7000"]
+    urls = [f"{base}@{rank}" for base in bases[:2] for rank in range(2)] + [bases[2], bases[2]]
+    calls = []
+
+    async def post(url, payload, **kwargs):
+        calls.append(("POST", url))
+
+    async def get(url, **kwargs):
+        calls.append(("GET", url))
+        return {"server_load": 0}
+
+    monkeypatch.setattr(server_control, "post", post)
+    monkeypatch.setattr(server_control, "get", get)
+    asyncio.run(server_control.abort_servers_until_idle(urls))
+    assert sorted(calls) == sorted(
+        [("POST", f"{base}/abort_requests") for base in bases]
+        + [("GET", f"{base}/load?include_inflight=true&inflight_limit=100") for base in bases]
+    )
+
+
+@pytest.mark.parametrize("suffix", ["", "@0", "@+1", "@01"])
+def test_abort_dp_worker_uses_ipv6_base_endpoint(monkeypatch, suffix):
+    calls = []
+    base_url = "http://[::1]:8000"
+
+    async def post(url, payload, **kwargs):
+        calls.append(url)
+
+    async def get(url, **kwargs):
+        calls.append(url)
+        return {"server_load": 0}
+
+    monkeypatch.setattr(server_control, "post", post)
+    monkeypatch.setattr(server_control, "get", get)
+    asyncio.run(server_control.abort_server_until_idle(base_url + suffix))
+    assert calls == [f"{base_url}/abort_requests", f"{base_url}/load?include_inflight=true&inflight_limit=100"]
 
 
 @pytest.mark.parametrize("shutdown_fails", [False, True])
