@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import logging
 import random
 import sys
@@ -35,6 +36,29 @@ def test_frontend_defaults_are_resolved_by_the_server(args_mod, monkeypatch, fla
     parser = argparse.ArgumentParser()
     args_mod.add_vllm_arguments(parser)
     assert parser.parse_args(flags).vllm_log_error_stack is expected
+
+
+@requires_vllm
+@pytest.mark.parametrize(
+    ("flags", "timeout", "abort"),
+    [
+        ([], 300, True),
+        (["--vllm-watchdog-config", '{"timeout":3600,"abort_on_timeout":true}'], 3600, True),
+        (["--vllm-watchdog-config", '{"abort_on_timeout":false}'], 300, False),
+        (["--vllm-watchdog-config", '{"timeout":3600}'], 3600, False),
+    ],
+)
+def test_watchdog_defaults_and_explicit_native_config(args_mod, monkeypatch, flags, timeout, abort):
+    from vllm.config import WatchdogConfig
+    from vime.backends.vllm_utils.runtime import _json_default
+
+    _patch_device_config(monkeypatch)
+    parser = argparse.ArgumentParser()
+    args_mod.add_vllm_arguments(parser)
+    wire = json.loads(json.dumps(parser.parse_args(flags).vllm_watchdog_config, default=_json_default))
+    config = WatchdogConfig(**wire)
+    assert config.timeout == timeout
+    assert config.abort_on_timeout is abort
 
 
 def test_python_executable_is_a_launcher_option(args_mod, monkeypatch):

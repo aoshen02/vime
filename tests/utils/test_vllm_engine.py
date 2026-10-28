@@ -180,6 +180,71 @@ def test_compute_server_args_preserves_non_topology_vllm_flags(vllm_args, monkey
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("method", ["mtp", "eagle", "eagle3", "draft_model", "ngram", "ngram_gpu", "dflash", "dspark"])
+@pytest.mark.parametrize("dp", [1, 2])
+@pytest.mark.parametrize("prefix_caching", [True, False])
+def test_compute_server_args_spec_request_default_is_per_domain(vllm_args, method, dp, prefix_caching):
+    server_args, checks = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        num_gpus_per_engine=dp,
+        vllm_overrides={
+            "data_parallel_size": dp,
+            "enable_prefix_caching": prefix_caching,
+            "speculative_config": {"method": method, "num_speculative_tokens": 3},
+        },
+    )
+    assert server_args["max_num_seqs"] == 48
+    assert "max_num_seqs" in checks
+    assert "mamba_fixed_requests" not in server_args
+    assert "mamba_full_memory_ratio" not in server_args
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("limit", [None, 0, 12])
+def test_compute_server_args_spec_request_override_is_not_reinterpreted(vllm_args, limit):
+    server_args, checks = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        vllm_overrides={
+            "max_num_seqs": limit,
+            "speculative_config": {"method": "mtp", "num_speculative_tokens": 3},
+        },
+    )
+    assert server_args["max_num_seqs"] == limit
+    assert "max_num_seqs" not in checks
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "speculative",
+    [
+        None,
+        {},
+        {"method": "extract_hidden_states", "num_speculative_tokens": 3},
+        {"method": "mtp", "num_speculative_tokens": 0},
+        {"method": "mtp", "num_speculative_tokens": True},
+    ],
+)
+def test_compute_server_args_does_not_invent_a_speculative_request_limit(vllm_args, speculative):
+    server_args, _ = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        vllm_overrides={"speculative_config": speculative},
+    )
+    assert "max_num_seqs" not in server_args
+
+
+@pytest.mark.unit
 def test_compute_server_args_ignores_unrecognized_vllm_attrs(vllm_args, monkeypatch):
     monkeypatch.setattr(mod, "_VLLM_SERVER_FIELDS", frozenset({"server_concurrency"}))
     vllm_args.vllm_nonexistent_flag = "keep-out"

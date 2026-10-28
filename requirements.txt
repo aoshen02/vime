@@ -19,7 +19,7 @@ pyyaml
 qwen_vl_utils # for VLM
 ray[default]
 safetensors
-straw-queue>=0.1.3
+straw-queue>=0.1.5
 sunabako>=0.1.2
 tensorboard
 transformers

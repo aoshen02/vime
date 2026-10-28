@@ -6,11 +6,115 @@ from urllib.parse import quote
 
 import httpx
 import pytest
+import requests
 
 from vime.backends.vllm_utils import server_control
 from vime.utils import http_utils
 
 NUM_GPUS = 0
+
+
+def _router_response(status_code, payload):
+    response = requests.Response()
+    response.status_code = status_code
+    response._content = json.dumps(payload).encode()
+    response.url = "http://router/workers"
+    return response
+
+
+def _fake_router(monkeypatch, *, post_status, post_body, workers):
+    calls = []
+
+    def fake_post(url, json):
+        calls.append(("POST", url, json))
+        return _router_response(post_status, post_body)
+
+    def fake_get(url, timeout):
+        calls.append(("GET", url))
+        return _router_response(200, {"workers": workers})
+
+    monkeypatch.setattr(server_control.requests, "post", fake_post)
+    monkeypatch.setattr(server_control.requests, "get", fake_get)
+    return calls
+
+
+EXISTS = {"error": "Worker already exists at URL 'http://e:1'", "code": "WORKER_ALREADY_EXISTS"}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status", [200, 202])
+def test_register_worker_posts_the_payload(monkeypatch, status):
+    calls = _fake_router(monkeypatch, post_status=status, post_body={"worker_id": "w1"}, workers=[])
+
+    server_control.register_worker("http://router", {"url": "http://e:1", "worker_type": "regular"})
+
+    assert calls == [("POST", "http://router/workers", {"url": "http://e:1", "worker_type": "regular"})]
+
+
+@pytest.mark.unit
+def test_register_worker_keeps_the_registration_an_earlier_run_left(monkeypatch):
+    # A router whose POST /workers is create-only (409 WORKER_ALREADY_EXISTS)
+    # still holds an external engine registered by the previous run.
+    payload = {"url": "http://e:1", "worker_type": "prefill", "bootstrap_port": 8998}
+    calls = _fake_router(
+        monkeypatch,
+        post_status=409,
+        post_body=EXISTS,
+        workers=[{"id": "w1", "url": "http://e:1", "worker_type": "prefill", "bootstrap_port": 8998, "priority": 50}],
+    )
+
+    server_control.register_worker("http://router", payload)
+
+    assert [call[0] for call in calls] == ["POST", "GET"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "existing",
+    [
+        {"id": "w1", "url": "http://e:1", "worker_type": "decode"},
+        {"id": "w1", "url": "http://e:1", "worker_type": "prefill", "bootstrap_port": 9000},
+        {"id": "w1", "url": "http://e:1", "worker_type": "prefill"},
+    ],
+)
+def test_register_worker_refuses_a_registration_that_differs(monkeypatch, existing):
+    _fake_router(monkeypatch, post_status=409, post_body=EXISTS, workers=[existing])
+
+    with pytest.raises(requests.HTTPError):
+        server_control.register_worker(
+            "http://router", {"url": "http://e:1", "worker_type": "prefill", "bootstrap_port": 8998}
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "status, body",
+    [(409, {"error": "in progress", "code": "WORKER_CREATE_IN_PROGRESS"}), (409, {}), (500, EXISTS)],
+)
+def test_register_worker_raises_any_other_refusal(monkeypatch, status, body):
+    _fake_router(
+        monkeypatch,
+        post_status=status,
+        post_body=body,
+        workers=[{"id": "w1", "url": "http://e:1", "worker_type": "regular"}],
+    )
+
+    with pytest.raises(requests.HTTPError):
+        server_control.register_worker("http://router", {"url": "http://e:1", "worker_type": "regular"})
+
+
+@pytest.mark.parametrize("conflicting_rank", [None, 1])
+def test_register_worker_checks_every_native_dp_slot(monkeypatch, conflicting_rank):
+    workers = [{"url": f"http://e:1@{rank}", "worker_type": "prefill", "bootstrap_port": 8998} for rank in range(2)]
+    if conflicting_rank is not None:
+        workers[conflicting_rank]["bootstrap_port"] = 9000
+    _fake_router(monkeypatch, post_status=409, post_body=EXISTS, workers=workers)
+    payload = {"url": "http://e:1", "worker_type": "prefill", "bootstrap_port": 8998}
+    if conflicting_rank is None:
+        server_control.register_worker("http://router", payload)
+    else:
+        with pytest.raises(requests.HTTPError):
+            server_control.register_worker("http://router", payload)
 
 
 @pytest.mark.parametrize("worker_type", ["prefill", "decode"])

@@ -17,6 +17,36 @@ DEFAULT_ABORT_TIMEOUT_SECONDS = 180.0
 DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 10.0
 
 
+def register_worker(router_url: str, payload: dict[str, Any]) -> None:
+    """Register a worker with the router, keeping a matching registration it already holds.
+
+    An external engine outlives the run that registered it, and a run that ends
+    uncleanly leaves its registrations behind. A router whose POST /workers is
+    create-only answers the next run's POST with 409 WORKER_ALREADY_EXISTS; the
+    registration it holds is kept when it matches this payload.
+    """
+    response = requests.post(f"{router_url}/workers", json=payload)
+    if response.status_code == 409 and _holds_registration(router_url, payload, response):
+        logger.info(f"Router {router_url} already has worker {payload['url']} registered; keeping it.")
+        return
+    response.raise_for_status()
+
+
+def _holds_registration(router_url: str, payload: dict[str, Any], conflict: requests.Response) -> bool:
+    try:
+        code = conflict.json().get("code")
+    except ValueError:
+        return False
+    if code != "WORKER_ALREADY_EXISTS":
+        return False
+    response = requests.get(f"{router_url}/workers", timeout=DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    workers = [worker for worker in response.json()["workers"] if _worker_base_url(worker["url"]) == payload["url"]]
+    return bool(workers) and all(
+        all(worker.get(key) == value for key, value in payload.items() if key != "url") for worker in workers
+    )
+
+
 def _worker_base_url(worker_url: str) -> str:
     """Resolve native router @usize identities without rewriting malformed suffixes."""
     parts = worker_url.split("@")

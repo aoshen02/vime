@@ -21,7 +21,7 @@ from vime.backends.vllm_utils.runtime import (
     prepare_server_environment,
     terminate_server_process,
 )
-from vime.backends.vllm_utils.server_control import unregister_worker
+from vime.backends.vllm_utils.server_control import register_worker, unregister_worker
 from vime.ray.ray_actor import RayActor
 from vime.utils.http_utils import _wrap_ipv6, get_host_info
 from vime.utils.model_config import vllm_model_config_overrides
@@ -278,11 +278,7 @@ class VLLMEngine(RayActor):
                         f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; cannot register it to the PD router."
                     )
                 payload["bootstrap_port"] = bootstrap_port
-            response = requests.post(
-                f"http://{self.router_ip}:{self.router_port}/workers",
-                json=payload,
-            )
-            response.raise_for_status()
+            register_worker(f"http://{self.router_ip}:{self.router_port}", payload)
 
     def _make_request(self, endpoint: str, payload: dict | None = None, *, timeout=None):
         """Make a POST request to the specified endpoint with the given payload.
@@ -837,6 +833,19 @@ def _compute_server_args(
             kwargs[key] = value
         if "model_path" in vllm_overrides:
             kwargs["model"] = str(vllm_overrides["model_path"])
+
+    speculative = kwargs.get("speculative_config")
+    draft_tokens = speculative.get("num_speculative_tokens") if isinstance(speculative, dict) else None
+    if (
+        "max_num_seqs" not in kwargs
+        and isinstance(speculative, dict)
+        and speculative.get("method")
+        in {"mtp", "eagle", "eagle3", "draft_model", "ngram", "ngram_gpu", "dflash", "dspark"}
+        and type(draft_tokens) is int
+        and draft_tokens > 0
+    ):
+        kwargs["max_num_seqs"] = 48
+        external_engine_need_check_fields.append("max_num_seqs")
 
     if getattr(args, "use_score_centering", False):
         if kwargs["logprobs_mode"] != "processed_logprobs":

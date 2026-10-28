@@ -110,6 +110,7 @@ def add_vllm_arguments(parser):
     parser.add_argument = _wrap_add_argument(old_add_argument)
     parser.add_argument_group = patched_add_argument_group
     AsyncEngineArgs.add_cli_args(parser)
+    parser.set_defaults(vllm_watchdog_config={"abort_on_timeout": True})
     from vllm.entrypoints.common.cli_args import FrontendArgs
 
     FrontendArgs.add_cli_args(parser)

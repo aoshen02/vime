@@ -134,7 +134,7 @@ vllm:
           data_parallel_size: 64
           enable_expert_parallel: true
           max_num_batched_tokens: 131072
-          max_num_seqs: 512
+          max_num_seqs: 8
           all2all_backend: deepep_high_throughput
           kv_transfer_config:
             kv_connector: MooncakeConnector
@@ -148,7 +148,7 @@ vllm:
           async_scheduling: false
           data_parallel_size: 64
           enable_expert_parallel: true
-          max_num_seqs: 768
+          max_num_seqs: 12
           max_cudagraph_capture_size: 60
           all2all_backend: deepep_low_latency
           moe_backend: deep_gemm
@@ -168,6 +168,7 @@ VLLM_ARGS=(
    --vllm-attention-backend FLASHMLA_SPARSE
    --vllm-max-cudagraph-capture-size 40
    --vllm-config "${VLLM_CONFIG_FILE}"
+   --vllm-watchdog-config '{"timeout":3600,"abort_on_timeout":true}'
 
    # MTP / EAGLE speculative decoding uses the model's own next-token-prediction layer.
    --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'

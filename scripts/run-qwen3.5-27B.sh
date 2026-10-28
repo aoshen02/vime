@@ -136,7 +136,7 @@ WANDB_ARGS=(
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 2
    --vllm-gpu-memory-utilization 0.75
-   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
+   --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
 )
 
 MISC_ARGS=(

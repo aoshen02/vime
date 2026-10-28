@@ -10,6 +10,7 @@ COPY docker/patch/${PATCH_VERSION}/vllm-rust-multimodal.patch /tmp/vllm-rust-mul
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-server-info.patch /tmp/vllm-rust-server-info.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-mm-embeds.patch /tmp/vllm-rust-mm-embeds.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-rust-auth.patch /tmp/vllm-rust-auth.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-rust-simplecpu-metrics.patch /tmp/vllm-rust-simplecpu-metrics.patch
 RUN git init /build && cd /build && \
     git remote add origin https://github.com/vllm-project/vllm.git && \
     git fetch --depth 1 origin ${VLLM_COMMIT} && git checkout FETCH_HEAD && \
@@ -18,7 +19,8 @@ RUN git init /build && cd /build && \
     git apply /tmp/vllm-rust-multimodal.patch && \
     git apply --include='rust/*' /tmp/vllm-rust-server-info.patch && \
     git apply /tmp/vllm-rust-mm-embeds.patch && \
-    git apply /tmp/vllm-rust-auth.patch
+    git apply /tmp/vllm-rust-auth.patch && \
+    git apply /tmp/vllm-rust-simplecpu-metrics.patch
 RUN cd /build && VLLM_RS_BUILD_VERSION=${VLLM_RS_BUILD_VERSION} \
     cargo build --locked --release --manifest-path rust/Cargo.toml \
     -p vllm-cmd --bin vllm-rs --features native-tls-vendored
@@ -45,12 +47,14 @@ ARG PATCH_VERSION=latest
 ARG VLLM_ROUTER_COMMIT=1fbcde7443d75b36befb61bc081f64c2a1f13a4b
 COPY docker/patch/${PATCH_VERSION}/router-health-check.patch /tmp/router-health-check.patch
 COPY docker/patch/${PATCH_VERSION}/router-pd-registration.patch /tmp/router-pd-registration.patch
+COPY docker/patch/${PATCH_VERSION}/router-worker-registration.patch /tmp/router-worker-registration.patch
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake pkg-config libssl-dev && \
     uv pip install --system setuptools-rust wheel && \
     git init /router && cd /router && git remote add origin https://github.com/vllm-project/router.git && \
     git fetch --depth 1 origin ${VLLM_ROUTER_COMMIT} && git checkout FETCH_HEAD && \
     git apply /tmp/router-health-check.patch && \
     git apply /tmp/router-pd-registration.patch && \
+    git apply /tmp/router-worker-registration.patch && \
     uv build --python /usr/bin/python3 --wheel --no-build-isolation --out-dir /wheels
 
 FROM ${BASE_IMAGE}
@@ -70,7 +74,7 @@ ARG TRANSFORMER_ENGINE_CUDA_ARCHS=90;100a;103a
 ARG TMS_COMMIT=bdab8c55f490a00a746ec34e301391617f5ca878
 ARG TMS_CUDA_MAJOR=
 ARG NCCL_VERSION=2.30.7
-ARG MOONCAKE_VERSION=0.3.11.post1
+ARG MOONCAKE_VERSION=0.3.12
 ARG MAX_JOBS=16
 ENV MAX_JOBS=${MAX_JOBS} CMAKE_BUILD_PARALLEL_LEVEL=${MAX_JOBS}
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH}
@@ -245,6 +249,8 @@ COPY docker/patch/${PATCH_VERSION}/vllm-deepep-optional-shrink.patch /tmp/vllm-d
 COPY docker/patch/${PATCH_VERSION}/vllm-glm5next-unbounded-gate.patch /tmp/vllm-glm5next-unbounded-gate.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-utility-rpc-cleanup.patch /tmp/vllm-utility-rpc-cleanup.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-tito-columnar-logprobs-render.patch /tmp/vllm-tito-columnar-logprobs-render.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-watchdog-fatal-action.patch /tmp/vllm-watchdog-fatal-action.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-hybrid-cache-capacity.patch /tmp/vllm-hybrid-cache-capacity.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
@@ -264,6 +270,8 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-glm5next-unbounded-gate.patch && \
     git apply -v /tmp/vllm-utility-rpc-cleanup.patch && \
     git apply -v /tmp/vllm-tito-columnar-logprobs-render.patch && \
+    git apply -v /tmp/vllm-watchdog-fatal-action.patch && \
+    git apply -v --include='vllm/*' /tmp/vllm-hybrid-cache-capacity.patch && \
     rm /tmp/vllm-pull_weights.patch \
        /tmp/vllm-score-centering.patch \
        /tmp/vllm-pd-request-metrics.patch \
@@ -280,7 +288,9 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
        /tmp/vllm-deepep-optional-shrink.patch \
        /tmp/vllm-glm5next-unbounded-gate.patch \
        /tmp/vllm-utility-rpc-cleanup.patch \
-       /tmp/vllm-tito-columnar-logprobs-render.patch
+       /tmp/vllm-tito-columnar-logprobs-render.patch \
+       /tmp/vllm-watchdog-fatal-action.patch \
+       /tmp/vllm-hybrid-cache-capacity.patch
 
 # ====================================== Install main package ============================================
 COPY --from=vllm-rust-frontend /build/rust/target/release/vllm-rs /usr/local/lib/python3.12/dist-packages/vllm/vllm-rs
