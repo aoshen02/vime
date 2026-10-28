@@ -124,9 +124,9 @@ def execute():
         "--vllm-data-parallel-size 4 "
         "--vllm-enable-expert-parallel "
         "--vllm-gpu-memory-utilization 0.45 "
-        "--vllm-max-num-seqs 16 "
-        "--vllm-max-cudagraph-capture-size 40 "
-        '--vllm-speculative-config \'{"method":"mtp","num_speculative_tokens":4}\' '
+        "--vllm-max-num-seqs 4 "
+        "--vllm-max-cudagraph-capture-size 32 "
+        '--vllm-speculative-config \'{"method":"mtp","num_speculative_tokens":3}\' '
         "--router-request-timeout-secs 1200 "
         '--vllm-watchdog-config \'{"timeout":1200,"abort_on_timeout":true}\' '
         "--router-kv-connector mooncake "
