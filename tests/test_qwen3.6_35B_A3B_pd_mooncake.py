@@ -98,9 +98,10 @@ def execute():
         "--vllm-gpu-memory-utilization 0.75 "
         "--vllm-data-parallel-size 4 "
         "--vllm-enable-expert-parallel "
-        "--vllm-max-num-seqs 512 "
-        "--vllm-cudagraph-capture-sizes 5 10 20 40 80 "
-        '--vllm-speculative-config \'{"method":"mtp","num_speculative_tokens":4}\' '
+        "--vllm-max-num-seqs 128 "
+        "--vllm-cudagraph-capture-sizes 4 8 16 32 64 "
+        '--vllm-speculative-config \'{"method":"mtp","num_speculative_tokens":3}\' '
+        "--vllm-mamba-full-memory-ratio 0.9 "
     )
 
     misc_args = (

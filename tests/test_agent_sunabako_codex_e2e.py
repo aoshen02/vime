@@ -338,6 +338,7 @@ def execute(run_dir, checkpoint):
         --vllm-max-num-seqs 8 --vllm-max-cudagraph-capture-size 32
         --vllm-tool-call-parser qwen3_coder --vllm-reasoning-parser qwen3
         --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+        --vllm-mamba-full-memory-ratio 0.9
         --attention-dropout 0 --hidden-dropout 0 --accumulate-allreduce-grads-in-fp32
         --attention-softmax-in-fp32 --attention-backend flash
     """
