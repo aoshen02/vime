@@ -205,6 +205,29 @@ def test_compute_server_args_spec_request_default_is_per_domain(vllm_args, metho
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("explicit_limit", [None, 12, 48])
+def test_compute_server_args_spec_default_with_dp_ep(vllm_args, explicit_limit):
+    overrides = {
+        "data_parallel_size": 2,
+        "enable_expert_parallel": True,
+        "speculative_config": {"method": "eagle3", "num_speculative_tokens": 3},
+    }
+    if explicit_limit is not None:
+        overrides["max_num_seqs"] = explicit_limit
+    server_args, checks = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        num_gpus_per_engine=4,
+        vllm_overrides=overrides,
+    )
+    assert server_args["max_num_seqs"] == (24 if explicit_limit is None else explicit_limit)
+    assert ("max_num_seqs" in checks) == (explicit_limit is None)
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("limit", [None, 0, 12])
 def test_compute_server_args_spec_request_override_is_not_reinterpreted(vllm_args, limit):
     server_args, checks = mod._compute_server_args(
@@ -288,6 +311,7 @@ def test_distributed_flags_only_when_multi_node(vllm_args):
 
 @pytest.mark.unit
 def test_compute_server_args_applies_worker_type_and_bootstrap_port(vllm_args):
+    vllm_args.rollout_external = False
     sa_prefill, _ = mod._compute_server_args(
         vllm_args,
         rank=0,
@@ -386,7 +410,9 @@ def test_external_attach_rejects_changed_declared_mode(vllm_engine, monkeypatch,
 
 
 @pytest.mark.unit
-def test_compute_server_args_prefill_requires_bootstrap_port(vllm_args):
+@pytest.mark.parametrize("external", [False, True])
+def test_compute_server_args_prefill_requires_bootstrap_port(vllm_args, external):
+    vllm_args.rollout_external = external
     with pytest.raises(AssertionError, match="disaggregation_bootstrap_port"):
         mod._compute_server_args(
             vllm_args,
@@ -396,6 +422,48 @@ def test_compute_server_args_prefill_requires_bootstrap_port(vllm_args):
             port=8000,
             worker_type="prefill",
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("worker_type, role", [("prefill", "kv_producer"), ("decode", "kv_consumer")])
+def test_external_attach_only_checks_explicit_kv_config(vllm_args, vllm_engine, monkeypatch, worker_type, role):
+    from vime.backends.vllm_utils.external import _normalize_server_info
+
+    monkeypatch.setattr(mod, "_VLLM_SERVER_FIELDS", frozenset({"kv_transfer_config"}))
+    vllm_engine.worker_type = worker_type
+    expected, checks = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        worker_type=worker_type,
+        disaggregation_bootstrap_port=12345,
+    )
+    assert "kv_transfer_config" not in expected
+    assert "kv_transfer_config" not in checks
+    config = {"kv_connector": "MooncakeConnector", "kv_role": role, "engine_id": "external-id"}
+    actual = _normalize_server_info({**expected, "kv_transfer_config": config})
+    monkeypatch.setattr(mod, "get_server_info", lambda url: actual)
+    register = Mock()
+    monkeypatch.setattr(vllm_engine, "_register_to_router", register)
+    vllm_engine._init_external(expected, checks)
+    register.assert_called_once_with(actual)
+    register.reset_mock()
+    vllm_args.vllm_kv_transfer_config = {**config, "engine_id": "requested-id"}
+    expected, checks = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        worker_type=worker_type,
+        disaggregation_bootstrap_port=12345,
+    )
+    assert "kv_transfer_config" in checks
+    with pytest.raises(AssertionError, match="kv_transfer_config"):
+        vllm_engine._init_external(expected, checks)
+    register.assert_not_called()
 
 
 @pytest.mark.unit

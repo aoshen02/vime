@@ -88,7 +88,7 @@ def test_discover_external_engines_reads_server_info(monkeypatch):
 def test_discover_external_native_ec_roles(monkeypatch, nested, ec_connector, ec_role, kv_role, expected):
     config = {
         "ec_transfer_config": {"ec_connector": ec_connector, "ec_role": ec_role},
-        "kv_transfer_config": {"kv_role": kv_role},
+        "kv_transfer_config": {"kv_connector": "NixlConnector", "kv_role": kv_role},
         "parallel_config": {"tensor_parallel_size": 1},
     }
     payload = {"vllm_config": config} if nested else config
@@ -213,6 +213,36 @@ def test_external_mooncake_bootstrap_port(monkeypatch, multi, address, expected_
     info = discover_external_engines(["host1:10090"])[0]
     assert info.worker_type == "prefill"
     assert info.disaggregation_bootstrap_port == expected_port
+    assert info.server_info["kv_transfer_config"] == config
+
+
+@pytest.mark.parametrize(
+    "connector, role, multi, declared, expected",
+    [
+        ("MooncakeConnector", "kv_producer", True, None, "prefill"),
+        ("NixlConnector", "kv_consumer", True, None, "decode"),
+        ("SimpleCPUOffloadConnector", "kv_producer", False, None, "regular"),
+        ("SimpleCPUOffloadConnector", "kv_consumer", False, None, "regular"),
+        ("CustomConnector", "kv_producer", False, None, "regular"),
+        ("CustomConnector", "kv_consumer", False, None, "regular"),
+        ("MooncakeConnector", "kv_both", False, "prefill", "prefill"),
+        ("NixlConnector", "kv_producer", True, "decode", "decode"),
+    ],
+)
+def test_discovery_uses_known_pd_protocol_or_declared_mode(monkeypatch, connector, role, multi, declared, expected):
+    config = {"kv_connector": connector, "kv_role": role}
+    if multi:
+        config = {
+            "kv_connector": "MultiConnector",
+            "kv_role": "kv_both",
+            "kv_connector_extra_config": {
+                "connectors": [config, {"kv_connector": "SimpleCPUOffloadConnector", "kv_role": "kv_both"}]
+            },
+        }
+    payload = {"vllm_config": {"kv_transfer_config": config}, "disaggregation_mode": declared}
+    monkeypatch.setattr("vime.backends.vllm_utils.external.requests.get", lambda *args, **kwargs: _Response(payload))
+    info = discover_external_engines(["host1:10090"])[0]
+    assert info.worker_type == expected
     assert info.server_info["kv_transfer_config"] == config
 
 

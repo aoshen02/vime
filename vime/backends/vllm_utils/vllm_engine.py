@@ -765,11 +765,12 @@ def _compute_server_args(
         assert (
             disaggregation_bootstrap_port is not None
         ), "disaggregation_bootstrap_port must be set for prefill worker"
-        kwargs["kv_transfer_config"] = {
-            "kv_connector": "NixlConnector",
-            "kv_role": "kv_producer",
-        }
-    elif worker_type == "decode":
+        if not args.rollout_external:
+            kwargs["kv_transfer_config"] = {
+                "kv_connector": "NixlConnector",
+                "kv_role": "kv_producer",
+            }
+    elif worker_type == "decode" and not args.rollout_external:
         kwargs["kv_transfer_config"] = {
             "kv_connector": "NixlConnector",
             "kv_role": "kv_consumer",
@@ -833,6 +834,8 @@ def _compute_server_args(
         if value is None:
             continue
         kwargs[field_name] = value
+        if args.rollout_external and field_name == "kv_transfer_config":
+            external_engine_need_check_fields.append(field_name)
 
     # Per-server-group overrides from --vllm-config YAML.
     # Applied after base args so they take highest priority.
@@ -856,7 +859,7 @@ def _compute_server_args(
         and type(draft_tokens) is int
         and draft_tokens > 0
     ):
-        kwargs["max_num_seqs"] = 48
+        kwargs["max_num_seqs"] = 48 // dp if kwargs.get("enable_expert_parallel") else 48
         external_engine_need_check_fields.append("max_num_seqs")
 
     if getattr(args, "use_score_centering", False):

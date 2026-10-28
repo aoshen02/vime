@@ -138,12 +138,21 @@ def _normalize_server_info(server_info: dict) -> dict:
         and ec_transfer_config.get("ec_role") == "ec_producer"
     ):
         normalized["encoder_only"] = True
-    if isinstance(kv_transfer_config, dict):
-        role = kv_transfer_config.get("kv_role")
-        if role == "kv_producer":
-            normalized["disaggregation_mode"] = "prefill"
-        elif role == "kv_consumer":
-            normalized["disaggregation_mode"] = "decode"
+    if isinstance(kv_transfer_config, dict) and normalized.get("disaggregation_mode") not in ("prefill", "decode"):
+        connectors = [kv_transfer_config]
+        if kv_transfer_config.get("kv_connector") == "MultiConnector":
+            connectors = kv_transfer_config.get("kv_connector_extra_config", {}).get("connectors", [])
+        pd_connectors = [
+            connector
+            for connector in connectors
+            if connector.get("kv_connector") in ("NixlConnector", "MooncakeConnector")
+        ]
+        if len(pd_connectors) == 1:
+            role = pd_connectors[0].get("kv_role")
+            if role == "kv_producer":
+                normalized["disaggregation_mode"] = "prefill"
+            elif role == "kv_consumer":
+                normalized["disaggregation_mode"] = "decode"
 
     vllm_env = server_info.get("vllm_env")
     if not isinstance(vllm_env, dict):
