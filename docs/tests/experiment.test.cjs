@@ -331,7 +331,8 @@ test('hybrid attention KV and recurrent state export independently to each engin
   const hybrid = E.change(E.change(E.defaults, 'model', 'glm5'), 'model', 'qwen38');
   assert.equal(hybrid.kv, 'auto');
   assert.equal(hybrid.mambaDtype, 'auto');
-  assert.doesNotMatch(shell(hybrid), /--vllm-(kv-cache-dtype|mamba-ssm-cache-dtype|mamba-full-memory-ratio)/);
+  assert.doesNotMatch(shell(hybrid), /--vllm-(kv-cache-dtype|mamba-ssm-cache-dtype)/);
+  assert.match(shell(hybrid), /--vllm-mamba-full-memory-ratio '0.9'/);
   for (const layout of ['colocate', 'separate', 'external']) {
     for (const kv of E.enums.kv) {
       for (const mambaDtype of E.enums.mambaDtype) {
@@ -340,7 +341,7 @@ test('hybrid attention KV and recurrent state export independently to each engin
           layout,
           kv,
           mambaDtype,
-          mambaRatio: '',
+          mambaRatio: '1.5',
           endpoints: 'node:30000',
           transport: layout === 'external' ? 'disk' : 'nccl'
         };
@@ -351,7 +352,7 @@ test('hybrid attention KV and recurrent state export independently to each engin
         assert.equal(file.includes(`${prefix}kv-cache-dtype fp8_e4m3`), kv === 'fp8');
         assert.equal(file.includes(`${prefix}mamba-ssm-cache-dtype`), mambaDtype !== 'auto');
         if (mambaDtype !== 'auto') assert.ok(file.includes(`${prefix}mamba-ssm-cache-dtype ${mambaDtype}`));
-        assert.doesNotMatch(file, /mamba-full-memory-ratio/);
+        assert.ok(file.includes(`${prefix}mamba-full-memory-ratio '1.5'`));
         assert.equal(spawnSync('bash', ['-n'], {
           input: file
         }).status, 0);
@@ -364,10 +365,19 @@ test('hybrid attention KV and recurrent state export independently to each engin
       mambaRatio: ratio
     }).validation.errors.some(e => e.includes('ratio')));
   }
-  assert.ok(E.generate({
-    ...hybrid,
-    mambaRatio: '1.5'
-  }).validation.errors.some(e => e.includes('shared paged cache')));
+  for (const ratio of ['', '0.5']) {
+    for (const layout of ['colocate', 'separate', 'external']) {
+      const generated = E.generate({
+        ...hybrid, layout, mambaRatio: ratio, endpoints: 'node:30000',
+        transport: layout === 'external' ? 'disk' : 'nccl'
+      });
+      assert.deepEqual(generated.validation.errors, []);
+      const file = generated.files[layout === 'external' ? 'serving-reference.sh' : 'experiment.sh'];
+      const prefix = layout === 'external' ? '--' : '--vllm-';
+      assert.ok(file.includes(`${prefix}mamba-full-memory-ratio '${ratio || '0.9'}'`));
+      if (layout === 'external') assert.ok(file.includes('VLLM_USE_V2_MODEL_RUNNER=1'));
+    }
+  }
   assert.equal(E.sanitize({
     ...hybrid,
     mambaDtype: 'fp8'

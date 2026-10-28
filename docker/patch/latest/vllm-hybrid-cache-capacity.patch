@@ -1,8 +1,8 @@
 diff --git a/docs/configuration/conserving_memory.md b/docs/configuration/conserving_memory.md
-index b397283a623..d4d5c8524cb 100644
+index b397283a623..0367206be58 100644
 --- a/docs/configuration/conserving_memory.md
 +++ b/docs/configuration/conserving_memory.md
-@@ -45,6 +45,51 @@ from vllm import LLM
+@@ -45,6 +45,56 @@ from vllm import LLM
  llm = LLM(model="Qwen/Qwen2.5-VL-3B-Instruct", max_model_len=2048, max_num_seqs=2)
  ```
  
@@ -23,10 +23,14 @@ index b397283a623..d4d5c8524cb 100644
 +The Mamba reservation includes native verification pages, state-embedded
 +ReplaySSM/RecoverSSM records and each group's null block. It does not add a
 +second copy of speculative scratch already represented by native pages.
-+Per-worker group-start alignment headroom is reserved before splitting the
-+budget. Counts are rounded down and made common across workers, including
-+pipeline stages with different local layers; the realized ratio can therefore
-+differ from the requested target. All group regions share one allocation.
++Per-request circular-state groups reserve `max_num_seqs + 1` blocks, including
++the null block, independently of token length or prefix caching. Their actual
++local bytes and group-start alignment headroom are reserved before splitting
++the remaining budget. Counts are rounded down and made common across workers,
++including pipeline stages with different local layers; the realized ratio can
++therefore differ from the requested target. All group regions share one allocation.
++With a KV connector, requests awaiting remote KV or delayed release also hold
++ring blocks; this fixed pool can limit admission until those blocks are freed.
 +
 +When prefix caching is disabled and `max_num_seqs` is explicitly supplied,
 +the enabled policy instead reserves each
@@ -38,9 +42,10 @@ index b397283a623..d4d5c8524cb 100644
 +
 +This is a physical cache-budget policy, not a persistent-state slot cap or
 +a request-concurrency setting. It cannot be combined with a shared block-count
-+override, HiSparse host storage, or cache types other than Mamba, full attention
-+and sliding-window attention. The attention groups share the remaining budget;
-+this control does not set a separate sliding-window-to-full-attention ratio.
++override, HiSparse host storage, or cache types other than Mamba, circular state,
++full attention and sliding-window attention. The attention groups share the
++remaining budget; this control does not set a separate sliding-window-to-full
++attention ratio.
 +FlashInfer Mamba2 ReplaySSM cursor tensors live outside
 +the backing:
 +the policy charges 12 bytes per block once per actual local cache namespace,
@@ -358,7 +363,7 @@ index cb52aea7b7e..11bbb003692 100644
      ("graph_mode", "should_raise"),
      [
 diff --git a/tests/v1/core/test_kv_cache_utils.py b/tests/v1/core/test_kv_cache_utils.py
-index 09f365d3823..2a17b2152ee 100644
+index 09f365d3823..d28c85ab09a 100644
 --- a/tests/v1/core/test_kv_cache_utils.py
 +++ b/tests/v1/core/test_kv_cache_utils.py
 @@ -22,7 +22,9 @@ from tests.v1.core.utils import (
@@ -371,7 +376,7 @@ index 09f365d3823..2a17b2152ee 100644
      SchedulerConfig,
      VllmConfig,
  )
-@@ -2190,3 +2192,1169 @@ def test_null_head_len():
+@@ -2190,3 +2192,1314 @@ def test_null_head_len():
          assert null_head_len(table) == expected
      blocks = KVCacheBlocks(([null] * 4 + real, [null] + real[:1] + [null]))
      assert blocks.get_unhashed_block_ids_all_groups() == [[1, 2, 3], [1]]
@@ -1541,6 +1546,151 @@ index 09f365d3823..2a17b2152ee 100644
 +        assert set(views) == set(worker)
 +        for tensor in plan.kv_cache_tensors:
 +            assert views[tensor.layers[0]].shape[0] == plan.num_blocks_of(tensor)
++
++
++@pytest.mark.parametrize("ratio", [0.5, 0.9])
++@pytest.mark.parametrize("max_num_seqs", [2, 4])
++@pytest.mark.parametrize("prefix_caching", [True, False])
++def test_mamba_ratio_reserves_fixed_request_rings(
++    independent_mamba_groups, ratio, max_num_seqs, prefix_caching
++):
++    from vllm.v1.worker.utils import allocate_kv_cache
++
++    attention, state = independent_mamba_groups
++    ring = CircularBufferSpec(
++        block_size=4,
++        num_kv_heads=1,
++        head_size=128,
++        head_size_v=0,
++        dtype=torch.bfloat16,
++    )
++    specs = {
++        "attention": attention.kv_cache_spec,
++        "state": replace(state.kv_cache_spec, block_size=32, mamba_cache_mode="align"),
++        "ring": ring,
++    }
++    budget = 12 * 1024**2
++    config = mamba_ratio_config(
++        ratio,
++        budget,
++        max_num_seqs=max_num_seqs,
++        enable_prefix_caching=prefix_caching,
++    )
++    config.cache_config.kv_cache_layout = "BLHNC"
++    (plan,) = kv_cache_planning.get_kv_cache_configs(config, [specs], [budget])
++    assert plan.group_num_blocks is not None
++    counts = {
++        name: count
++        for group, count in zip(
++            plan.kv_cache_groups, plan.group_num_blocks, strict=True
++        )
++        for name in group.layer_names
++    }
++    ring_bytes = (max_num_seqs + 1) * ring.page_size_bytes
++    small_config = mamba_ratio_config(
++        ratio,
++        ring_bytes - 1,
++        max_num_seqs=max_num_seqs,
++        enable_prefix_caching=prefix_caching,
++    )
++    small_config.cache_config.kv_cache_layout = "BLHNC"
++    with pytest.raises(ValueError, match="fixed per-request rings"):
++        kv_cache_planning.get_kv_cache_configs(small_config, [specs], [ring_bytes - 1])
++    numerator, denominator = ratio.as_integer_ratio()
++    state_count = (
++        (budget - ring_bytes) * numerator // (numerator + denominator) // 32768
++    )
++    if not prefix_caching:
++        state_count = (
++            1 + max_num_seqs * specs["state"].max_memory_usage_bytes(config) // 32768
++        )
++    assert counts == {
++        "ring": max_num_seqs + 1,
++        "state": state_count,
++        "attention": (budget - ring_bytes - state_count * 32768) // 65536,
++    }
++    assert all(tensor.size <= budget for tensor in plan.kv_cache_tensors)
++    views = allocate_kv_cache(plan, torch.device("cpu"), KVCacheLayout.BLHNC)
++    assert views["ring"].shape[0] == max_num_seqs + 1
++    manager = KVCacheManager(
++        generate_scheduler_kv_cache_config([plan]),
++        max_model_len=32,
++        scheduler_block_size=32,
++        hash_block_size=16,
++        enable_caching=prefix_caching,
++    )
++    requests = [
++        make_request(f"ring-{index}", list(range(32)), block_size=16, hash_fn=sha256)
++        for index in range(max_num_seqs + 1)
++    ]
++    for request in requests[:-1]:
++        assert manager.allocate_slots(request, 32) is not None
++    ring_group_id = next(
++        group_id
++        for group_id, group in enumerate(plan.kv_cache_groups)
++        if "ring" in group.layer_names
++    )
++    assert manager.coordinator.block_pools[ring_group_id].get_num_free_blocks() == 0
++    assert manager.allocate_slots(requests[-1], 32) is None
++    manager.free(requests[0])
++    assert manager.allocate_slots(requests[-1], 32) is not None
++    for request in requests[1:]:
++        manager.free(request)
++    assert manager.usage == 0
++
++
++def test_mamba_ratio_request_ring_projection_uses_only_local_memory(
++    independent_mamba_groups,
++):
++    from vllm.v1.worker.utils import allocate_kv_cache
++
++    attention, state = independent_mamba_groups
++    workers = [
++        {
++            "attention": attention.kv_cache_spec,
++            "ring": CircularBufferSpec(
++                block_size=4,
++                num_kv_heads=1,
++                head_size=128,
++                head_size_v=0,
++                dtype=torch.bfloat16,
++            ),
++        },
++        {
++            "state": replace(
++                state.kv_cache_spec, block_size=32, mamba_cache_mode="align"
++            )
++        },
++    ]
++    budgets = [12 * 1024**2, 6 * 1024**2]
++    config = mamba_ratio_config(
++        0.5, budgets[0], max_num_seqs=2, pipeline_parallel_size=2
++    )
++    config.cache_config.kv_cache_layout = "BLHNC"
++    plans = kv_cache_planning.get_kv_cache_configs(config, workers, budgets)
++    assert plans[0].group_num_blocks == plans[1].group_num_blocks
++    assert {
++        name: count
++        for plan in plans
++        for group, count in zip(
++            plan.kv_cache_groups, plan.group_num_blocks, strict=True
++        )
++        for name in group.layer_names
++    } == {
++        "attention": (budgets[0] - 3 * workers[0]["ring"].page_size_bytes) // 65536,
++        "ring": 3,
++        "state": budgets[1] // 3 // 32768,
++    }
++    for worker, plan, budget in zip(workers, plans, budgets, strict=True):
++        views = allocate_kv_cache(plan, torch.device("cpu"), KVCacheLayout.BLHNC)
++        assert set(views) == set(worker)
++        assert all(tensor.size <= budget for tensor in plan.kv_cache_tensors)
++        for group, count in zip(
++            plan.kv_cache_groups, plan.group_num_blocks, strict=True
++        ):
++            if "ring" in group.layer_names:
++                assert count == 3
++                assert views["ring"].shape[0] == 3
 diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
 index 613ba5796bc..9ad8b67ac62 100644
 --- a/tests/v1/core/test_prefix_caching.py
@@ -3964,10 +4114,10 @@ index 7525c93d9f6..c02684de6f0 100644
          profile_prefix,
      )
 diff --git a/vllm/config/cache.py b/vllm/config/cache.py
-index b540b1ec8f1..11786dc7bef 100644
+index b540b1ec8f1..546ee53e297 100644
 --- a/vllm/config/cache.py
 +++ b/vllm/config/cache.py
-@@ -282,6 +282,20 @@ class CacheConfig:
+@@ -282,6 +282,22 @@ class CacheConfig:
      mamba_page_size_padded: int | None = None
      """ Optional override for mamba page size; used by hybrid mamba/attention
      models to ensure exact alignment with attention page size."""
@@ -3975,8 +4125,10 @@ index b540b1ec8f1..11786dc7bef 100644
 +        default=None, gt=0, allow_inf_nan=False
 +    )
 +    """Optional native Mamba-to-attention cache memory ratio. Reserves r/(1+r)
-+    of the available cache budget for Mamba pages, including verification state,
-+    embedded replay records and null blocks. Remaining bytes fund attention.
++    of the remaining cache budget for Mamba pages, including verification state,
++    embedded replay records and null blocks. Circular-state groups first reserve
++    max_num_seqs + 1 blocks independently of the ratio. Remaining bytes fund
++    attention.
 +    Without prefix caching and with an explicit request bound, reserve each
 +    group's per-request native state demand instead of applying the ratio.
 +    Counts are rounded down and synchronized across workers. None preserves
@@ -3988,7 +4140,7 @@ index b540b1ec8f1..11786dc7bef 100644
      skip_page_size_padded: int | None = None
      """Optional override for the page size of layers skipped from KV cache
      quantization (``--kv-cache-dtype-skip-layers``); set during block-size
-@@ -334,6 +348,10 @@ class CacheConfig:
+@@ -334,6 +350,10 @@ class CacheConfig:
  
      simple_cpu_offload_num_blocks: int | None = field(default=None, init=False)
      """Worker-aligned offload block count for ``SimpleCPUOffloadConnector``."""
@@ -3999,7 +4151,7 @@ index b540b1ec8f1..11786dc7bef 100644
  
      # Set after KV cache initialization.
      effective_attention_block_size: int | None = field(default=None, init=False)
-@@ -403,6 +421,8 @@ class CacheConfig:
+@@ -403,6 +423,8 @@ class CacheConfig:
              # Runtime/derived knobs that don't affect compiled graph shape
              "gpu_memory_utilization",
              "kv_cache_memory_bytes",
@@ -4008,7 +4160,7 @@ index b540b1ec8f1..11786dc7bef 100644
              "is_attention_free",
              "num_gpu_blocks_override",
              "enable_prefix_caching",
-@@ -419,6 +439,7 @@ class CacheConfig:
+@@ -419,6 +441,7 @@ class CacheConfig:
              "num_gpu_blocks",
              "num_cpu_blocks",
              "simple_cpu_offload_num_blocks",
@@ -5592,7 +5744,7 @@ index 0ac1c388183..7c8474c6340 100644
      def take_boundary_state_offloads(
          self,
 diff --git a/vllm/v1/core/kv_cache_planning.py b/vllm/v1/core/kv_cache_planning.py
-index 4d73f4303e2..2605c90a2af 100644
+index 4d73f4303e2..2202c4e0420 100644
 --- a/vllm/v1/core/kv_cache_planning.py
 +++ b/vllm/v1/core/kv_cache_planning.py
 @@ -621,7 +621,7 @@ def validate_kv_cache_layout(
@@ -5741,7 +5893,7 @@ index 4d73f4303e2..2605c90a2af 100644
      if is_kv_cache_spec_uniform(kv_cache_spec):
          # KV cache of all layers are the same, which is true for
          # most models. Allocate the same amount of memory for
-@@ -1410,6 +1459,213 @@ def _auto_fit_max_model_len(
+@@ -1410,6 +1459,228 @@ def _auto_fit_max_model_len(
          )
  
  
@@ -5762,11 +5914,16 @@ index 4d73f4303e2..2605c90a2af 100644
 +    if vllm_config.attention_config.hisparse_config is not None:
 +        raise ValueError("Mamba ratio planning does not support HiSparse host storage")
 +    mamba_groups: list[bool] = []
++    ring_counts: list[int] = []
 +    for group in global_groups:
 +        specs = list(iter_layer_specs(group.kv_cache_spec))
 +        is_mamba = bool(specs) and all(isinstance(spec, MambaSpec) for spec in specs)
++        is_ring = bool(specs) and all(
++            isinstance(spec, CircularBufferSpec) for spec in specs
++        )
 +        if group.host_resident or not (
 +            is_mamba
++            or is_ring
 +            or (
 +                specs
 +                and all(
@@ -5776,11 +5933,14 @@ index 4d73f4303e2..2605c90a2af 100644
 +            )
 +        ):
 +            raise ValueError(
-+                "Mamba ratio planning supports Mamba, full-attention and "
-+                "sliding-window groups; "
++                "Mamba ratio planning supports Mamba, circular-state, "
++                "full-attention and sliding-window groups; "
 +                "other cache types need an explicit budget policy"
 +            )
 +        mamba_groups.append(is_mamba)
++        ring_counts.append(
++            vllm_config.scheduler_config.max_num_seqs + 1 if is_ring else 0
++        )
 +    assert any(mamba_groups)
 +    layout = cache_config.get_resolved_kv_cache_layout()
 +    fixed_counts = (
@@ -5824,7 +5984,9 @@ index 4d73f4303e2..2605c90a2af 100644
 +                group.replayssm_tracker_bytes_per_block
 +                * vllm_config.scheduler_config.max_num_seqs
 +            )
-+            if is_mamba:
++            if ring_counts[group_id]:
++                initialization_reserve += stride * ring_counts[group_id]
++            elif is_mamba:
 +                mamba_stride += stride
 +                if fixed_counts is not None:
 +                    fixed_mamba_bytes += stride * fixed_counts[group_id]
@@ -5832,7 +5994,8 @@ index 4d73f4303e2..2605c90a2af 100644
 +                attention_stride += stride
 +        if budget < initialization_reserve:
 +            raise ValueError(
-+                "Cache budget cannot hold alignment and cursor-rebinding reservations"
++                "Cache budget cannot hold alignment and cursor-rebinding "
++                "reservations and fixed per-request rings"
 +            )
 +        worker_costs.append(
 +            (
@@ -5875,9 +6038,13 @@ index 4d73f4303e2..2605c90a2af 100644
 +        default=0,
 +    )
 +    counts = tuple(
-+        (fixed_counts[group_id] if fixed_counts is not None else mamba_count)
-+        if is_mamba
-+        else attention_count
++        ring_counts[group_id]
++        if ring_counts[group_id]
++        else (
++            (fixed_counts[group_id] if fixed_counts is not None else mamba_count)
++            if is_mamba
++            else attention_count
++        )
 +        for group_id, is_mamba in enumerate(mamba_groups)
 +    )
 +    if min(counts) < 2:
@@ -5955,7 +6122,7 @@ index 4d73f4303e2..2605c90a2af 100644
  def _project_kv_cache_groups_to_worker(
      global_kv_cache_groups: list[KVCacheGroupSpec],
      worker_spec: dict[str, KVCacheSpec],
-@@ -1495,7 +1751,6 @@ def get_kv_cache_configs(
+@@ -1495,7 +1766,6 @@ def get_kv_cache_configs(
      from vllm.v1.core.kv_cache_config_builder import get_kv_cache_config_builder
  
      builder = get_kv_cache_config_builder(vllm_config)
@@ -5963,7 +6130,7 @@ index 4d73f4303e2..2605c90a2af 100644
      # Merge the KV cache specs of all workers. Different PP stages may have
      # different layer names, and different TP ranks of the same PP stage should
      # have the same KV cache spec.
-@@ -1510,6 +1765,17 @@ def get_kv_cache_configs(
+@@ -1510,6 +1780,17 @@ def get_kv_cache_configs(
                      "across workers. This is not supported yet."
                  )
  
@@ -5981,7 +6148,7 @@ index 4d73f4303e2..2605c90a2af 100644
      # Check if the KV cache specs are registered correctly.
      # This is to prevent that some layers are initialized with unregistered specs.
      KVCacheSpecRegistry.check_kv_cache_spec_registry(merged_kv_cache_specs)
-@@ -1546,6 +1812,15 @@ def get_kv_cache_configs(
+@@ -1546,6 +1827,15 @@ def get_kv_cache_configs(
          for worker_spec in kv_cache_specs
      ]
  
@@ -5997,7 +6164,7 @@ index 4d73f4303e2..2605c90a2af 100644
      # If `num_gpu_blocks_override` is set, the cache size that will actually
      # be allocated is decoupled from the profiled `available_memory`. Reflect
      # that in `available_memory` here so auto-fit, the admission check, and
-@@ -1687,7 +1962,10 @@ class DefaultKVCacheConfigBuilder(KVCacheConfigBuilder):
+@@ -1687,7 +1977,10 @@ class DefaultKVCacheConfigBuilder(KVCacheConfigBuilder):
          num_blocks: int,
      ) -> KVCacheConfig:
          """See ``KVCacheConfigBuilder.get_kv_cache_config_from_groups``."""
@@ -6009,7 +6176,7 @@ index 4d73f4303e2..2605c90a2af 100644
              # Attention free models do not have KV cache.
              # Return num_blocks=1 as BlockPool always needs a null_block.
              return KVCacheConfig(
-@@ -1698,7 +1976,40 @@ class DefaultKVCacheConfigBuilder(KVCacheConfigBuilder):
+@@ -1698,7 +1991,40 @@ class DefaultKVCacheConfigBuilder(KVCacheConfigBuilder):
                      vllm_config.cache_config.prefix_cache_retention_interval
                  ),
              )

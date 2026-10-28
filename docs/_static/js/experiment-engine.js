@@ -388,16 +388,13 @@
       'Qwen3.8-27B 使用 qwen3_5 架构，尺寸匹配现有 27B 配置。此文本 RL 配方复用该后端，checkpoint 仍需 GPU 验证。'));
     if (m.hybrid) {
       notes.push(t(
-        'Hybrid cache contains attention KV and recurrent state managed by a shared paged cache. KV dtype applies only to attention layers; Mamba SSM dtype controls recurrent state separately. Check backend support and log-prob accuracy for each change.',
-        'Hybrid cache 的 attention KV 和递归状态由共享分页缓存管理。KV dtype 只作用于 attention 层；Mamba SSM dtype 单独控制递归状态精度。每项调整都需核对后端支持与 log-prob 精度。'
+        'Hybrid cache has attention KV and recurrent state budgets. KV dtype applies only to attention layers. Mamba SSM dtype and its memory ratio are independent; convolution state is separate again. Check backend support and log-prob accuracy for each change.',
+        'Hybrid cache 包含 attention KV 和递归状态预算。KV dtype 只作用于 attention 层；Mamba SSM 精度与内存比例独立，卷积状态又是另一部分。每项调整都需核对后端支持与 log-prob 精度。'
         ));
       if (s.mambaRatio && (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(s.mambaRatio) ||
           !Number.isFinite(Number(s.mambaRatio)) || Number(s.mambaRatio) <= 0)) errors.push(t(
-        'Mamba / attention KV memory ratio must be a positive number, or left blank for the serving default.',
-        'Mamba / attention KV 内存比例须为正数，或留空沿用推理栈默认值。'));
-      else if (s.mambaRatio) errors.push(t(
-        'vLLM uses a shared paged cache rather than independently sized Mamba and attention pools. Clear the imported pool-split ratio; use the total GPU cache budget.',
-        'vLLM 使用共享分页缓存，而非独立定容的 Mamba 与 attention 池。请清除导入的分池比例，使用总 GPU 缓存预算。'));
+        'Mamba / attention KV memory ratio must be a positive number, or left blank for the default ratio of 0.9.',
+        'Mamba / attention KV 内存比例须为正数，或留空使用默认比例 0.9。'));
     }
     if (s.sc) notes.push(t(
       'SC selects REINFORCE with GRPO advantages and no standard-deviation normalization. Sampling is fixed to temperature=1, top_p=1, top_k=-1, without penalties, constraints, or streaming.',
@@ -453,6 +450,7 @@
     if (m.moe) args.push('--vllm-enable-expert-parallel');
     if (m.hybrid && s.mambaDtype !== 'auto')
       args.push(`--vllm-mamba-ssm-cache-dtype ${s.mambaDtype}`);
+    if (m.hybrid) args.push(`--vllm-mamba-full-memory-ratio ${quote(s.mambaRatio || '0.9')}`);
     if (s.speculative) args.push(`--vllm-speculative-config ${quote(JSON.stringify(
       s.draftSource === 'builtin' ? {method: 'mtp', num_speculative_tokens: s.specSteps} :
       {method: 'eagle', model: s.draft, num_speculative_tokens: s.specSteps}
@@ -670,7 +668,7 @@
     const launch =
       `# Ray must already be running. Join workers before submitting this job.\n# RAY_DASHBOARD can point at an existing head (default: localhost).\nLAB_CONFIG=$(mktemp -d "$PWD/.vime-lab.XXXXXX")\ntrap 'rm -rf -- "$LAB_CONFIG"' EXIT\ncat > "$LAB_CONFIG/runtime-env.json" <<'VIME_RUNTIME'\n${runtime}\nVIME_RUNTIME\npython - "$LAB_CONFIG/runtime-env.json" "$PWD" <<'VIME_PATH'\nimport json, sys\nfrom pathlib import Path\np = Path(sys.argv[1])\ncfg = json.loads(p.read_text())\ncfg['env_vars']['PYTHONPATH'] = sys.argv[2] + ':' + cfg['env_vars']['PYTHONPATH']\np.write_text(json.dumps(cfg))\nVIME_PATH\n${config?`cat > "$LAB_CONFIG/vllm.yaml" <<'VIME_VLLM'\n${config}VIME_VLLM\n`:''}\nray job submit --address="\${RAY_DASHBOARD:-http://127.0.0.1:8265}" \\\n  --runtime-env "$LAB_CONFIG/runtime-env.json" -- python train.py \\\n  "\${MODEL_ARGS[@]}" \\\n  ${arg.join(' \\\n  ')}\n`;
     const external = s.layout === 'external' ?
-      `# External vLLM launch reference — apply before submitting experiment.sh.\n# One command per engine; multi-node engines also need --nnodes, --node-rank\n# and --master-addr and --master-port. Use each engine's real host, ports and visible devices.\n# Model, dtype, TP/EP/DP, cache and routed-expert reporting must match the trainer.\n# Pass engine host:port addresses, not a router URL, to vime.\n\nVLLM_SERVER_DEV_MODE=1${s.deterministic?' VLLM_BATCH_INVARIANT=1':''} vllm serve \\\n  ${quote(s.hf+(s.precision==='bf16'?'':s.precision==='int4'?'-int4':'-fp8'))} \\\n  --tensor-parallel-size ${m.engine / m.dp} \\\n  ${servingArgs(s).filter(a=>!a.startsWith('--rollout-') && !a.startsWith('--vllm-disaggregation-') && a !== '--vllm-enable-deterministic-inference').map(a=>a.replace(/^--(no-)?vllm-/, '--$1')).concat(['--logprobs-mode processed_logprobs', '--enable-scale-out', '--enable-prompt-tokens-details', '--enable-server-load-tracking', '--enable-per-request-metrics', `--max-logprobs ${s.sc?129:1}`, `--weight-transfer-config ${quote(JSON.stringify({backend:'nccl'}))}`], s.speculative?['--per-request-spec-decode-metrics summary']:[], s.r3?['--enable-return-routed-experts']:[], s.pd?[...(s.hicache?['--enable-prefix-caching']:[]), `--kv-transfer-config ${quote(JSON.stringify(kvTransferConfig(s, 'prefill')))}`]:[]).join(' \\\n  ')}\n\n${s.pd?'# Launch a matching decode group with kv_role=kv_consumer.\n# Keep host KV offloading on prefill only.\n# Configure connector handshake ports, RDMA routing, and multi-node engine ranks.\n':''}# Disk sync: expose ${s.shared} at the SAME path on trainer and serving hosts.\n${s.transport==='delta'?'# Delta requires vime-patched vLLM /pull_weights and local checkpoint paths.\n':''}` :
+      `# External vLLM launch reference — apply before submitting experiment.sh.\n# One command per engine; multi-node engines also need --nnodes, --node-rank\n# and --master-addr and --master-port. Use each engine's real host, ports and visible devices.\n# Model, dtype, TP/EP/DP, cache and routed-expert reporting must match the trainer.\n# Pass engine host:port addresses, not a router URL, to vime.\n\nVLLM_USE_V2_MODEL_RUNNER=1 VLLM_SERVER_DEV_MODE=1${s.deterministic?' VLLM_BATCH_INVARIANT=1':''} vllm serve \\\n  ${quote(s.hf+(s.precision==='bf16'?'':s.precision==='int4'?'-int4':'-fp8'))} \\\n  --tensor-parallel-size ${m.engine / m.dp} \\\n  ${servingArgs(s).filter(a=>!a.startsWith('--rollout-') && !a.startsWith('--vllm-disaggregation-') && a !== '--vllm-enable-deterministic-inference').map(a=>a.replace(/^--(no-)?vllm-/, '--$1')).concat(['--logprobs-mode processed_logprobs', '--enable-scale-out', '--enable-prompt-tokens-details', '--enable-server-load-tracking', '--enable-per-request-metrics', `--max-logprobs ${s.sc?129:1}`, `--weight-transfer-config ${quote(JSON.stringify({backend:'nccl'}))}`], s.speculative?['--per-request-spec-decode-metrics summary']:[], s.r3?['--enable-return-routed-experts']:[], s.pd?[...(s.hicache?['--enable-prefix-caching']:[]), `--kv-transfer-config ${quote(JSON.stringify(kvTransferConfig(s, 'prefill')))}`]:[]).join(' \\\n  ')}\n\n${s.pd?'# Launch a matching decode group with kv_role=kv_consumer.\n# Keep host KV offloading on prefill only.\n# Configure connector handshake ports, RDMA routing, and multi-node engine ranks.\n':''}# Disk sync: expose ${s.shared} at the SAME path on trainer and serving hosts.\n${s.transport==='delta'?'# Delta requires vime-patched vLLM /pull_weights and local checkpoint paths.\n':''}` :
       '';
     const plan = {
       schema: 1,

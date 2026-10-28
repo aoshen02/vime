@@ -308,9 +308,11 @@
             ['bfloat16', 'BF16', t(
               'Smaller recurrent state. Validate long-sequence accuracy and kernel support.',
               '减少递归状态存储；验证长序列精度与 kernel 支持。')]
-          ]) + `<p class="step-hint">${t(
-            'vLLM manages attention KV and recurrent state in a shared paged cache. The total GPU cache budget is not equivalent to an independently configured pool ratio.',
-            'vLLM 在共享分页缓存中管理 attention KV 与递归状态；总 GPU 缓存预算不等价于独立配置的池比例。')}</p>` : '');
+          ]) + input('mambaRatio', t('Mamba / attention KV memory ratio (optional)',
+              'Mamba / attention KV 内存比例（选填）'),
+            'text', t(
+              'State-pool bytes ÷ attention-KV-pool bytes, e.g. 0.9. Leave blank for the default ratio of 0.9; this is not a percentage of all GPU memory.',
+              '状态池字节数 ÷ attention KV 池字节数，例如 0.9。留空使用默认比例 0.9；这不是总显存百分比。')) : '');
       case 3:
         return options('correction', t('Importance correction', '重要性修正'), [
             ['none', t('Observe only', '暂不修正'), t('Baseline. Watch log-prob mismatch and reward.',

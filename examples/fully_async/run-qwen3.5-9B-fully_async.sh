@@ -105,6 +105,7 @@ OPTIMIZER_ARGS=(
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 2
    --vllm-gpu-memory-utilization 0.7
+   --vllm-mamba-full-memory-ratio 0.9
 )
 
 MISC_ARGS=(

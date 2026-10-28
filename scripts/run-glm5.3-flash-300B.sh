@@ -102,6 +102,7 @@ ray job submit --address="${RAY_DASHBOARD:-http://127.0.0.1:8265}" \
     --vllm-max-num-seqs 2 --vllm-max-num-batched-tokens 4096 \
     --no-vllm-async-scheduling --vllm-max-cudagraph-capture-size 8 \
     --vllm-mamba-ssm-cache-dtype float32 --vllm-block-size 64 \
+    --vllm-mamba-full-memory-ratio 0.9 \
     --vllm-kv-cache-dtype bfloat16 \
     --vllm-watchdog-config '{"timeout":3600,"abort_on_timeout":true}' \
     --attention-dropout 0 --hidden-dropout 0 --bf16 \
