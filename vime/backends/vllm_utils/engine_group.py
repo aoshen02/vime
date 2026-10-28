@@ -566,7 +566,8 @@ def _allocate_rollout_engine_addr_and_ports_normal(
             addr_and_ports[current_rank]["nccl_port"] = get_port()
 
             if worker_type in ("prefill", "decode"):
-                addr_and_ports[current_rank]["disaggregation_bootstrap_port"] = get_port()
+                if "disaggregation_bootstrap_port" not in addr_and_ports[current_rank]:
+                    addr_and_ports[current_rank]["disaggregation_bootstrap_port"] = get_port()
             elif worker_type == "encoder":
                 addr_and_ports[current_rank]["disaggregation_bootstrap_port"] = get_port(_gpus_per_engine)
 
@@ -578,6 +579,10 @@ def _allocate_rollout_engine_addr_and_ports_normal(
                 for i in range(num_node_per_engine):
                     addr_and_ports.setdefault(rank + i, {})
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
+                    if worker_type in ("prefill", "decode"):
+                        addr_and_ports[rank + i]["disaggregation_bootstrap_port"] = addr_and_ports[rank][
+                            "disaggregation_bootstrap_port"
+                        ]
         else:
             for i in range(num_engines_on_this_node):
                 addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(30 + args.vllm_dp_size)}"

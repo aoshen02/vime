@@ -236,7 +236,11 @@ def test_router_log_level_survives_launch(args_mod, monkeypatch, flags, expected
         "multiprocessing": SimpleNamespace(Process=make_process),
     }
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(source_path), "exec"), namespace)
-    namespace["_start_router"](args, bind=("127.0.0.1", 30000))
+    args.vllm_router_ip = None
+    args.vllm_router_port = 30000
+    namespace["get_host_info"] = lambda: (None, "127.0.0.1")
+    namespace["_wrap_ipv6"] = lambda host: host
+    namespace["_start_router"](args)
     assert launches[0].log_level == expected
 
 

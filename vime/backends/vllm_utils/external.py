@@ -87,6 +87,19 @@ def get_server_info(url: str, timeout: float = 30.0) -> dict:
     raise RuntimeError(f"Failed to fetch vLLM server info from {url}: {'; '.join(errors)}")
 
 
+def get_disaggregation_bootstrap_port(kv_transfer_config, *, nixl_port=None, mooncake_port=None):
+    if not isinstance(kv_transfer_config, dict):
+        return nixl_port
+    connectors = [kv_transfer_config]
+    if kv_transfer_config.get("kv_connector") == "MultiConnector":
+        connectors = kv_transfer_config.get("kv_connector_extra_config", {}).get("connectors", [])
+    for connector in connectors:
+        if connector.get("kv_connector") == "MooncakeConnector":
+            address = connector.get("kv_connector_extra_config", {}).get("bootstrap_server_address")
+            return urlparse(f"//{address}").port if address is not None else mooncake_port
+    return nixl_port
+
+
 def _normalize_server_info(server_info: dict) -> dict:
     vllm_config = server_info.get("vllm_config")
     if not isinstance(vllm_config, dict):
@@ -133,10 +146,15 @@ def _normalize_server_info(server_info: dict) -> dict:
             normalized["disaggregation_mode"] = "decode"
 
     vllm_env = server_info.get("vllm_env")
-    if isinstance(vllm_env, dict):
-        bootstrap_port = vllm_env.get("VLLM_NIXL_SIDE_CHANNEL_PORT")
-        if bootstrap_port is not None:
-            normalized["disaggregation_bootstrap_port"] = bootstrap_port
+    if not isinstance(vllm_env, dict):
+        vllm_env = {}
+    bootstrap_port = get_disaggregation_bootstrap_port(
+        kv_transfer_config,
+        nixl_port=vllm_env.get("VLLM_NIXL_SIDE_CHANNEL_PORT"),
+        mooncake_port=vllm_env.get("VLLM_MOONCAKE_BOOTSTRAP_PORT"),
+    )
+    if bootstrap_port is not None:
+        normalized["disaggregation_bootstrap_port"] = bootstrap_port
 
     return normalized
 
@@ -264,13 +282,9 @@ def start_external_rollout_servers(args, *, start_router) -> tuple[dict[str, Ext
 
     infos = external_engine_infos_from_args(args)
     has_pd_disaggregation = any(info.is_pd_worker for info in infos)
-    prefill_urls = [(info.url, info.disaggregation_bootstrap_port) for info in infos if info.worker_type == "prefill"]
-    decode_urls = [info.url for info in infos if info.worker_type == "decode"]
     router_ip, router_port, _ = start_router(
         args,
         has_pd_disaggregation=has_pd_disaggregation,
-        prefill_urls=prefill_urls if has_pd_disaggregation else None,
-        decode_urls=decode_urls if has_pd_disaggregation else None,
     )
     args.vllm_router_ip = router_ip
     args.vllm_router_port = router_port
@@ -300,8 +314,8 @@ def start_external_rollout_servers(args, *, start_router) -> tuple[dict[str, Ext
         init_handles.append(
             rollout_engine.init.remote(
                 **external_engine_init_kwargs(info),
-                router_ip=None if has_pd_disaggregation else router_ip,
-                router_port=None if has_pd_disaggregation else router_port,
+                router_ip=router_ip,
+                router_port=router_port,
             )
         )
 

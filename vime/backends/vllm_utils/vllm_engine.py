@@ -15,7 +15,7 @@ import requests
 from urllib3.exceptions import NewConnectionError
 from vllm.utils.system_utils import kill_process_tree
 
-from vime.backends.vllm_utils.external import get_server_info
+from vime.backends.vllm_utils.external import get_disaggregation_bootstrap_port, get_server_info
 from vime.backends.vllm_utils.runtime import (
     launch_server_subprocess,
     prepare_server_environment,
@@ -94,6 +94,8 @@ def _build_subprocess_env(server_args_dict: dict[str, Any]) -> dict[str, str]:
         env.setdefault("VLLM_ALLOW_INSECURE_SERIALIZATION", "1")
 
     worker_type = server_args_dict.get("_worker_type", "regular")
+    if worker_type in ("prefill", "decode"):
+        env["VLLM_MOONCAKE_BOOTSTRAP_PORT"] = str(server_args_dict["_disaggregation_bootstrap_port"])
     if worker_type in ("prefill", "decode") and server_args_dict.get("node_rank", 0) == 0:
         host_for_subprocess = (server_args_dict.get("host") or "127.0.0.1").strip("[]")
         env["VLLM_NIXL_SIDE_CHANNEL_HOST"] = host_for_subprocess
@@ -249,7 +251,7 @@ class VLLMEngine(RayActor):
 
         actual_server_args = get_server_info(f"http://{self.server_host}:{self.server_port}")
         _sanity_check_server_args(actual_server_args, expect_server_args)
-        self._register_to_router(expect_server_args)
+        self._register_to_router(actual_server_args)
 
     def _init_normal(self, server_args_dict):
         server_args_dict["hf_overrides"] = vllm_model_config_overrides(
@@ -273,6 +275,11 @@ class VLLMEngine(RayActor):
                 bootstrap_port = server_args_dict.get("_disaggregation_bootstrap_port")
                 if bootstrap_port is None:
                     bootstrap_port = server_args_dict.get("disaggregation_bootstrap_port")
+                bootstrap_port = get_disaggregation_bootstrap_port(
+                    server_args_dict.get("kv_transfer_config"),
+                    nixl_port=bootstrap_port,
+                    mooncake_port=bootstrap_port,
+                )
                 if bootstrap_port is None:
                     raise RuntimeError(
                         f"Prefill worker {worker_url} does not have disaggregation_bootstrap_port; cannot register it to the PD router."

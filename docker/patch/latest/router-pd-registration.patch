@@ -1,3 +1,219 @@
+diff --git a/README.md b/README.md
+index c6bdf12..3123f2c 100644
+--- a/README.md
++++ b/README.md
+@@ -78,8 +78,15 @@ vllm-router \
+ ```
+ 
+ #### Prefill-Decode Disaggregation
++
++For router-before-engine startup, omit both `--prefill` and `--decode`, then
++register each role through `POST /workers` with `worker_type: "prefill"` or
++`worker_type: "decode"`. Generation returns HTTP 503 until both roles are
++available. Without service discovery, supplying initial URLs for only one role
++is rejected; supplied URLs and bootstrap ports are still validated.
++
+ ```bash
+-# When vLLM runs the NIXL connector, prefill/decode URLs are required.
++# Static NIXL startup uses both prefill and decode URLs.
+ # See a working example in scripts/llama3.1/ folder.
+ cargo run --release -- \
+     --policy consistent_hash \
+diff --git a/py_src/vllm_router/router_args.py b/py_src/vllm_router/router_args.py
+index 4f11bca..7153c29 100644
+--- a/py_src/vllm_router/router_args.py
++++ b/py_src/vllm_router/router_args.py
+@@ -527,8 +527,11 @@ class RouterArgs:
+     def _validate_router_args(self):
+         # Validate configuration based on mode
+         if self.vllm_pd_disaggregation:
+-            # Validate PD configuration - skip URL requirements if using service discovery
+-            if not self.service_discovery and not self.vllm_discovery_address:
++            if (
++                not self.service_discovery
++                and not self.vllm_discovery_address
++                and (self.prefill_urls or self.decode_urls)
++            ):
+                 if not self.prefill_urls:
+                     raise ValueError("PD disaggregation mode requires --prefill")
+                 if not self.decode_urls:
+diff --git a/py_test/unit/test_arg_parser.py b/py_test/unit/test_arg_parser.py
+index 14f00fd..2df93f4 100644
+--- a/py_test/unit/test_arg_parser.py
++++ b/py_test/unit/test_arg_parser.py
+@@ -52,7 +52,9 @@ class TestRouterArgs:
+         parser = argparse.ArgumentParser()
+         RouterArgs.add_cli_args(parser, use_router_prefix=bool(prefix))
+         parsed = parser.parse_args([f"--{prefix}disable-health-check"])
+-        assert RouterArgs.from_cli_args(parsed, use_router_prefix=bool(prefix)).disable_health_check
++        assert RouterArgs.from_cli_args(
++            parsed, use_router_prefix=bool(prefix)
++        ).disable_health_check
+ 
+     def test_parse_selector_valid(self):
+         """Test parsing valid selector arguments."""
+@@ -450,6 +452,39 @@ class TestParseRouterArgs:
+         assert router_args.worker_urls == ["http://worker1:8000", "http://worker2:8000"]
+         assert router_args.policy == "round_robin"
+ 
++    @pytest.mark.parametrize(
++        "seeds, missing",
++        [
++            ([], None),
++            (["--prefill", "http://prefill:8000"], "--decode"),
++            (["--decode", "http://decode:8000"], "--prefill"),
++            (
++                ["--prefill", "http://prefill:8000", "--decode", "http://decode:8000"],
++                None,
++            ),
++        ],
++    )
++    def test_validate_pd_initial_workers(self, seeds, missing):
++        router_args = parse_router_args(["--vllm-pd-disaggregation", *seeds])
++        if missing:
++            with pytest.raises(ValueError, match=f"requires {missing}"):
++                router_args._validate_router_args()
++        else:
++            router_args._validate_router_args()
++        assert not router_args.service_discovery
++        assert router_args.vllm_discovery_address is None
++
++    @pytest.mark.parametrize(
++        "discovery",
++        [["--service-discovery"], ["--vllm-discovery-address", "127.0.0.1:9000"]],
++    )
++    @pytest.mark.parametrize("role", ["--prefill", "--decode"])
++    def test_validate_pd_discovery_allows_one_initial_role(self, discovery, role):
++        router_args = parse_router_args(
++            ["--vllm-pd-disaggregation", *discovery, role, "http://worker:8000"]
++        )
++        router_args._validate_router_args()
++
+     def test_parse_pd_args(self):
+         """Test parsing PD disaggregated mode arguments."""
+         args = [
+diff --git a/src/config/validation.rs b/src/config/validation.rs
+index bf678a5..51df434 100644
+--- a/src/config/validation.rs
++++ b/src/config/validation.rs
+@@ -58,8 +58,7 @@ impl ConfigValidator {
+                 decode_policy,
+                 discovery_address: _,
+             } => {
+-                // Only require URLs if service discovery is disabled
+-                if !has_service_discovery {
++                if !has_service_discovery && (!prefill_urls.is_empty() || !decode_urls.is_empty()) {
+                     if prefill_urls.is_empty() {
+                         return Err(ConfigError::ValidationFailed {
+                             reason: "vLLM PD mode requires at least one prefill worker URL"
+@@ -630,6 +629,75 @@ mod tests {
+         assert!(ConfigValidator::validate(&config).is_ok());
+     }
+ 
++    #[test]
++    fn test_validate_pd_initial_workers() {
++        for (has_prefill, has_decode, valid) in [
++            (false, false, true),
++            (true, true, true),
++            (true, false, false),
++            (false, true, false),
++        ] {
++            let config = RouterConfig::new(
++                RoutingMode::VllmPrefillDecode {
++                    prefill_urls: if has_prefill {
++                        vec![("http://prefill:8000".to_string(), Some(8081))]
++                    } else {
++                        vec![]
++                    },
++                    decode_urls: if has_decode {
++                        vec!["http://decode:8000".to_string()]
++                    } else {
++                        vec![]
++                    },
++                    prefill_policy: None,
++                    decode_policy: None,
++                    discovery_address: None,
++                },
++                PolicyConfig::Random,
++            );
++            assert_eq!(
++                ConfigValidator::validate(&config).is_ok(),
++                valid,
++                "prefill={has_prefill}, decode={has_decode}"
++            );
++        }
++    }
++
++    #[test]
++    fn test_validate_pd_supplied_workers() {
++        for (prefill_url, decode_url, bootstrap_port, valid) in [
++            (
++                "http://prefill:8000",
++                "https://decode:8000",
++                Some(8081),
++                true,
++            ),
++            ("", "http://decode:8000", None, false),
++            ("invalid", "http://decode:8000", None, false),
++            ("http://", "http://decode:8000", None, false),
++            ("http://prefill:8000", "", None, false),
++            ("http://prefill:8000", "ftp://decode:8000", None, false),
++            ("http://prefill:8000", "http://", None, false),
++            ("http://prefill:8000", "http://decode:8000", Some(0), false),
++        ] {
++            let config = RouterConfig::new(
++                RoutingMode::VllmPrefillDecode {
++                    prefill_urls: vec![(prefill_url.to_string(), bootstrap_port)],
++                    decode_urls: vec![decode_url.to_string()],
++                    prefill_policy: None,
++                    decode_policy: None,
++                    discovery_address: None,
++                },
++                PolicyConfig::Random,
++            );
++            assert_eq!(
++                ConfigValidator::validate(&config).is_ok(),
++                valid,
++                "prefill={prefill_url}, decode={decode_url}, bootstrap={bootstrap_port:?}"
++            );
++        }
++    }
++
+     #[test]
+     fn test_validate_roundrobin_with_pd_mode() {
+         // RoundRobin with PD mode is now supported
+diff --git a/src/main.rs b/src/main.rs
+index 176e9bf..1e106a1 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -409,7 +409,11 @@ impl CliArgs {
+             let use_k8s_discovery = self.service_discovery
+                 && (!self.prefill_selector.is_empty() || !self.decode_selector.is_empty());
+ 
+-            if !use_static_urls && !use_vllm_discovery && !use_k8s_discovery {
++            if self.service_discovery
++                && !use_static_urls
++                && !use_vllm_discovery
++                && !use_k8s_discovery
++            {
+                 return Err(ConfigError::ValidationFailed {
+                     reason: "vLLM PD disaggregation mode requires one of: --vllm-discovery-address, --prefill/--decode URLs, or --service-discovery with --prefill-selector/--decode-selector".to_string(),
+                 });
+@@ -438,9 +442,13 @@ impl CliArgs {
+                 eprintln!("ℹ️  INFO: Using static URL mode without service discovery.");
+                 eprintln!("   Prefill URLs: {:?}", prefill_urls);
+                 eprintln!("   Decode URLs: {:?}", final_decode_urls);
+-            } else {
++            } else if use_vllm_discovery {
+                 eprintln!("ℹ️  INFO: Using vLLM ZMQ service discovery mode.");
+                 eprintln!("   Discovery address: {:?}", self.vllm_discovery_address);
++            } else {
++                eprintln!(
++                    "ℹ️  INFO: Starting empty vLLM PD pools; waiting for HTTP worker registration."
++                );
+             }
+ 
+             RoutingMode::VllmPrefillDecode {
 diff --git a/src/routers/http/pd_router.rs b/src/routers/http/pd_router.rs
 index 8475d91..5f28b93 100644
 --- a/src/routers/http/pd_router.rs
@@ -182,10 +398,10 @@ index 3c6130c..928dae7 100644
                      success: true,
 diff --git a/tests/pd_worker_registration_test.rs b/tests/pd_worker_registration_test.rs
 new file mode 100644
-index 0000000..1ae9f8e
+index 0000000..551ce48
 --- /dev/null
 +++ b/tests/pd_worker_registration_test.rs
-@@ -0,0 +1,504 @@
+@@ -0,0 +1,539 @@
 +use axum::{
 +    body::{to_bytes, Body},
 +    extract::State,
@@ -201,7 +417,7 @@ index 0000000..1ae9f8e
 +use tokio::{net::TcpListener, sync::Notify, task::JoinHandle, time::Duration};
 +use tower::ServiceExt;
 +use vllm_router_rs::{
-+    config::{KvConnector, RouterConfig, RoutingMode},
++    config::{ConfigValidator, KvConnector, RouterConfig, RoutingMode},
 +    routers::http::vllm_pd_router::VllmPDRouter,
 +    server::{build_app_with_request_tracing, AppContext, AppState},
 +};
@@ -327,6 +543,7 @@ index 0000000..1ae9f8e
 +        worker_startup_check_interval_secs: 1,
 +        ..Default::default()
 +    };
++    ConfigValidator::validate(&config).unwrap();
 +    let context =
 +        Arc::new(AppContext::new(config, reqwest::Client::new(), 64, None, vec![]).unwrap());
 +    let router = Arc::new(
@@ -394,6 +611,40 @@ index 0000000..1ae9f8e
 +    .await;
 +    assert_eq!(response.0, StatusCode::OK, "{response:?}");
 +    assert_eq!(response.1["choices"][0]["text"], "ok");
++}
++
++#[tokio::test]
++async fn empty_pd_startup_serves_only_after_both_roles_register() {
++    for connector in [KvConnector::Nixl, KvConnector::Mooncake] {
++        for prefill_first in [true, false] {
++            let prefill = Backend::new().await;
++            let decode = Backend::new().await;
++            let (app, context) = app(connector, 1, None, None).await;
++            let registrations = if prefill_first {
++                [(&prefill, "prefill"), (&decode, "decode")]
++            } else {
++                [(&decode, "decode"), (&prefill, "prefill")]
++            };
++            for (worker, kind) in registrations {
++                let response = request(
++                    &app,
++                    "POST",
++                    "/v1/completions",
++                    json!({"model": "test", "prompt": "hello", "max_tokens": 2}),
++                )
++                .await;
++                assert_eq!(response.0, StatusCode::SERVICE_UNAVAILABLE, "{response:?}");
++                assert!(prefill.state.requests.lock().unwrap().is_empty());
++                assert!(decode.state.requests.lock().unwrap().is_empty());
++                let response = add(&app, &worker.url, kind, Some(prefill.port)).await;
++                assert_eq!(response.0, StatusCode::OK, "{response:?}");
++            }
++            assert_eq!(context.worker_registry.get_all().len(), 2);
++            generate(&app).await;
++            assert_eq!(prefill.state.requests.lock().unwrap().len(), 1);
++            assert_eq!(decode.state.requests.lock().unwrap().len(), 1);
++        }
++    }
 +}
 +
 +#[tokio::test]
@@ -559,7 +810,7 @@ index 0000000..1ae9f8e
 +    prefill.set_bootstrap(json!({"0": {"engine_id": "unregistered"}}));
 +    let counts = context.policy_registry.get_worker_counts();
 +    let response = add(&app, &prefill.url, "prefill", Some(prefill.port)).await;
-+    assert_eq!(response.0, StatusCode::BAD_REQUEST);
++    assert_eq!(response.0, StatusCode::CONFLICT);
 +    assert!(response.1["error"]
 +        .as_str()
 +        .unwrap()

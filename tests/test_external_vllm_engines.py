@@ -100,7 +100,8 @@ def test_discover_external_native_ec_roles(monkeypatch, nested, ec_connector, ec
     assert info.server_info["ec_transfer_config"] == config["ec_transfer_config"]
 
 
-def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch):
+@pytest.mark.parametrize("worker_type", ["regular", "prefill", "decode"])
+def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch, worker_type):
     class FakeActor:
         init = Namespace(remote=lambda **kwargs: kwargs)
 
@@ -125,7 +126,7 @@ def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch):
         url="http://host1:10090",
         host="host1",
         port=10090,
-        worker_type="regular",
+        worker_type=worker_type,
         num_gpus=8,
         server_info={
             "tp_size": 2,
@@ -153,6 +154,8 @@ def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch):
         }
     ]
     assert len(init_handles) == 1
+    assert init_handles[0]["router_ip"] == "host1"
+    assert init_handles[0]["router_port"] == 30000
 
 
 def test_get_server_info_flattens_nested_vllm_transfer_configs(monkeypatch):
@@ -183,6 +186,34 @@ def test_get_server_info_flattens_nested_vllm_transfer_configs(monkeypatch):
     assert server_info["weight_transfer_config"] == {"backend": "nccl"}
     assert server_info["disaggregation_mode"] == "prefill"
     assert server_info["disaggregation_bootstrap_port"] == 12090
+
+
+@pytest.mark.parametrize("multi", [False, True])
+@pytest.mark.parametrize("address, expected_port", [(None, 22000), ("host1:23000", 23000), ("[::1]:23000", 23000)])
+def test_external_mooncake_bootstrap_port(monkeypatch, multi, address, expected_port):
+    connector = {
+        "kv_connector": "MooncakeConnector",
+        "kv_role": "kv_producer",
+        "kv_connector_extra_config": {} if address is None else {"bootstrap_server_address": address},
+    }
+    config = (
+        {
+            "kv_connector": "MultiConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {"connectors": [connector]},
+        }
+        if multi
+        else connector
+    )
+    payload = {
+        "vllm_config": {"kv_transfer_config": config},
+        "vllm_env": {"VLLM_NIXL_SIDE_CHANNEL_PORT": 5600, "VLLM_MOONCAKE_BOOTSTRAP_PORT": 22000},
+    }
+    monkeypatch.setattr("vime.backends.vllm_utils.external.requests.get", lambda *args, **kwargs: _Response(payload))
+    info = discover_external_engines(["host1:10090"])[0]
+    assert info.worker_type == "prefill"
+    assert info.disaggregation_bootstrap_port == expected_port
+    assert info.server_info["kv_transfer_config"] == config
 
 
 def test_apply_external_engine_info_handles_pd(monkeypatch):

@@ -12,6 +12,41 @@ import yaml
 NUM_GPUS = 0
 
 
+@pytest.mark.parametrize("worker_type", ["prefill", "decode"])
+@pytest.mark.parametrize("gpus_per_engine", [4, 16])
+def test_pd_bootstrap_ports_follow_logical_engines(monkeypatch, worker_type, gpus_per_engine):
+    from vime.backends.vllm_utils import engine_group
+
+    actors = []
+    for rank in range(4):
+        actor = Mock()
+        node_index = rank // 2 if gpus_per_engine == 4 else rank
+        host = f"10.0.0.{node_index + 1}"
+        actor._get_current_node_ip_and_free_port.remote.side_effect = (
+            lambda start_port=15000, consecutive=1, host=host, node_index=node_index: (
+                host,
+                start_port + node_index * 100,
+            )
+        )
+        actors.append((rank, actor))
+    monkeypatch.setattr(engine_group.ray, "get", lambda value: value)
+    addresses, _ = engine_group._allocate_rollout_engine_addr_and_ports_normal(
+        args=Namespace(num_gpus_per_node=8, vllm_dp_size=1),
+        rollout_engines=actors,
+        worker_type=worker_type,
+        num_gpus_per_engine=gpus_per_engine,
+    )
+    ports = [addresses[rank]["disaggregation_bootstrap_port"] for rank in range(4)]
+    if gpus_per_engine == 4:
+        assert ports[0] != ports[1]
+        assert ports[2] != ports[3]
+    else:
+        assert ports[0] == ports[1]
+        assert ports[2] == ports[3]
+        assert addresses[0]["dist_init_addr"] == addresses[1]["dist_init_addr"]
+        assert addresses[2]["dist_init_addr"] == addresses[3]["dist_init_addr"]
+
+
 @pytest.mark.parametrize("node_rank", [0, 1])
 def test_isolated_server_launch_waits_for_node_zero(monkeypatch, node_rank):
     from vime.backends.vllm_utils import vllm_engine
@@ -94,7 +129,6 @@ class TestVllmConfigUpdateWeights:
         monkeypatch.setattr(deployment, "_start_router", lambda *_args, **_kwargs: ("127.0.0.1", 3456, None))
         monkeypatch.setattr(deployment, "get_host_info", lambda: (None, "127.0.0.1"))
         monkeypatch.setattr(deployment, "find_available_port", lambda _port: 3456)
-        monkeypatch.setattr(deployment, "collect_pd_urls", lambda _groups: ([], []))
         monkeypatch.setattr(disaggregation.ray, "get", lambda refs: refs)
         args = Namespace(
             rollout_external=False,
@@ -480,15 +514,9 @@ class TestZeroGpuRolloutConfig:
             *,
             has_pd_disaggregation=False,
             force_new=False,
-            bind=None,
-            prefill_urls=None,
-            decode_urls=None,
         ):
             assert has_pd_disaggregation is True
             assert force_new is False
-            assert bind is not None
-            assert prefill_urls == [("http://prefill", None)]
-            assert decode_urls == ["http://decode"]
             return "127.0.0.1", 3456, None
 
         def fake_resolve_vllm_config(args):
@@ -505,16 +533,12 @@ class TestZeroGpuRolloutConfig:
             )
 
         def fake_start_engines(self, port_cursors=None):
+            assert (self.router_ip, self.router_port) == ("127.0.0.1", 3456)
             self.all_engines = [object() for _ in self.all_engines]
             return [f"{self.worker_type}-init-{self.rank_offset}"], port_cursors or {}
 
         monkeypatch.setattr(deployment, "_start_router", fake_start_router)
         monkeypatch.setattr(deployment, "resolve_vllm_config", fake_resolve_vllm_config)
-        monkeypatch.setattr(
-            deployment,
-            "collect_pd_urls",
-            lambda _groups: ([("http://prefill", None)], ["http://decode"]),
-        )
         monkeypatch.setattr(ServerGroup, "start_engines", fake_start_engines)
 
         args = Namespace(

@@ -83,21 +83,3 @@ def start_epd_server_groups(
         server_groups.append(group)
 
     return server_groups, init_handles, encoder_endpoints
-
-
-def collect_pd_urls(server_groups: list[ServerGroup]) -> tuple[list[tuple[str, None]], list[str]]:
-    """Collect static prefill/decode endpoints after engine initialization."""
-    prefill_urls = []
-    decode_urls = []
-    for group in server_groups:
-        for engine in group.engines:
-            if engine is None:
-                continue
-            url = ray.get(engine.get_url.remote())
-            if not url:
-                continue
-            if group.worker_type == "prefill":
-                prefill_urls.append((url, None))
-            elif group.worker_type == "decode":
-                decode_urls.append(url)
-    return prefill_urls, decode_urls

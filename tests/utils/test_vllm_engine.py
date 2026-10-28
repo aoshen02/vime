@@ -7,6 +7,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 _tests_root = Path(__file__).resolve().parents[1]
 if str(_tests_root) not in sys.path:
@@ -498,19 +499,22 @@ def test_build_vllm_subprocess_env_no_batch_invariant_by_default(vllm_args, monk
 
 
 @pytest.mark.unit
-def test_build_vllm_subprocess_env_sets_disaggregation_side_channel(vllm_args):
+@pytest.mark.parametrize("node_rank", [0, 1])
+def test_build_vllm_subprocess_env_sets_disaggregation_side_channel(vllm_args, node_rank):
     env = mod._build_subprocess_env(
         {
             "_args": vllm_args,
             "_visible_devices": "0",
             "_worker_type": "prefill",
             "_disaggregation_bootstrap_port": 29999,
-            "node_rank": 0,
+            "node_rank": node_rank,
             "host": "10.0.0.8",
         }
     )
-    assert env["VLLM_NIXL_SIDE_CHANNEL_HOST"] == "10.0.0.8"
-    assert env["VLLM_NIXL_SIDE_CHANNEL_PORT"] == "29999"
+    assert env["VLLM_MOONCAKE_BOOTSTRAP_PORT"] == "29999"
+    if node_rank == 0:
+        assert env["VLLM_NIXL_SIDE_CHANNEL_HOST"] == "10.0.0.8"
+        assert env["VLLM_NIXL_SIDE_CHANNEL_PORT"] == "29999"
 
 
 @pytest.mark.unit
@@ -812,6 +816,47 @@ def test_init_formats_server_and_router_hosts_for_urls(vllm_engine, monkeypatch,
     assert vllm_engine.server_host == expected_host
     assert vllm_engine.router_ip == expected_host
     assert vllm_engine.get_url() == f"http://{expected_host}:8765"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("actual_tp", [1, 2])
+def test_external_registration_uses_verified_actual_metadata(vllm_engine, monkeypatch, actual_tp):
+    vllm_engine.server_host = "127.0.0.1"
+    vllm_engine.server_port = 8000
+    actual = {"tensor_parallel_size": actual_tp, "disaggregation_bootstrap_port": 22000}
+    monkeypatch.setattr(mod, "get_server_info", lambda url: actual)
+    register = Mock()
+    monkeypatch.setattr(vllm_engine, "_register_to_router", register)
+    expected = {"tensor_parallel_size": 1, "_disaggregation_bootstrap_port": 12000}
+    if actual_tp == 1:
+        vllm_engine._init_external(expected, ["tensor_parallel_size"])
+        register.assert_called_once_with(actual)
+    else:
+        with pytest.raises(AssertionError):
+            vllm_engine._init_external(expected, ["tensor_parallel_size"])
+        register.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("multi", [False, True])
+@pytest.mark.parametrize("address, expected_port", [(None, 12000), ("127.0.0.1:8998", 8998)])
+def test_prefill_registration_preserves_explicit_bootstrap(vllm_engine, monkeypatch, multi, address, expected_port):
+    vllm_engine.worker_type = "prefill"
+    vllm_engine.router_ip = "127.0.0.1"
+    vllm_engine.router_port = 30000
+    connector = {
+        "kv_connector": "MooncakeConnector",
+        "kv_connector_extra_config": {} if address is None else {"bootstrap_server_address": address},
+    }
+    config = (
+        {"kv_connector": "MultiConnector", "kv_connector_extra_config": {"connectors": [connector]}}
+        if multi
+        else connector
+    )
+    register = Mock()
+    monkeypatch.setattr(mod, "register_worker", register)
+    vllm_engine._register_to_router({"kv_transfer_config": config, "_disaggregation_bootstrap_port": 12000})
+    assert register.call_args.args[1]["bootstrap_port"] == expected_port
 
 
 @pytest.mark.unit
