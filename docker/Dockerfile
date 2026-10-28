@@ -48,6 +48,7 @@ ARG VLLM_ROUTER_COMMIT=1fbcde7443d75b36befb61bc081f64c2a1f13a4b
 COPY docker/patch/${PATCH_VERSION}/router-health-check.patch /tmp/router-health-check.patch
 COPY docker/patch/${PATCH_VERSION}/router-pd-registration.patch /tmp/router-pd-registration.patch
 COPY docker/patch/${PATCH_VERSION}/router-worker-registration.patch /tmp/router-worker-registration.patch
+COPY docker/patch/${PATCH_VERSION}/router-mooncake-producer-handoff.patch /tmp/router-mooncake-producer-handoff.patch
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake pkg-config libssl-dev && \
     uv pip install --system setuptools-rust wheel && \
     git init /router && cd /router && git remote add origin https://github.com/vllm-project/router.git && \
@@ -55,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git cmake pkg-c
     git apply /tmp/router-health-check.patch && \
     git apply /tmp/router-pd-registration.patch && \
     git apply /tmp/router-worker-registration.patch && \
+    git apply /tmp/router-mooncake-producer-handoff.patch && \
     uv build --python /usr/bin/python3 --wheel --no-build-isolation --out-dir /wheels
 
 FROM ${BASE_IMAGE}
@@ -251,6 +253,7 @@ COPY docker/patch/${PATCH_VERSION}/vllm-utility-rpc-cleanup.patch /tmp/vllm-util
 COPY docker/patch/${PATCH_VERSION}/vllm-tito-columnar-logprobs-render.patch /tmp/vllm-tito-columnar-logprobs-render.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-watchdog-fatal-action.patch /tmp/vllm-watchdog-fatal-action.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-hybrid-cache-capacity.patch /tmp/vllm-hybrid-cache-capacity.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-mooncake-producer-handoff.patch /tmp/vllm-mooncake-producer-handoff.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
@@ -272,6 +275,7 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-tito-columnar-logprobs-render.patch && \
     git apply -v /tmp/vllm-watchdog-fatal-action.patch && \
     git apply -v --include='vllm/*' /tmp/vllm-hybrid-cache-capacity.patch && \
+    git apply -v --include='vllm/*' /tmp/vllm-mooncake-producer-handoff.patch && \
     rm /tmp/vllm-pull_weights.patch \
        /tmp/vllm-score-centering.patch \
        /tmp/vllm-pd-request-metrics.patch \
@@ -290,6 +294,7 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
        /tmp/vllm-utility-rpc-cleanup.patch \
        /tmp/vllm-tito-columnar-logprobs-render.patch \
        /tmp/vllm-watchdog-fatal-action.patch \
+       /tmp/vllm-mooncake-producer-handoff.patch \
        /tmp/vllm-hybrid-cache-capacity.patch
 
 # ====================================== Install main package ============================================
