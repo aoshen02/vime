@@ -120,7 +120,6 @@ OPTIMIZER_ARGS=(
 VLLM_ARGS=(
    --rollout-num-gpus-per-engine 8
    --vllm-gpu-memory-utilization 0.7
-   --vllm-mamba-full-memory-ratio 0.9
    --vllm-enable-expert-parallel
    --vllm-cudagraph-capture-sizes 3 6 12 24 $(seq 48 24 768)
 

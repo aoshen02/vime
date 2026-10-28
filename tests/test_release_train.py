@@ -98,7 +98,6 @@ def execute():
             "--rollout-num-gpus-per-engine 1 "
             "--vllm-gpu-memory-utilization 0.7 "
             "--vllm-max-cudagraph-capture-size 16 "
-            "--vllm-mamba-full-memory-ratio 0.9 "
         )
 
         disk_update_args = (

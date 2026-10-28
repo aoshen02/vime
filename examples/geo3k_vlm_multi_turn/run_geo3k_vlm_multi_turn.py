@@ -89,7 +89,6 @@ def execute():
         "--router-policy consistent_hash "
         "--vllm-enable-expert-parallel "
         "--vllm-gpu-memory-utilization 0.6 "
-        "--vllm-mamba-full-memory-ratio 0.9 "
         "--vllm-generation-config vllm "
         f"--vllm-cudagraph-capture-sizes {cudagraph_sizes} "
         "--vllm-logprobs-mode processed_logprobs "

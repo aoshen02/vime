@@ -201,19 +201,40 @@ def test_compute_server_args_spec_request_default_is_per_domain(vllm_args, metho
     assert server_args["max_num_seqs"] == 48
     assert "max_num_seqs" in checks
     assert "mamba_fixed_requests" not in server_args
-    assert "mamba_full_memory_ratio" not in server_args
+    assert server_args["mamba_full_memory_ratio"] == 0.9
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("explicit_limit", [None, 12, 48])
-def test_compute_server_args_spec_default_with_dp_ep(vllm_args, explicit_limit):
+@pytest.mark.parametrize("cli_ratio", [None, 0.5, 1.5])
+@pytest.mark.parametrize("override", [{}, {"mamba_full_memory_ratio": None}, {"mamba_full_memory_ratio": 0.75}])
+def test_compute_server_args_mamba_ratio_default_and_overrides(vllm_args, monkeypatch, cli_ratio, override):
+    monkeypatch.setattr(mod, "_VLLM_SERVER_FIELDS", frozenset({"mamba_full_memory_ratio"}))
+    vllm_args.vllm_mamba_full_memory_ratio = cli_ratio
+    server_args, checks = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        vllm_overrides=override,
+    )
+    ratio = override.get("mamba_full_memory_ratio", cli_ratio)
+    assert server_args["mamba_full_memory_ratio"] == (0.9 if ratio is None else ratio)
+    assert "mamba_full_memory_ratio" not in checks
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "limit_override,expected_limit",
+    [({}, 24), ({"max_num_seqs": None}, 24), ({"max_num_seqs": 12}, 12), ({"max_num_seqs": 48}, 48)],
+)
+def test_compute_server_args_spec_default_with_dp_ep(vllm_args, limit_override, expected_limit):
     overrides = {
         "data_parallel_size": 2,
         "enable_expert_parallel": True,
         "speculative_config": {"method": "eagle3", "num_speculative_tokens": 3},
     }
-    if explicit_limit is not None:
-        overrides["max_num_seqs"] = explicit_limit
+    overrides.update(limit_override)
     server_args, checks = mod._compute_server_args(
         vllm_args,
         rank=0,
@@ -223,13 +244,13 @@ def test_compute_server_args_spec_default_with_dp_ep(vllm_args, explicit_limit):
         num_gpus_per_engine=4,
         vllm_overrides=overrides,
     )
-    assert server_args["max_num_seqs"] == (24 if explicit_limit is None else explicit_limit)
-    assert ("max_num_seqs" in checks) == (explicit_limit is None)
+    assert server_args["max_num_seqs"] == expected_limit
+    assert ("max_num_seqs" in checks) == (limit_override.get("max_num_seqs") is None)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("limit", [None, 0, 12])
-def test_compute_server_args_spec_request_override_is_not_reinterpreted(vllm_args, limit):
+def test_compute_server_args_spec_request_null_uses_default(vllm_args, limit):
     server_args, checks = mod._compute_server_args(
         vllm_args,
         rank=0,
@@ -241,8 +262,8 @@ def test_compute_server_args_spec_request_override_is_not_reinterpreted(vllm_arg
             "speculative_config": {"method": "mtp", "num_speculative_tokens": 3},
         },
     )
-    assert server_args["max_num_seqs"] == limit
-    assert "max_num_seqs" not in checks
+    assert server_args["max_num_seqs"] == (48 if limit is None else limit)
+    assert ("max_num_seqs" in checks) == (limit is None)
 
 
 @pytest.mark.unit

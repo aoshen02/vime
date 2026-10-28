@@ -28,6 +28,8 @@ VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10090 ...
 VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10091 ...
 ```
 
+Vime-managed engines default `mamba_full_memory_ratio` to `0.9`. For hybrid SSM external engines, pass `--mamba-full-memory-ratio 0.9` (or the intended per-engine value); the external engine owns its cache allocation.
+
 Then pass those addresses to the training job:
 
 ```bash

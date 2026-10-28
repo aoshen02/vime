@@ -849,10 +849,13 @@ def _compute_server_args(
         if "model_path" in vllm_overrides:
             kwargs["model"] = str(vllm_overrides["model_path"])
 
+    if kwargs.get("mamba_full_memory_ratio") is None:
+        kwargs["mamba_full_memory_ratio"] = 0.9
+
     speculative = kwargs.get("speculative_config")
     draft_tokens = speculative.get("num_speculative_tokens") if isinstance(speculative, dict) else None
     if (
-        "max_num_seqs" not in kwargs
+        kwargs.get("max_num_seqs") is None
         and isinstance(speculative, dict)
         and speculative.get("method")
         in {"mtp", "eagle", "eagle3", "draft_model", "ngram", "ngram_gpu", "dflash", "dspark"}
