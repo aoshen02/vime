@@ -70,6 +70,40 @@ def test_python_executable_is_a_launcher_option(args_mod, monkeypatch):
     assert parser.parse_args(["--vllm-python-executable", executable]).vllm_python_executable == executable
 
 
+@requires_vllm
+@pytest.mark.parametrize("engine_id", ["omitted", None, "explicit-engine"])
+def test_kv_transfer_cli_retains_only_explicit_validated_fields(args_mod, monkeypatch, engine_id):
+    from dataclasses import is_dataclass
+
+    from pydantic import TypeAdapter
+    from vllm.config import KVTransferConfig
+    from vllm.engine.arg_utils import AsyncEngineArgs
+
+    _patch_device_config(monkeypatch)
+    config = {"kv_connector": "MooncakeConnector", "kv_role": "kv_both", "kv_port": "12000"}
+    if engine_id != "omitted":
+        config["engine_id"] = engine_id
+    native_parser = argparse.ArgumentParser()
+    AsyncEngineArgs.add_cli_args(native_parser)
+    native = native_parser.parse_args(["--kv-transfer-config", json.dumps(config)]).kv_transfer_config
+    assert is_dataclass(native)
+    assert native.kv_port == 12000
+    assert isinstance(native.engine_id, str)
+    parser = argparse.ArgumentParser()
+    args_mod.add_vllm_arguments(parser)
+    forwarded = parser.parse_args(["--vllm-kv-transfer-config", json.dumps(config)]).vllm_kv_transfer_config
+    expected = {"kv_connector": "MooncakeConnector", "kv_role": "kv_both", "kv_port": 12000}
+    if engine_id == "explicit-engine":
+        expected["engine_id"] = engine_id
+    assert forwarded == expected
+    first = TypeAdapter(KVTransferConfig).validate_python(forwarded)
+    second = TypeAdapter(KVTransferConfig).validate_python(forwarded)
+    if engine_id == "explicit-engine":
+        assert native.engine_id == first.engine_id == second.engine_id == engine_id
+    else:
+        assert first.engine_id != second.engine_id
+
+
 @pytest.fixture(scope="module")
 def args_mod():
     from vime.backends.vllm_utils import arguments as mod  # noqa: PLC0415

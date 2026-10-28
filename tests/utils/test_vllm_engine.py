@@ -337,6 +337,55 @@ def test_compute_server_args_allows_mooncake_group_override(vllm_args):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("worker_type", ["prefill", "decode"])
+@pytest.mark.parametrize("yaml_override", [False, True])
+def test_kv_transfer_cli_replaces_pd_default_but_yaml_wins(vllm_args, monkeypatch, worker_type, yaml_override):
+    monkeypatch.setattr(mod, "_VLLM_SERVER_FIELDS", frozenset({"kv_transfer_config"}))
+    cli_config = {"kv_connector": "MooncakeConnector", "kv_role": "kv_both"}
+    yaml_config = {"kv_connector": "NixlConnector", "kv_role": "kv_both", "engine_id": "yaml-engine"}
+    vllm_args.vllm_kv_transfer_config = cli_config
+    server_args, checks = mod._compute_server_args(
+        vllm_args,
+        rank=0,
+        dist_init_addr=None,
+        host="127.0.0.1",
+        port=8000,
+        worker_type=worker_type,
+        disaggregation_bootstrap_port=12345,
+        vllm_overrides={"kv_transfer_config": yaml_config} if yaml_override else None,
+    )
+    assert server_args["kv_transfer_config"] == (yaml_config if yaml_override else cli_config)
+    assert "kv_transfer_config" in checks
+    assert vllm_args.vllm_kv_transfer_config == cli_config
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("worker_type", ["prefill", "decode"])
+def test_external_attach_rejects_changed_declared_mode(vllm_engine, monkeypatch, worker_type):
+    from vime.backends.vllm_utils.external import _normalize_server_info
+
+    vllm_engine.worker_type = worker_type
+    actual = _normalize_server_info(
+        {
+            "tensor_parallel_size": 1,
+            "kv_transfer_config": {"kv_connector": "NixlConnector", "kv_role": "kv_both"},
+            "disaggregation_mode": worker_type,
+        }
+    )
+    monkeypatch.setattr(mod, "get_server_info", lambda url: actual)
+    register = Mock()
+    monkeypatch.setattr(vllm_engine, "_register_to_router", register)
+    expected = {"tensor_parallel_size": 1}
+    vllm_engine._init_external(expected, ["tensor_parallel_size"])
+    register.assert_called_once_with(actual)
+    register.reset_mock()
+    actual["disaggregation_mode"] = "decode" if worker_type == "prefill" else "prefill"
+    with pytest.raises(ValueError, match="disaggregation_mode"):
+        vllm_engine._init_external(expected, ["tensor_parallel_size"])
+    register.assert_not_called()
+
+
+@pytest.mark.unit
 def test_compute_server_args_prefill_requires_bootstrap_port(vllm_args):
     with pytest.raises(AssertionError, match="disaggregation_bootstrap_port"):
         mod._compute_server_args(

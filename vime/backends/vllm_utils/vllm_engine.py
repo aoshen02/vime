@@ -251,6 +251,11 @@ class VLLMEngine(RayActor):
 
         actual_server_args = get_server_info(f"http://{self.server_host}:{self.server_port}")
         _sanity_check_server_args(actual_server_args, expect_server_args)
+        if (
+            self.worker_type in ("prefill", "decode")
+            and actual_server_args.get("disaggregation_mode") != self.worker_type
+        ):
+            raise ValueError(f"External {self.worker_type} worker requires a matching disaggregation_mode")
         self._register_to_router(actual_server_args)
 
     def _init_normal(self, server_args_dict):
@@ -823,7 +828,7 @@ def _compute_server_args(
         field_name = key[len("vllm_") :]
         if field_name not in _VLLM_SERVER_FIELDS:
             continue
-        if field_name in kwargs:
+        if field_name in kwargs and field_name != "kv_transfer_config":
             continue
         if value is None:
             continue

@@ -270,6 +270,7 @@ def install_vllm_cli_stubs() -> None:
             return parser
 
     arg_utils.AsyncEngineArgs = AsyncEngineArgs
+    arg_utils._expand_json_human_readable_numbers = MagicMock(side_effect=AssertionError("requires real vLLM parser"))
     engine_mod.arg_utils = arg_utils
     system_utils_mod = types.ModuleType("vllm.utils.system_utils")
     system_utils_mod.kill_process_tree = lambda pid, include_parent=True: None  # noqa: ARG005

@@ -1,8 +1,9 @@
 import argparse
+import json
 import logging
 from dataclasses import fields
 
-from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.engine.arg_utils import AsyncEngineArgs, _expand_json_human_readable_numbers
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm_router.launch_router import RouterArgs
 
@@ -94,6 +95,21 @@ def add_vllm_arguments(parser):
                     new_flags.append(s)
 
             new_kwargs = kwargs.copy()
+            if canonical == "kv_transfer_config":
+                native_type = new_kwargs["type"]
+
+                def parse_kv_transfer_config(value):
+                    parsed = native_type(value)
+                    if parsed is None:
+                        return None
+                    explicit = json.loads(_expand_json_human_readable_numbers(value))
+                    return {
+                        field.name: getattr(parsed, field.name)
+                        for field in fields(parsed)
+                        if field.name in explicit and not (field.name == "engine_id" and explicit[field.name] is None)
+                    }
+
+                new_kwargs["type"] = parse_kv_transfer_config
             if "dest" in new_kwargs and isinstance(new_kwargs["dest"], str):
                 if not new_kwargs["dest"].startswith("vllm_"):
                     new_kwargs["dest"] = f"vllm_{new_kwargs['dest']}"
