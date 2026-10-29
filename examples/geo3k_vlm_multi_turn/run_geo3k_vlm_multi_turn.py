@@ -107,6 +107,7 @@ def execute():
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--micro-batch-size 1 "
+        "--log-probs-chunk-size 1024 "
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
         "--accumulate-allreduce-grads-in-fp32 "
