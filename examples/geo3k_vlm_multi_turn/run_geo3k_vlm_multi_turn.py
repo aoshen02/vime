@@ -100,7 +100,7 @@ def execute():
         "--tensor-model-parallel-size 2 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
-        "--context-parallel-size 2 "
+        "--context-parallel-size 4 "
         f"--expert-model-parallel-size {NUM_GPUS} "
         "--expert-tensor-parallel-size 1 "
         "--recompute-granularity full "
