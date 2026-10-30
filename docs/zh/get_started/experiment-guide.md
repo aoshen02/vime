@@ -58,7 +58,7 @@ Partial rollout 保存未完成前缀以便之后续跑，也可以用于同步�
 
 ## 3. 选择数值行为
 
-可以先用 BF16 / BF16 建立基线，大 MoE 也可以从维护中的 BF16 训练 + FP8 rollout 路径开始。后者保留 BF16 训练 checkpoint，推理使用独立量化的 HF checkpoint。Attention KV 精度又是另一个维度；hybrid 模型还需单独选择递归状态 dtype。Qwen3.8-27B 提供 attention KV、Mamba SSM 状态和可选的状态 / KV 内存比例，配图分别展示两个池。见 [hybrid 缓存账本](../advanced/rl-systems.md#hybrid-cache)，其中也说明 GLM-5.3-Flash 的不同架构。
+可以先用 BF16 / BF16 建立基线，大 MoE 也可以从维护中的 BF16 训练 + FP8 rollout 路径开始。后者保留 BF16 训练 checkpoint，推理使用独立量化的 HF checkpoint。Attention KV 精度又是另一个维度；hybrid 模型还需单独选择递归状态 dtype。Qwen3.8-27B 提供 attention KV 和 Mamba SSM 状态 dtype，配图分别展示这两种缓存组成。见 [hybrid 缓存账本](../advanced/rl-systems.md#hybrid-cache)，其中也说明 GLM-5.3-Flash 的不同架构。
 
 FP8 训练仍为实验性，INT4 rollout 为 beta；低精度都需要匹配 GPU / kernel 栈。见[精度与内存推导](../advanced/rl-systems.md#precision)。
 

@@ -105,7 +105,6 @@
     precision: 'bf16',
     kv: 'auto',
     mambaDtype: 'auto',
-    mambaRatio: '',
     correction: 'tis',
     r3: true,
     sc: true,
@@ -161,7 +160,7 @@
   };
   const textKeys = ['hf', 'train', 'data', 'save', 'megatron', 'endpoints', 'shared', 'local', 'ib',
     'generate',
-    'reward', 'queueDir', 'queueRun', 'declaration', 'mambaRatio', 'draft'
+    'reward', 'queueDir', 'queueRun', 'declaration', 'draft'
   ];
 
   function sanitize(input) {
@@ -198,7 +197,6 @@
         '').trim();
     if (!models[s.model].hybrid) {
       s.mambaDtype = 'auto';
-      s.mambaRatio = '';
     }
     return s;
   }
@@ -218,7 +216,6 @@
       s.train = s.hf + '_torch_dist';
       s.kv = 'auto';
       s.mambaDtype = 'auto';
-      s.mambaRatio = '';
       s.draftSource = m.mtp ? 'builtin' : 'external';
       s.draft = '';
       s.specSteps = value === 'glm5' ? 4 : 3;
@@ -388,13 +385,9 @@
       'Qwen3.8-27B 使用 qwen3_5 架构，尺寸匹配现有 27B 配置。此文本 RL 配方复用该后端，checkpoint 仍需 GPU 验证。'));
     if (m.hybrid) {
       notes.push(t(
-        'Hybrid cache has attention KV and recurrent state budgets. KV dtype applies only to attention layers. Mamba SSM dtype and its memory ratio are independent; convolution state is separate again. Check backend support and log-prob accuracy for each change.',
-        'Hybrid cache 包含 attention KV 和递归状态预算。KV dtype 只作用于 attention 层；Mamba SSM 精度与内存比例独立，卷积状态又是另一部分。每项调整都需核对后端支持与 log-prob 精度。'
+        'Hybrid cache has attention KV and recurrent state budgets. KV dtype applies only to attention layers. Mamba SSM dtype affects recurrent state; convolution state has its own dtype. Check backend support and log-prob accuracy for each change.',
+        'Hybrid cache 包含 attention KV 和递归状态预算。KV dtype 只作用于 attention 层；Mamba SSM 精度作用于递归状态，卷积状态保留自身的 dtype。每项调整都需核对后端支持与 log-prob 精度。'
         ));
-      if (s.mambaRatio && (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(s.mambaRatio) ||
-          !Number.isFinite(Number(s.mambaRatio)) || Number(s.mambaRatio) <= 0)) errors.push(t(
-        'Mamba / attention KV memory ratio must be a positive number, or left blank for the default ratio of 0.9.',
-        'Mamba / attention KV 内存比例须为正数，或留空使用默认比例 0.9。'));
     }
     if (s.sc) notes.push(t(
       'SC selects REINFORCE with GRPO advantages and no standard-deviation normalization. Sampling is fixed to temperature=1, top_p=1, top_k=-1, without penalties, constraints, or streaming.',
@@ -450,7 +443,6 @@
     if (m.moe) args.push('--vllm-enable-expert-parallel');
     if (m.hybrid && s.mambaDtype !== 'auto')
       args.push(`--vllm-mamba-ssm-cache-dtype ${s.mambaDtype}`);
-    if (m.hybrid) args.push(`--vllm-mamba-full-memory-ratio ${quote(s.mambaRatio || '0.9')}`);
     if (s.speculative) args.push(`--vllm-speculative-config ${quote(JSON.stringify(
       s.draftSource === 'builtin' ? {method: 'mtp', num_speculative_tokens: s.specSteps} :
       {method: 'eagle', model: s.draft, num_speculative_tokens: s.specSteps}
@@ -493,7 +485,7 @@
       layout: ['GPU placement', 'GPU 布局'], schedule: ['Schedule', '调度'], nodes: ['Training nodes × 8 GPU', '训练节点 × 8 GPU'],
       rollout: ['Rollout GPUs', 'Rollout GPU'], prefill: ['Prefill GPUs', 'Prefill GPU'],
       precision: ['Weight precision', '权重精度'], kv: ['Attention KV dtype', 'Attention KV 精度'],
-      mambaDtype: ['SSM dtype', 'SSM 精度'], mambaRatio: ['State / KV memory ratio', '状态 / KV 内存比例'],
+      mambaDtype: ['SSM dtype', 'SSM 精度'],
       correction: ['Behavior correction', 'Behavior 修正'], r3: ['R3', 'R3'], sc: ['SC', 'SC'],
       deterministic: ['Deterministic execution', '确定性执行'], cpuAdam: ['CPU Adam', 'CPU Adam'],
       recompute: ['Activation recomputation', '激活重计算'], pd: ['PD', 'PD'], hicache: ['HiCache', 'HiCache'],
@@ -524,9 +516,9 @@
     if (changed('schedule') || changed('partial') || changed('straw')) insights.push(t(
       'Fully async overlaps generation and training on separate GPUs, but mixes weight versions. Partial rollout saves unfinished prefixes; straw persists queue payloads and enables distributed producers with fully async. Measure staleness/mean, staleness/max, queue waits, rollout time and held-out reward.',
       'Fully async 在独立 GPU 上重叠生成与训练，但会混合权重版本。Partial rollout 保留未完成前缀；straw 持久化队列数据，搭配 fully async 启用分布式 producer。观察 staleness/mean、staleness/max、队列等待、rollout 耗时和独立评估 reward。'));
-    if (['precision', 'kv', 'mambaDtype', 'mambaRatio'].some(changed)) insights.push(t(
-      'BF16 → FP8 changes rollout weight storage and arithmetic; FP8 training also changes the trainer. Attention KV and recurrent state have independent budgets. Measure train_rollout_logprob_abs_diff, reward, rollout time and peak memory; bit width alone does not predict total memory or speed.',
-      'BF16 → FP8 改变 rollout 权重存储与运算，FP8 training 还改变训练侧。Attention KV 与递归状态各有独立预算。观察 train_rollout_logprob_abs_diff、reward、rollout 耗时及显存峰值；位宽不能直接换算总显存或速度。'));
+    if (['precision', 'kv', 'mambaDtype'].some(changed)) insights.push(t(
+      'BF16 → FP8 changes rollout weight storage and arithmetic; FP8 training also changes the trainer. Attention KV and recurrent state have different storage requirements. Measure train_rollout_logprob_abs_diff, reward, rollout time and peak memory; bit width alone does not predict total memory or speed.',
+      'BF16 → FP8 改变 rollout 权重存储与运算，FP8 training 还改变训练侧。Attention KV 与递归状态具有不同的存储需求。观察 train_rollout_logprob_abs_diff、reward、rollout 耗时及显存峰值；位宽不能直接换算总显存或速度。'));
     if (changed('correction')) insights.push(t(
       'For the same illustrative ratio p/q = 0.4/0.1 = 4, TIS with upper bound 2 uses weight 2; ICE-POP outside [0.5, 2] uses 0. This is behavior correction, separate from PPO update clipping. Compare clipping/masking fractions, mismatch and held-out reward.',
       '同一示例 p/q = 0.4/0.1 = 4：TIS 上界 2 时权重为 2；ICE-POP 在 [0.5, 2] 外权重为 0。这是 behavior 修正，与 PPO 更新裁剪独立。比较 clipping/masking 比例、训推差异与独立评估 reward。'));

@@ -87,12 +87,6 @@ $$
 
 只把 BF16 attention KV 改成 FP8 时，$B'\approx Nc_A/2+Kc_R$，因此总缓存通常不会减半。同理，BF16 SSM 只改变递归状态项，卷积状态保持自身的 dtype。
 
-可选的内存比例通过 `--vllm-mamba-full-memory-ratio` 设置 $r=B_R/B_A$。理想化地给两个池分配预算 $B$，联立 $B_A+B_R=B$ 与 $B_R=rB_A$，得到：
-
-$$B_A=\frac{B}{1+r},\qquad B_R=\frac{rB}{1+r}.$$
-
-这不是总 GPU 显存的百分比。调大它，会给递归状态 slot 更多空间、给 attention token 更少空间；应结合分配日志和实际负载选择。留空使用默认比例 0.9。关闭 prefix caching 时，直接指定或由 Vime 的 speculative 默认值传入的请求上限，会改用原生单请求状态需求确定状态预算。外部引擎的参数写入 `serving-reference.sh`，Vime 托管的引擎则使用 `--vllm-` 参数。
-
 向导里可运行的 Flash 起点是 **GLM-4.7-Flash**。上面的 GLM-5.3-Flash hybrid 结构不能直接套用该起点或 GLM-5.3 的 DSA 配方。
 
 ## Deterministic

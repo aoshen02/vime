@@ -101,7 +101,6 @@ def execute():
         "--vllm-max-num-seqs 128 "
         "--vllm-cudagraph-capture-sizes 4 8 16 32 64 "
         '--vllm-speculative-config \'{"method":"mtp","num_speculative_tokens":3}\' '
-        "--vllm-mamba-full-memory-ratio 0.9 "
     )
 
     misc_args = (

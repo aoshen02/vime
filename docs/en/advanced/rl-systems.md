@@ -90,12 +90,6 @@ Use tensor dimensions after sharding for a per-GPU estimate. DSA/MLA uses differ
 
 Changing only BF16 attention KV to FP8 yields $B'\approx Nc_A/2+Kc_R$, so total cache memory does not generally halve. Similarly, BF16 SSM affects only the recurrent term, leaving convolution state untouched.
 
-The optional memory control sets $r=B_R/B_A$ through `--vllm-mamba-full-memory-ratio`. For an ideal two-pool budget $B$, solve $B_A+B_R=B$ and $B_R=rB_A$:
-
-$$B_A=\frac{B}{1+r},\qquad B_R=\frac{rB}{1+r}.$$
-
-This ratio is not a fraction of total GPU memory. Increasing it reserves more space for recurrent slots and less for attention tokens; use allocation logs and workload measurements to choose it. Leaving the field blank uses the default ratio of 0.9. With prefix caching disabled, a request limit supplied directly or by Vime's speculative default selects native per-request state sizing instead. External deployments receive these options in `serving-reference.sh`; managed engines receive the `--vllm-` flags.
-
 The runnable Flash preset is **GLM-4.7-Flash**. GLM-5.3-Flash's hybrid design above does not make it interchangeable with that preset or with the GLM-5.3 DSA recipe.
 
 ## Deterministic

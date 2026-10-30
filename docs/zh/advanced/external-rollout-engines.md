@@ -28,7 +28,6 @@ VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10090 ...
 VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10091 ...
 ```
 
-Vime 管理的 engine 默认使用 `mamba_full_memory_ratio=0.9`。Hybrid SSM external engine 请传入 `--mamba-full-memory-ratio 0.9`（或预期的 per-engine 值）；外部 engine 自行管理缓存分配。
 
 训练任务里传入这些地址：
 

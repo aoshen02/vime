@@ -58,7 +58,7 @@ Partial rollout keeps unfinished prefixes for later continuation, including unde
 
 ## 3. Choose numerical behavior
 
-Start with BF16 on both sides to establish a baseline, or the maintained BF16-training / FP8-rollout path for large MoE. The latter keeps a BF16 training checkpoint and uses a separately quantized HF checkpoint for serving. Attention KV precision is another independent choice. Hybrid models also need a separate recurrent-state dtype: Qwen3.8-27B exposes attention KV, Mamba SSM state, and an optional state/KV memory ratio. The diagram shows the two pools separately. See [hybrid cache accounting](../advanced/rl-systems.md#hybrid-cache), including GLM-5.3-Flash's distinct architecture.
+Start with BF16 on both sides to establish a baseline, or the maintained BF16-training / FP8-rollout path for large MoE. The latter keeps a BF16 training checkpoint and uses a separately quantized HF checkpoint for serving. Attention KV precision is another independent choice. Hybrid models also need a separate recurrent-state dtype: Qwen3.8-27B exposes attention KV and Mamba SSM state dtypes. The diagram shows these cache components separately. See [hybrid cache accounting](../advanced/rl-systems.md#hybrid-cache), including GLM-5.3-Flash's distinct architecture.
 
 FP8 training is experimental; INT4 rollout is beta. Every lower-precision path needs a compatible GPU/kernel stack. See [precision and memory derivation](../advanced/rl-systems.md#precision).
 

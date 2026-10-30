@@ -197,7 +197,7 @@ ray job submit --address="$RAY_DASHBOARD_ADDRESS" --runtime-env="$RUNTIME_ENV" -
     --vllm-server-concurrency "$SERVER_CONCURRENCY" "${VLLM_CAPACITY_ARGS[@]}" \
     --vllm-gpu-memory-utilization "${VLLM_MEM_FRACTION:-0.8}" --vllm-max-model-len "$MAX_CONTEXT_LEN" \
     --vllm-speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$SPECULATIVE_STEPS}" \
-    --vllm-enable-prefix-caching --vllm-mamba-cache-mode align --vllm-mamba-full-memory-ratio 0.5 \
+    --vllm-enable-prefix-caching --vllm-mamba-cache-mode align \
     --vllm-tool-call-parser qwen3_coder --vllm-reasoning-parser qwen3 \
     --attention-dropout 0 --hidden-dropout 0 --accumulate-allreduce-grads-in-fp32 \
     --attention-softmax-in-fp32 --attention-backend flash \

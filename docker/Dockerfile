@@ -222,10 +222,8 @@ COPY docker/patch/${PATCH_VERSION}/vllm-mm-decoder-only.patch /tmp/vllm-mm-decod
 COPY docker/patch/${PATCH_VERSION}/vllm-deepgemm-bf16.patch /tmp/vllm-deepgemm-bf16.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepep-optional-shrink.patch /tmp/vllm-deepep-optional-shrink.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-glm5next-unbounded-gate.patch /tmp/vllm-glm5next-unbounded-gate.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-utility-rpc-cleanup.patch /tmp/vllm-utility-rpc-cleanup.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-tito-columnar-logprobs-render.patch /tmp/vllm-tito-columnar-logprobs-render.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-watchdog-fatal-action.patch /tmp/vllm-watchdog-fatal-action.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-hybrid-cache-capacity.patch /tmp/vllm-hybrid-cache-capacity.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-mooncake-producer-handoff.patch /tmp/vllm-mooncake-producer-handoff.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
@@ -243,10 +241,8 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-deepgemm-bf16.patch && \
     git apply -v /tmp/vllm-deepep-optional-shrink.patch && \
     git apply -v /tmp/vllm-glm5next-unbounded-gate.patch && \
-    git apply -v /tmp/vllm-utility-rpc-cleanup.patch && \
     git apply -v /tmp/vllm-tito-columnar-logprobs-render.patch && \
     git apply -v /tmp/vllm-watchdog-fatal-action.patch && \
-    git apply -v --include='vllm/*' /tmp/vllm-hybrid-cache-capacity.patch && \
     git apply -v --include='vllm/*' /tmp/vllm-mooncake-producer-handoff.patch && \
     rm /tmp/vllm-pull_weights.patch \
        /tmp/vllm-score-centering.patch \
@@ -262,11 +258,9 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
        /tmp/vllm-deepgemm-bf16.patch \
        /tmp/vllm-deepep-optional-shrink.patch \
        /tmp/vllm-glm5next-unbounded-gate.patch \
-       /tmp/vllm-utility-rpc-cleanup.patch \
        /tmp/vllm-tito-columnar-logprobs-render.patch \
        /tmp/vllm-watchdog-fatal-action.patch \
-       /tmp/vllm-mooncake-producer-handoff.patch \
-       /tmp/vllm-hybrid-cache-capacity.patch
+       /tmp/vllm-mooncake-producer-handoff.patch
 
 # ====================================== Install main package ============================================
 

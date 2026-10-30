@@ -90,7 +90,7 @@
       title: t('Precision & quantization', '精度与量化'),
       formula: 'q(a | h) = softmax(f_quantized(h))ₐ',
       text: t(
-        'Lower precision changes the rollout distribution. Weight precision, attention KV dtype and hybrid recurrent-state dtype are independent choices. FP8 attention KV requires model/backend support; Mamba SSM state and convolution state have separate storage. Compare the two cache pools below.',
+        'Lower precision changes the rollout distribution. Weight precision, attention KV dtype and hybrid recurrent-state dtype are independent choices. FP8 attention KV requires model/backend support; Mamba SSM state and convolution state have separate storage. Compare the two cache components below.',
         '低精度会改变 rollout 分布。权重、attention KV 和 hybrid 递归状态分别选择精度。FP8 attention KV 需模型与后端支持；Mamba SSM 和卷积状态各有独立存储。下面分别说明两类缓存。'
       ),
       paper: 'https://arxiv.org/abs/2209.05433',
@@ -308,11 +308,7 @@
             ['bfloat16', 'BF16', t(
               'Smaller recurrent state. Validate long-sequence accuracy and kernel support.',
               '减少递归状态存储；验证长序列精度与 kernel 支持。')]
-          ]) + input('mambaRatio', t('Mamba / attention KV memory ratio (optional)',
-              'Mamba / attention KV 内存比例（选填）'),
-            'text', t(
-              'State-pool bytes ÷ attention-KV-pool bytes, e.g. 0.9. Leave blank for the default ratio of 0.9; this is not a percentage of all GPU memory.',
-              '状态池字节数 ÷ attention KV 池字节数，例如 0.9。留空使用默认比例 0.9；这不是总显存百分比。')) : '');
+          ]) : '');
       case 3:
         return options('correction', t('Importance correction', '重要性修正'), [
             ['none', t('Observe only', '暂不修正'), t('Baseline. Watch log-prob mismatch and reward.',

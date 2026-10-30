@@ -201,26 +201,6 @@ def test_compute_server_args_spec_request_default_is_per_domain(vllm_args, metho
     assert server_args["max_num_seqs"] == 48
     assert "max_num_seqs" in checks
     assert "mamba_fixed_requests" not in server_args
-    assert server_args["mamba_full_memory_ratio"] == 0.9
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("cli_ratio", [None, 0.5, 1.5])
-@pytest.mark.parametrize("override", [{}, {"mamba_full_memory_ratio": None}, {"mamba_full_memory_ratio": 0.75}])
-def test_compute_server_args_mamba_ratio_default_and_overrides(vllm_args, monkeypatch, cli_ratio, override):
-    monkeypatch.setattr(mod, "_VLLM_SERVER_FIELDS", frozenset({"mamba_full_memory_ratio"}))
-    vllm_args.vllm_mamba_full_memory_ratio = cli_ratio
-    server_args, checks = mod._compute_server_args(
-        vllm_args,
-        rank=0,
-        dist_init_addr=None,
-        host="127.0.0.1",
-        port=8000,
-        vllm_overrides=override,
-    )
-    ratio = override.get("mamba_full_memory_ratio", cli_ratio)
-    assert server_args["mamba_full_memory_ratio"] == (0.9 if ratio is None else ratio)
-    assert "mamba_full_memory_ratio" not in checks
 
 
 @pytest.mark.unit
