@@ -69,9 +69,7 @@ def start_epd_server_groups(
         if group_config.worker_type == "encoder":
             continue
         overrides_extra = (
-            transfer_overrides | {"mm_decoder_only": True}
-            if encoder_endpoints and group_config.worker_type in ("regular", "prefill")
-            else None
+            transfer_overrides if encoder_endpoints and group_config.worker_type in ("regular", "prefill") else None
         )
         group = placement.create(
             group_config,

@@ -217,8 +217,6 @@ COPY docker/patch/${PATCH_VERSION}/vllm-tensor-dump.patch /tmp/vllm-tensor-dump.
 COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-nixl-peer-retirement.patch /tmp/vllm-nixl-peer-retirement.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-host-cache-ratio.patch /tmp/vllm-host-cache-ratio.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-ec-dp-control.patch /tmp/vllm-ec-dp-control.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-mm-decoder-only.patch /tmp/vllm-mm-decoder-only.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepgemm-bf16.patch /tmp/vllm-deepgemm-bf16.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepep-optional-shrink.patch /tmp/vllm-deepep-optional-shrink.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-glm5next-unbounded-gate.patch /tmp/vllm-glm5next-unbounded-gate.patch
@@ -236,8 +234,6 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v /tmp/vllm-fine-grained-tracing.patch && \
     git apply -v /tmp/vllm-nixl-peer-retirement.patch && \
     git apply -v /tmp/vllm-host-cache-ratio.patch && \
-    git apply -v /tmp/vllm-ec-dp-control.patch && \
-    git apply -v /tmp/vllm-mm-decoder-only.patch && \
     git apply -v /tmp/vllm-deepgemm-bf16.patch && \
     git apply -v /tmp/vllm-deepep-optional-shrink.patch && \
     git apply -v /tmp/vllm-glm5next-unbounded-gate.patch && \
@@ -253,8 +249,6 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
        /tmp/vllm-fine-grained-tracing.patch \
        /tmp/vllm-nixl-peer-retirement.patch \
        /tmp/vllm-host-cache-ratio.patch \
-       /tmp/vllm-ec-dp-control.patch \
-       /tmp/vllm-mm-decoder-only.patch \
        /tmp/vllm-deepgemm-bf16.patch \
        /tmp/vllm-deepep-optional-shrink.patch \
        /tmp/vllm-glm5next-unbounded-gate.patch \

@@ -743,10 +743,17 @@ def test_generate_consistent_hash_header(patch_generate_state, monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("with_encoder", [False, True])
+@pytest.mark.parametrize(("with_encoder", "encoder_failure"), [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("modality", ["image_url", "audio_url", "video_url"])
-def test_generate_multimodal_render_then_generate(patch_generate_state, monkeypatch, with_encoder, modality):
-    render_resp = {"token_ids": [11, 12]}
+def test_generate_multimodal_render_then_generate(
+    patch_generate_state, monkeypatch, with_encoder, encoder_failure, modality
+):
+    features = {
+        "kwargs_data": {"media": ["encoded-original-media"]},
+        "mm_hashes": {"media": ["caller-media"]},
+        "mm_placeholders": {"media": [{"offset": 0, "length": 1}]},
+    }
+    render_resp = {"token_ids": [11, 12], "features": features}
     gen_resp = _generate_response([13])
     item = {"type": modality, modality: {"url": "https://example.com/media"}, "uuid": "caller-media"}
     ec_params = {"caller-media": {"peer_host": "encoder", "peer_port": 9000, "metadata": {}}}
@@ -757,13 +764,18 @@ def test_generate_multimodal_render_then_generate(patch_generate_state, monkeypa
     async def fake_post(url, payload, headers=None, **kwargs):
         if url.startswith("http://encoder"):
             assert payload["messages"][0]["content"] == [item]
+            if encoder_failure:
+                raise mod.httpx.ConnectError("encoder unavailable")
             return {"ec_transfer_params": ec_params}
         if url.endswith("/render"):
+            assert payload["messages"][0]["content"] == [item]
             return render_resp
-        if with_encoder:
+        if with_encoder and not encoder_failure:
             assert payload["ec_transfer_params"] == ec_params
         else:
             assert "ec_transfer_params" not in payload
+        assert payload["features"]["kwargs_data"] == features["kwargs_data"]
+        assert payload["features"]["mm_hashes"] == features["mm_hashes"]
         return gen_resp
 
     monkeypatch.setattr(mod, "post", fake_post)

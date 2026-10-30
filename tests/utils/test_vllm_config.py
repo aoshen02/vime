@@ -634,8 +634,7 @@ class TestZeroGpuRolloutConfig:
         groups = servers["default"].server_groups
         assert [group.worker_type for group in groups] == ["encoder", "regular"]
         assert "language_only" not in groups[1].vllm_overrides
-        assert groups[1].vllm_overrides["mm_decoder_only"] is True
-        assert "mm_decoder_only" not in groups[0].vllm_overrides
+        assert "mm_encoder_only" not in groups[1].vllm_overrides
         assert "encoder_urls" not in groups[1].vllm_overrides
         assert args.vllm_model_encoder_endpoints["default"][1] == ["http://encoder"]
         assert groups[1].vllm_overrides["ec_transfer_config"]["ec_connector"] == "ECCPUConnector"

@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from typing import Any
 
+import httpx
 import numpy as np
 from tqdm import tqdm
 
@@ -125,16 +126,20 @@ async def prime_encoder(
     model, endpoints = encoders
 
     async def prime(index: int, item: dict[str, Any]) -> dict[str, Any]:
-        response = await post(
-            f"{endpoints[index % len(endpoints)].rstrip('/')}/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": [item]}],
-                "max_tokens": 1,
-                "stream": False,
-            },
-            headers={"x-request-id": str(uuid.uuid4())},
-        )
+        try:
+            response = await post(
+                f"{endpoints[index % len(endpoints)].rstrip('/')}/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": [item]}],
+                    "max_tokens": 1,
+                    "stream": False,
+                },
+                headers={"x-request-id": str(uuid.uuid4())},
+            )
+        except httpx.HTTPError:
+            logger.warning("Encoder unavailable; preserving media for local encoding", exc_info=True)
+            return {}
         return response.get("ec_transfer_params") or {}
 
     parameters = await asyncio.gather(*(prime(index, item) for index, item in enumerate(media)))
