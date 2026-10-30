@@ -210,11 +210,10 @@ RUN cd Megatron-LM && \
 # so apply the independently maintained patches in their validated order.
 COPY docker/patch/${PATCH_VERSION}/vllm-pull_weights.patch /tmp/vllm-pull_weights.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-score-centering.patch /tmp/vllm-score-centering.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-pd-request-metrics.patch /tmp/vllm-pd-request-metrics.patch
+COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vllm-inflight-queue-diagnostics.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-generation-health.patch /tmp/vllm-generation-health.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-tensor-dump.patch /tmp/vllm-tensor-dump.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-nixl-peer-retirement.patch /tmp/vllm-nixl-peer-retirement.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-host-cache-ratio.patch /tmp/vllm-host-cache-ratio.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepgemm-bf16.patch /tmp/vllm-deepgemm-bf16.patch
@@ -227,11 +226,10 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
     git apply -v /tmp/vllm-score-centering.patch && \
-    git apply -v /tmp/vllm-pd-request-metrics.patch && \
+    git apply -v /tmp/vllm-fine-grained-tracing.patch && \
     git apply -v /tmp/vllm-inflight-queue-diagnostics.patch && \
     git apply -v /tmp/vllm-generation-health.patch && \
     git apply -v /tmp/vllm-tensor-dump.patch && \
-    git apply -v /tmp/vllm-fine-grained-tracing.patch && \
     git apply -v /tmp/vllm-nixl-peer-retirement.patch && \
     git apply -v /tmp/vllm-host-cache-ratio.patch && \
     git apply -v /tmp/vllm-deepgemm-bf16.patch && \
@@ -242,11 +240,10 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
     git apply -v --include='vllm/*' /tmp/vllm-mooncake-producer-handoff.patch && \
     rm /tmp/vllm-pull_weights.patch \
        /tmp/vllm-score-centering.patch \
-       /tmp/vllm-pd-request-metrics.patch \
+       /tmp/vllm-fine-grained-tracing.patch \
        /tmp/vllm-inflight-queue-diagnostics.patch \
        /tmp/vllm-generation-health.patch \
        /tmp/vllm-tensor-dump.patch \
-       /tmp/vllm-fine-grained-tracing.patch \
        /tmp/vllm-nixl-peer-retirement.patch \
        /tmp/vllm-host-cache-ratio.patch \
        /tmp/vllm-deepgemm-bf16.patch \

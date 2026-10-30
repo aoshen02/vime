@@ -44,8 +44,8 @@ carry the vLLM code they are written against:
 
 - per-chunk sampling-mask output (needs `SamplingMaskLists.merge`),
   so ROCm keeps emitting sampling masks only on finish;
-- `vllm-pd-request-metrics.patch`, which targets a protocol module this base
-  splits differently, so per-request PD telemetry is absent. vime reads those
+- per-request PD telemetry in `vllm-fine-grained-tracing.patch`, which targets
+  a protocol module this base splits differently, so per-request PD telemetry is absent. vime reads those
   fields defensively, so rollouts are unaffected.
 
 Both are guarded: the build fails once the base converges, at which point the

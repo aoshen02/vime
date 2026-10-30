@@ -116,7 +116,7 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
       exit 1; \
     fi && \
     if [ -e vllm/entrypoints/openai/engine/protocol.py ]; then \
-      echo "Base converged on the CUDA protocol layout — apply vllm-pd-request-metrics.patch here." && \
+      echo "Base converged on the CUDA protocol layout — port PD metrics from vllm-fine-grained-tracing.patch here." && \
       exit 1; \
     fi && \
     awk '/^diff --git /{keep = ($0 !~ /qwen3_omni_moe_thinker|v1\/engine\/output_processor/)} keep' \
