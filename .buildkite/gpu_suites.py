@@ -265,7 +265,13 @@ def gpu_step(suite: str, test_file: str, num_gpus: int, extra_args: str, env: di
 
 
 def main() -> None:
-    steps = [gpu_step(suite, *entry) for suite in selected_suites() for entry in SUITES[suite]]
+    test_files = set(os.environ.get("VIME_CI_TESTS", "").split())
+    steps = [
+        gpu_step(suite, *entry)
+        for suite in selected_suites()
+        for entry in SUITES[suite]
+        if not test_files or entry[0] in test_files
+    ]
     if not steps:
         raise SystemExit("no GPU suites selected")
     print(json.dumps({"steps": steps}, indent=2))
