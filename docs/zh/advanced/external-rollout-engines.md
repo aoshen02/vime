@@ -28,7 +28,6 @@ VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10090 ...
 VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10091 ...
 ```
 
-
 训练任务里传入这些地址：
 
 ```bash

@@ -188,7 +188,6 @@ class VLLMEngine(RayActor):
         self.base_gpu_id = base_gpu_id
         self.vllm_overrides = vllm_overrides or {}
         self.num_gpus_per_engine = num_gpus_per_engine
-        self._weight_version: str | None = None
 
     def init(
         self,
@@ -202,8 +201,9 @@ class VLLMEngine(RayActor):
     ):
         del nccl_port
 
+        router_ip = router_ip if router_ip is not None else self.args.vllm_router_ip
         self.router_ip = _wrap_ipv6(router_ip) if router_ip is not None else None
-        self.router_port = router_port
+        self.router_port = router_port if router_port is not None else self.args.vllm_router_port
 
         host = host or get_host_info()[1]
 
@@ -405,16 +405,14 @@ class VLLMEngine(RayActor):
             error.add_note(f"{response.text=}")
             raise
         weight_version = response.json()["weight_version"]
-        self._weight_version = None if weight_version is None else str(weight_version)
-        return self._weight_version
+        return None if weight_version is None else str(weight_version)
 
     def set_weight_version(self, new_version: str):
-        version = str(new_version)
-        result = self._make_request("update_weight_version", {"new_version": version})
-        self._weight_version = version
-        return result
+        return self._make_request("update_weight_version", {"new_version": str(new_version)})
 
     def release_memory_occupation(self, level: int = 2):
+        if self.node_rank != 0:
+            return
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/sleep", params={"level": level, "mode": "keep"}
         )
@@ -424,6 +422,8 @@ class VLLMEngine(RayActor):
         return response.json()
 
     def resume_memory_occupation(self, tags: list[str] = None):
+        if self.node_rank != 0:
+            return
         tags = _normalize_vllm_wake_tags(tags)
         wake_params: list[tuple[str, str]] | None = [("tags", t) for t in tags] if tags else None
         response = requests.post(f"http://{self.server_host}:{self.server_port}/wake_up", params=wake_params)
@@ -447,10 +447,7 @@ class VLLMEngine(RayActor):
 
     def finish_weight_update(self, weight_version: str | None = None) -> dict:
         payload = {} if weight_version is None else {"weight_version": str(weight_version)}
-        result = self._make_request("finish_weight_update", payload)
-        if weight_version is not None:
-            self._weight_version = str(weight_version)
-        return result
+        return self._make_request("finish_weight_update", payload)
 
     def pull_weights(self, target_version: int):
         if self.node_rank != 0:
@@ -699,11 +696,7 @@ def _compute_server_args(
     vllm_overrides: dict | None = None,
     num_gpus_per_engine: int | None = None,
 ):
-    normalized_overrides = {}
-    for key, value in (vllm_overrides or {}).items():
-        normalized_key = key.replace("-", "_")
-        normalized_overrides[normalized_key] = value
-    vllm_overrides = normalized_overrides
+    vllm_overrides = {key.replace("-", "_"): value for key, value in (vllm_overrides or {}).items()}
     ec_transfer_override = vllm_overrides.pop("ec_transfer_config", None)
 
     _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
@@ -767,12 +760,12 @@ def _compute_server_args(
         ), "disaggregation_bootstrap_port must be set for prefill worker"
         if not args.rollout_external:
             kwargs["kv_transfer_config"] = {
-                "kv_connector": "NixlConnector",
+                "kv_connector": "MooncakeConnector",
                 "kv_role": "kv_producer",
             }
     elif worker_type == "decode" and not args.rollout_external:
         kwargs["kv_transfer_config"] = {
-            "kv_connector": "NixlConnector",
+            "kv_connector": "MooncakeConnector",
             "kv_role": "kv_consumer",
         }
 
@@ -806,10 +799,7 @@ def _compute_server_args(
     ):
         kwargs["max_model_len"] = args.rollout_max_context_len
 
-    if args.colocate:
-        kwargs["weight_transfer_config"] = {"backend": "ipc"}
-    else:
-        kwargs["weight_transfer_config"] = {"backend": "nccl"}
+    kwargs["weight_transfer_config"] = {"backend": "ipc" if args.colocate else "nccl"}
 
     if worker_type == "encoder":
         # vLLM EPD producers have no language-model KV cache groups. Prefix

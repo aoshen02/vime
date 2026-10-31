@@ -31,14 +31,10 @@ non-streaming choice, so we parse it inline exactly like
 :func:`vime.rollout.vllm_rollout.generate`.
 """
 
-import base64
-import io
 import json
 import logging
 from argparse import Namespace
 from typing import Any
-
-import numpy as np
 
 from vime.observability.trace_utils import build_vllm_meta_trace_attrs, trace_span
 from vime.rollout.vllm_rollout import (
@@ -140,6 +136,7 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     base_response = sample.response or ""
     base_response_length = sample.response_length
     base_log_probs = list(sample.rollout_log_probs or [])
+    base_weight_versions = list(sample.weight_versions)
     base_loss_mask = list(sample.loss_mask) if sample.loss_mask is not None else None
 
     skip_sp = params.get("skip_special_tokens")
@@ -217,6 +214,8 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
                 )
                 sample.response_length = base_response_length + len(call_tokens)
                 sample.rollout_log_probs = base_log_probs + call_log_probs
+                if call_tokens:
+                    sample.weight_versions = base_weight_versions + weight_versions
                 if base_loss_mask is not None:
                     assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
                     sample.loss_mask = base_loss_mask + [1] * len(call_tokens)
@@ -234,48 +233,12 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
             span.update(build_vllm_meta_trace_attrs({**trace_metadata, "choices": [last_choice], "usage": last_usage}))
 
     if finish_reason and last_choice is not None:
-        new_response_tokens = call_tokens
-        new_response_log_probs = [float(x) for x in call_log_probs]
-
-        # Build meta_info from the terminal choice + usage, mirroring generate().
-        fr = last_choice.get("finish_reason") or "stop"
-        if isinstance(fr, dict):
-            finish = fr
-        elif fr == "length":
-            finish = {"type": "length"}
-        elif fr in ("abort", "cancelled"):
-            finish = {"type": "abort"}
-        else:
-            finish = {"type": "stop"}
-        meta: dict[str, Any] = {"finish_reason": finish}
-        if last_usage:
-            meta["prompt_tokens"] = last_usage.get("prompt_tokens", 0)
-            meta["completion_tokens"] = last_usage.get("completion_tokens", 0)
-            meta["cached_tokens"] = (last_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-        spec_stats = response_metrics.get("speculative_decoding")
-        if spec_stats:
-            meta["spec_accept_token_num"] = spec_stats.get(
-                "num_accepted_draft_tokens", spec_stats.get("num_accepted_tokens", 0)
-            )
-            meta["spec_draft_token_num"] = spec_stats.get("num_draft_tokens", 0)
-            meta["spec_verify_ct"] = spec_stats.get("num_spec_steps", spec_stats.get("num_verify_steps", 0))
-        if new_response_tokens:
-            meta["output_token_logprobs"] = [
-                [float(lp), int(tid)] for lp, tid in zip(new_response_log_probs, new_response_tokens, strict=True)
-            ]
-
-        # MoE routing replay ships on the terminal choice as a base64 .npy blob; decode
-        # into meta_info. Guard on value: vLLM emits ``routed_experts: null`` when off.
-        if last_choice.get("routed_experts") is not None:
-            raw = base64.b64decode(last_choice["routed_experts"].encode("ascii"), validate=True)
-            meta["routed_experts"] = np.load(io.BytesIO(raw), allow_pickle=False)
+        meta = _inference_generate_meta_info(
+            {"choices": [last_choice], "usage": last_usage, "metrics": response_metrics}
+        )
         # tokens already accumulated above; finalize metadata only (no token re-append).
-        if call_tokens:
-            sample.weight_versions.extend(weight_versions)
         sample.append_response_tokens(args, meta_info=meta)
     elif state.aborted:
-        if call_tokens:
-            sample.weight_versions.extend(weight_versions)
         sample.status = Sample.Status.ABORTED
     else:
         raise RuntimeError("vLLM streaming response ended without a terminal finish_reason.")

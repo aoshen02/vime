@@ -29,7 +29,7 @@ from aiohttp import web
 from vime.agent.parsing import parse_model_output
 from vime.agent.trajectory import REPLAY_FIELDS, TrajectoryManager, TurnRecord
 from vime.observability.trace_utils import TraceHandle, bind_trace_carrier, build_vllm_meta_trace_attrs, trace_span
-from vime.rollout.vllm_rollout import _inference_generate_meta_info
+from vime.rollout.vllm_rollout import _inference_generate_meta_info, _inference_generate_tokens_and_logprobs
 from vime.utils.score_centering import _score_centering_metadata, score_centering_request
 from vime.utils.types import Sample
 
@@ -564,19 +564,6 @@ def _vllm_sampling_body(sp: dict) -> dict:
     return body
 
 
-def _tokens_and_logprobs_from_choice(choice: dict) -> tuple[list[int], list[float]]:
-    """Parse ``token_ids`` + ``logprobs.content[i].logprob`` from a vLLM
-    ``/inference/v1/generate`` choice. Mirrors vime ``_inference_generate_tokens_and_logprobs``."""
-    tids_raw = choice.get("token_ids")
-    if not (isinstance(tids_raw, list) and tids_raw and all(isinstance(x, int) for x in tids_raw)):
-        return [], []
-    tids = [int(x) for x in tids_raw]
-    lp = choice.get("logprobs")
-    content = (lp.get("content") or []) if isinstance(lp, dict) else []
-    pairs = list(zip(tids, content, strict=False))
-    return [token_id for token_id, _ in pairs], [float(item["logprob"]) for _, item in pairs]
-
-
 async def call_vllm_generate(
     prompt_ids: list[int],
     session: Any,
@@ -614,6 +601,7 @@ async def call_vllm_generate(
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
 
     vllm_url = adapter.vllm_url
+    rid = None
     headers = {"x-session-id": session_id} if session_id and session_id != "default" else None
     timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
     captured = Sample(tokens=list(prompt_ids))
@@ -623,17 +611,14 @@ async def call_vllm_generate(
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             while captured.response_length < max_new_tokens:
+                rid = uuid.uuid4().hex
                 remaining = max_new_tokens - captured.response_length
                 payload = {
-                    "request_id": uuid.uuid4().hex,
+                    "request_id": rid,
                     "token_ids": captured.tokens,
                     "sampling_params": _vllm_sampling_body({**sp, "max_new_tokens": remaining}),
                 }
-                if sp.get("top_p", 1.0) < 1:
-                    payload["sampling_params"]["return_sampling_mask"] = True
-                    if score_centering:
-                        payload["sampling_params"]["return_sampling_mask_logprobs"] = True
-                elif score_centering:
+                if score_centering and sp.get("top_p", 1.0) == 1:
                     payload["sampling_params"]["logprobs"] = adapter.rollout_args.score_centering_top_k + 1
                 if routing_replay:
                     start = captured.get_rollout_routed_experts_length() if captured.response_length else 0
@@ -664,9 +649,10 @@ async def call_vllm_generate(
                         if response.status >= 400:
                             text = await response.text()
                             logger.warning(
-                                "[%s] sid=%s vllm upstream %d: %.200s",
+                                "[%s] sid=%s rid=%s vllm upstream %d: %.200s",
                                 adapter.log_prefix,
                                 session_id,
+                                rid,
                                 response.status,
                                 text,
                             )
@@ -677,7 +663,7 @@ async def call_vllm_generate(
                 choice = (data.get("choices") or [{}])[0]
                 if choice.get("logprobs") is None:
                     raise ValueError("vLLM must return sampled token logprobs for token-exact training")
-                output_ids, output_log_probs = _tokens_and_logprobs_from_choice(choice)
+                output_ids, output_log_probs = _inference_generate_tokens_and_logprobs(choice)
                 meta = _inference_generate_meta_info(data)
                 if "completion_tokens" in meta and int(meta["completion_tokens"]) != len(output_ids):
                     raise ValueError("vLLM completion_tokens does not match the captured output token count")
@@ -728,7 +714,7 @@ async def call_vllm_generate(
                     ):
                         await asyncio.sleep(0.1)
     except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError) as error:
-        logger.debug("[%s] sid=%s turn aborted: %s", adapter.log_prefix, session_id, type(error).__name__)
+        logger.debug("[%s] sid=%s rid=%s turn aborted: %s", adapter.log_prefix, session_id, rid, type(error).__name__)
         raise
 
     if captured.rollout_routed_experts is not None:

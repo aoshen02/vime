@@ -22,7 +22,6 @@ ARG VLLM_ROUTER_COMMIT=1fbcde7443d75b36befb61bc081f64c2a1f13a4b
 COPY docker/patch/${PATCH_VERSION}/router-health-check.patch /tmp/router-health-check.patch
 COPY docker/patch/${PATCH_VERSION}/router-pd-registration.patch /tmp/router-pd-registration.patch
 COPY docker/patch/${PATCH_VERSION}/router-worker-registration.patch /tmp/router-worker-registration.patch
-COPY docker/patch/${PATCH_VERSION}/router-mooncake-producer-handoff.patch /tmp/router-mooncake-producer-handoff.patch
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake pkg-config libssl-dev && \
     uv pip install --system setuptools-rust wheel && \
     git init /router && cd /router && git remote add origin https://github.com/vllm-project/router.git && \
@@ -30,7 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends git cmake pkg-c
     git apply /tmp/router-health-check.patch && \
     git apply /tmp/router-pd-registration.patch && \
     git apply /tmp/router-worker-registration.patch && \
-    git apply /tmp/router-mooncake-producer-handoff.patch && \
     uv build --python /usr/bin/python3 --wheel --no-build-isolation --out-dir /wheels
 
 FROM ${BASE_IMAGE}
@@ -211,47 +209,35 @@ RUN cd Megatron-LM && \
 COPY docker/patch/${PATCH_VERSION}/vllm-pull_weights.patch /tmp/vllm-pull_weights.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-score-centering.patch /tmp/vllm-score-centering.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-fine-grained-tracing.patch /tmp/vllm-fine-grained-tracing.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vllm-inflight-queue-diagnostics.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-generation-health.patch /tmp/vllm-generation-health.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-tensor-dump.patch /tmp/vllm-tensor-dump.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-nixl-peer-retirement.patch /tmp/vllm-nixl-peer-retirement.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-host-cache-ratio.patch /tmp/vllm-host-cache-ratio.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepgemm-bf16.patch /tmp/vllm-deepgemm-bf16.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-deepep-optional-shrink.patch /tmp/vllm-deepep-optional-shrink.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-glm5next-unbounded-gate.patch /tmp/vllm-glm5next-unbounded-gate.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-tito-columnar-logprobs-render.patch /tmp/vllm-tito-columnar-logprobs-render.patch
 COPY docker/patch/${PATCH_VERSION}/vllm-watchdog-fatal-action.patch /tmp/vllm-watchdog-fatal-action.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-mooncake-producer-handoff.patch /tmp/vllm-mooncake-producer-handoff.patch
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     git apply -v /tmp/vllm-pull_weights.patch && \
     git apply -v /tmp/vllm-score-centering.patch && \
     git apply -v /tmp/vllm-fine-grained-tracing.patch && \
-    git apply -v /tmp/vllm-inflight-queue-diagnostics.patch && \
     git apply -v /tmp/vllm-generation-health.patch && \
     git apply -v /tmp/vllm-tensor-dump.patch && \
-    git apply -v /tmp/vllm-nixl-peer-retirement.patch && \
-    git apply -v /tmp/vllm-host-cache-ratio.patch && \
     git apply -v /tmp/vllm-deepgemm-bf16.patch && \
     git apply -v /tmp/vllm-deepep-optional-shrink.patch && \
     git apply -v /tmp/vllm-glm5next-unbounded-gate.patch && \
     git apply -v /tmp/vllm-tito-columnar-logprobs-render.patch && \
     git apply -v /tmp/vllm-watchdog-fatal-action.patch && \
-    git apply -v --include='vllm/*' /tmp/vllm-mooncake-producer-handoff.patch && \
     rm /tmp/vllm-pull_weights.patch \
        /tmp/vllm-score-centering.patch \
        /tmp/vllm-fine-grained-tracing.patch \
-       /tmp/vllm-inflight-queue-diagnostics.patch \
        /tmp/vllm-generation-health.patch \
        /tmp/vllm-tensor-dump.patch \
-       /tmp/vllm-nixl-peer-retirement.patch \
-       /tmp/vllm-host-cache-ratio.patch \
        /tmp/vllm-deepgemm-bf16.patch \
        /tmp/vllm-deepep-optional-shrink.patch \
        /tmp/vllm-glm5next-unbounded-gate.patch \
        /tmp/vllm-tito-columnar-logprobs-render.patch \
-       /tmp/vllm-watchdog-fatal-action.patch \
-       /tmp/vllm-mooncake-producer-handoff.patch
+       /tmp/vllm-watchdog-fatal-action.patch
 
 # ====================================== Install main package ============================================
 

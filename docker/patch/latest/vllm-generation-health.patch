@@ -57,7 +57,7 @@ index 4a85ebfd31e..154ad5e3ed2 100644
  from vllm.utils.async_utils import cancel_task_threadsafe
  from vllm.utils.collection_utils import as_list
  from vllm.v1.engine import EngineCoreRequest, PauseMode
-@@ -1133,6 +1134,32 @@ class AsyncLLM(EngineClient):
+@@ -1133,6 +1134,29 @@ class AsyncLLM(EngineClient):
          if self.errored:
              raise self.dead_error
  
@@ -65,11 +65,8 @@ index 4a85ebfd31e..154ad5e3ed2 100644
 +        """Require a scheduler reply when busy, or an inference result when idle."""
 +        async with asyncio.timeout(timeout):
 +            await self.check_health()
-+            loads = await self.get_inflight_queue_diagnostics(0)
-+            if any(
-+                load.get("has_pending_work", False)
-+                or any(queue["num_requests"] for queue in load["queues"])
-+                for load in loads
++            if await self.is_sleeping() or any(
++                await self.engine_core.call_utility_all_async("has_work")
 +            ):
 +                return
 +            request_id = f"healthcheck-{random_uuid()}"

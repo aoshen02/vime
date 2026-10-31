@@ -350,6 +350,9 @@ def run():
                             for speculative in (False, True):
                                 page.locator('[name="pd"]').set_checked(pd)
                                 page.locator('[name="hicache"]').set_checked(hicache)
+                                if hicache:
+                                    page.locator('[name="cpuBytes"]').fill("1073741824")
+                                    page.locator('[name="cpuBytes"]').press("Tab")
                                 page.locator('[name="speculative"]').set_checked(speculative)
                                 expect(page.locator(".serving-scene")).to_be_visible()
                                 expect(page.locator(".combined-pool")).to_have_count(int(not pd))
@@ -472,11 +475,13 @@ def run():
                 page.locator('[data-step="4"]').click()
                 page.locator('[name="pd"]').check()
                 page.locator('[name="hicache"]').check()
+                page.locator('[name="cpuBytes"]').fill("1073741824")
+                page.locator('[name="cpuBytes"]').press("Tab")
                 page.locator('[name="ib"]').fill("mlx5_0")
                 page.locator('[name="ib"]').press("Tab")
                 page.locator('[data-artifact="vllm.yaml"]').click()
                 expect(page.locator("#artifact-code")).to_contain_text('"kv_connector":"MultiConnector"')
-                expect(page.locator("#artifact-code")).to_contain_text('"cpu_to_gpu_ratio":2')
+                expect(page.locator("#artifact-code")).to_contain_text('"cpu_bytes_to_use":1073741824')
                 assert (
                     "SimpleCPUOffloadConnector"
                     not in page.locator("#artifact-code").text_content().split("worker_type: decode")[1]
@@ -527,6 +532,8 @@ def run():
                 page.locator('[data-step="4"]').click()
                 page.locator('[name="pd"]').check()
                 page.locator('[name="hicache"]').check()
+                page.locator('[name="cpuBytes"]').fill("1073741824")
+                page.locator('[name="cpuBytes"]').press("Tab")
                 page.locator("#mobile-preview").click()
                 expect(page.locator(".external-map .sampler")).to_have_count(3)
                 assert page.locator("#mobile-preview-dialog").evaluate("el => el.scrollWidth <= el.clientWidth")

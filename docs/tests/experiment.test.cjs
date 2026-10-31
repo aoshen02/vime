@@ -301,14 +301,16 @@ test('cache, routing replay, and precision settings survive export at the right 
     transport: 'disk',
     r3: true,
     hicache: true,
+    cpuBytes: '1073741824',
     kv: 'fp8',
     precision: 'fp8'
   };
   const files = E.generate(s).files;
+  assert.ok(E.validate({...s, cpuBytes: ''}).errors.some(message => message.includes('explicit CPU byte budget')));
   assert.match(files['serving-reference.sh'], /--enable-return-routed-experts/);
   assert.match(files['serving-reference.sh'], /--enable-prefix-caching/);
   assert.match(files['serving-reference.sh'], /"kv_connector":"SimpleCPUOffloadConnector"/);
-  assert.match(files['serving-reference.sh'], /"cpu_to_gpu_ratio":2/);
+  assert.match(files['serving-reference.sh'], /"cpu_bytes_to_use":1073741824/);
   assert.match(files['serving-reference.sh'], /--kv-cache-dtype fp8_e4m3/);
   assert.match(files['experiment.sh'], /--update-weight-transport disk/);
   assert.match(files['experiment.sh'], /ROLLOUT_MODEL="\$HF_MODEL-fp8"/);
@@ -318,13 +320,14 @@ test('cache, routing replay, and precision settings survive export at the right 
     rollout: 16,
     pd: true,
     ib: 'mlx5_0',
-    hicache: true
+    hicache: true,
+    cpuBytes: '1073741824'
   });
   assert.match(pd.files['vllm.yaml'], /"kv_connector":"MultiConnector"/);
   assert.match(pd.files['vllm.yaml'], /enable_prefix_caching: true/);
   const decode = pd.files['vllm.yaml'].split('worker_type: decode')[1];
   assert.match(decode, /"kv_connector":"MooncakeConnector"/);
-  assert.doesNotMatch(decode, /SimpleCPUOffloadConnector|cpu_to_gpu_ratio/);
+  assert.doesNotMatch(decode, /SimpleCPUOffloadConnector|cpu_bytes_to_use/);
 });
 
 test('hybrid attention KV and recurrent state export independently to each engine owner', () => {
@@ -422,6 +425,7 @@ test('all eight serving combinations have different PD, cache and decoding struc
   }
   assert.equal(scenes.size, 8);
 });
+
 test('all generated recipe variants are syntactically valid bash', () => {
   let count = 0;
   for (const model of Object.keys(E.models))
@@ -522,7 +526,7 @@ test('exported shell preserves literal user paths and submits the complete confi
     assert.ok(args.includes('--num-layers'));
     assert.ok(!fs.existsSync(path.join(dir, 'PWNED')));
     assert.ok(!fs.existsSync(path.join(dir, 'PWNED2')));
-    assert.ok(!fs.readdirSync(dir).some(n => n.startsWith('.slime-lab.')));
+    assert.ok(!fs.readdirSync(dir).some(n => n.startsWith('.vime-lab.')));
   } finally {
     fs.rmSync(dir, {
       recursive: true,

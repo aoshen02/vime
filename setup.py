@@ -30,7 +30,7 @@ class bdist_wheel(_bdist_wheel):
 
 # Setup configuration
 setup(
-    author="vime Team",
+    author="slime Team",
     name="vime",
     version="0.4.0",
     packages=find_packages(include=["vime*", "vime_plugins*"]),

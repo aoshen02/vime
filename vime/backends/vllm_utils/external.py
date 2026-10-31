@@ -76,15 +76,9 @@ def external_engine_init_kwargs(info: ExternalEngineInfo) -> dict:
 
 
 def get_server_info(url: str, timeout: float = 30.0) -> dict:
-    errors = []
-    for endpoint in ("/server_info?config_format=json", "/server_info", "/get_server_info"):
-        try:
-            response = requests.get(f"{url}{endpoint}", timeout=timeout)
-            response.raise_for_status()
-            return _normalize_server_info(response.json())
-        except Exception as exc:
-            errors.append(f"{endpoint}: {exc}")
-    raise RuntimeError(f"Failed to fetch vLLM server info from {url}: {'; '.join(errors)}")
+    response = requests.get(f"{url}/server_info?config_format=json", timeout=timeout)
+    response.raise_for_status()
+    return _normalize_server_info(response.json())
 
 
 def get_disaggregation_bootstrap_port(kv_transfer_config, *, nixl_port=None, mooncake_port=None):
@@ -112,24 +106,13 @@ def _normalize_server_info(server_info: dict) -> dict:
         for key, value in section.items():
             normalized.setdefault(key, value)
 
-    def find_config_value(config, name):
-        if not isinstance(config, dict):
-            return None
-        if name in config:
-            return config[name]
-        for value in config.values():
-            found = find_config_value(value, name)
-            if found is not None:
-                return found
-        return None
-
-    kv_transfer_config = find_config_value(vllm_config, "kv_transfer_config")
+    kv_transfer_config = vllm_config.get("kv_transfer_config")
     if kv_transfer_config is not None:
         normalized["kv_transfer_config"] = kv_transfer_config
-    weight_transfer_config = find_config_value(vllm_config, "weight_transfer_config")
+    weight_transfer_config = vllm_config.get("weight_transfer_config")
     if weight_transfer_config is not None:
         normalized["weight_transfer_config"] = weight_transfer_config
-    ec_transfer_config = find_config_value(vllm_config, "ec_transfer_config")
+    ec_transfer_config = vllm_config.get("ec_transfer_config")
     if ec_transfer_config is not None:
         normalized["ec_transfer_config"] = ec_transfer_config
     if (

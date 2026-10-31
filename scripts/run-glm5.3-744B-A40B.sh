@@ -170,7 +170,9 @@ VLLM_ARGS=(
    --vllm-config "${VLLM_CONFIG_FILE}"
    --vllm-watchdog-config '{"timeout":3600,"abort_on_timeout":true}'
 
-   # MTP / EAGLE speculative decoding uses the model's own next-token-prediction layer.
+   # MTP / EAGLE speculative decoding using the model's own next-token-prediction
+   # layer (the GLM-5.3 checkpoint ships an MTP layer), so no separate draft model
+   # is needed.
    --vllm-speculative-config '{"method":"mtp","num_speculative_tokens":4}'
 )
 

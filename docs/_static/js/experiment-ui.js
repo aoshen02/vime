@@ -330,6 +330,9 @@
             '拆分推理阶段，适合 prefill 干扰 decode 的场景。')) + toggle('hicache', 'HiCache', t(
             'Reuse repeated prefixes in host RAM. Extra memory and I/O budget.',
             '在主机内存复用重复前缀，需要额外内存与 I/O 预算。')) +
+          (state.hicache ? input('cpuBytes', t('CPU KV cache budget (bytes, required)', 'CPU KV 缓存预算（字节，必填）'),
+            'text', t('Native cpu_bytes_to_use. Choose an absolute budget for this engine; no GPU-memory ratio is inferred.',
+              '原生 cpu_bytes_to_use。请为此引擎选择绝对预算，不推算 GPU 显存比例。'), true) : '') +
           toggle('speculative', 'EAGLE · ' + t('Speculative decoding', '投机采样'), t(
             'Draft several candidates, then verify them together with the target model.',
             '先提出多个候选 token，再由目标模型一起验证。')) +

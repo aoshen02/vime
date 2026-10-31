@@ -111,6 +111,7 @@
     deterministic: false,
     pd: false,
     hicache: false,
+    cpuBytes: '',
     speculative: false,
     draftSource: 'builtin',
     draft: '',
@@ -160,7 +161,7 @@
   };
   const textKeys = ['hf', 'train', 'data', 'save', 'megatron', 'endpoints', 'shared', 'local', 'ib',
     'generate',
-    'reward', 'queueDir', 'queueRun', 'declaration', 'draft'
+    'reward', 'queueDir', 'queueRun', 'declaration', 'draft', 'cpuBytes'
   ];
 
   function sanitize(input) {
@@ -392,9 +393,14 @@
     if (s.sc) notes.push(t(
       'SC selects REINFORCE with GRPO advantages and no standard-deviation normalization. Sampling is fixed to temperature=1, top_p=1, top_k=-1, without penalties, constraints, or streaming.',
       'SC 使用 REINFORCE、GRPO advantage，关闭标准差归一化。采样固定为 temperature=1、top_p=1、top_k=-1，不使用惩罚、约束解码或 streaming。'));
-    if (s.hicache) notes.push(t(
-      'HiCache consumes host RAM as well as GPU cache. The recipe uses a host/device cache ratio of 2; PD enables it on prefill only. Cache reuse is limited by weight-update invalidation.',
-      'HiCache 还会占用主机内存；配方的 host/device cache 比例为 2，PD 时只在 prefill 启用。权重更新后的缓存失效会限制复用收益。'));
+    if (s.hicache) {
+      if (!s.cpuBytes || !Number.isSafeInteger(Number(s.cpuBytes)) || Number(s.cpuBytes) <= 0) errors.push(t(
+        'HiCache requires an explicit CPU byte budget. GPU KV capacity is unknown; no ratio is converted automatically.',
+        'HiCache 需要显式填写 CPU 字节预算。GPU KV 容量未知，不自动换算比例。'));
+      notes.push(t(
+        'HiCache uses the native absolute cpu_bytes_to_use budget; PD enables it on prefill only. This fixed budget is not equivalent to a dynamic host/device ratio. Cache reuse is limited by weight-update invalidation.',
+        'HiCache 使用原生 cpu_bytes_to_use 绝对预算，PD 时仅在 prefill 启用。固定预算不等价于动态 host/device 比例，权重更新后的缓存失效会限制复用收益。'));
+    }
     if (s.deterministic) notes.push(t(
       'Deterministic execution is not cross-engine equality. Install the deterministic vLLM/Megatron stack and remove FlashAttention 3 as documented. Exact GLM-5 alignment has a separate six-layer EP8 regression gate.',
       '确定性执行不等于训推数值相等。按文档安装 deterministic vLLM/Megatron 依赖并移除 FlashAttention 3。GLM-5 精确对齐另有六层 EP8 回归验证。'));
@@ -425,7 +431,7 @@
 
   function kvTransferConfig(s, role) {
     const host = {kv_connector: 'SimpleCPUOffloadConnector', kv_role: 'kv_both',
-      kv_connector_extra_config: {cpu_to_gpu_ratio: 2}};
+      kv_connector_extra_config: {cpu_bytes_to_use: s.cpuBytes ? Number(s.cpuBytes) : null}};
     if (!s.pd) return host;
     const transfer = {kv_connector: 'MooncakeConnector',
       kv_role: role === 'prefill' ? 'kv_producer' : 'kv_consumer',
@@ -486,6 +492,7 @@
       rollout: ['Rollout GPUs', 'Rollout GPU'], prefill: ['Prefill GPUs', 'Prefill GPU'],
       precision: ['Weight precision', '权重精度'], kv: ['Attention KV dtype', 'Attention KV 精度'],
       mambaDtype: ['SSM dtype', 'SSM 精度'],
+      cpuBytes: ['CPU KV budget (bytes)', 'CPU KV 预算（字节）'],
       correction: ['Behavior correction', 'Behavior 修正'], r3: ['R3', 'R3'], sc: ['SC', 'SC'],
       deterministic: ['Deterministic execution', '确定性执行'], cpuAdam: ['CPU Adam', 'CPU Adam'],
       recompute: ['Activation recomputation', '激活重计算'], pd: ['PD', 'PD'], hicache: ['HiCache', 'HiCache'],
@@ -522,7 +529,7 @@
     if (changed('correction')) insights.push(t(
       'For the same illustrative ratio p/q = 0.4/0.1 = 4, TIS with upper bound 2 uses weight 2; ICE-POP outside [0.5, 2] uses 0. This is behavior correction, separate from PPO update clipping. Compare clipping/masking fractions, mismatch and held-out reward.',
       '同一示例 p/q = 0.4/0.1 = 4：TIS 上界 2 时权重为 2；ICE-POP 在 [0.5, 2] 外权重为 0。这是 behavior 修正，与 PPO 更新裁剪独立。比较 clipping/masking 比例、训推差异与独立评估 reward。'));
-    if (['pd', 'prefill', 'hicache', 'speculative', 'draftSource', 'draft', 'specSteps'].some(changed)) insights.push(t(
+    if (['pd', 'prefill', 'hicache', 'cpuBytes', 'speculative', 'draftSource', 'draft', 'specSteps'].some(changed)) insights.push(t(
       'PD separates prefill and decode with cache transfer; HiCache trades host memory and I/O for prefix reuse; EAGLE adds draft work and batch verification. Measure prefill/decode time, cache hit rate, host RAM, spec_accept_rate and spec_accept_length for your workload.',
       'PD 拆分 prefill/decode 并传输缓存；HiCache 用主机内存与 I/O 换取前缀复用；EAGLE 增加草拟与批量验证。按工作负载测量 prefill/decode 耗时、缓存命中率、主机内存、spec_accept_rate 和 spec_accept_length。'));
     if (['cpuAdam', 'recompute', 'nodes', 'rollout', 'response', 'concurrency'].some(changed)) insights.push(t(

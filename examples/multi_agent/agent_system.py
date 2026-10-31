@@ -241,8 +241,8 @@ async def run_agent_system(args, sample):
     input_rollout_id = sample.index
 
     def _emit(samples_list):
-        for emitted_sample in samples_list:
-            emitted_sample.rollout_id = input_rollout_id
+        for s in samples_list:
+            s.rollout_id = input_rollout_id
         return samples_list
 
     problem_statement = sample.prompt

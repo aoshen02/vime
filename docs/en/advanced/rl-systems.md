@@ -126,7 +126,7 @@ $$\Delta t\approx h\,t_{\rm avoided\ prefill}-t_{\rm cache\ IO}-t_{\rm bookkeepi
 
 where $h$ is the reusable-prefix hit rate. A positive hit rate alone does not prove speedup; large transfer cost can dominate. Useful metrics include prefix hit rate, host RAM, cache I/O time, and TTFT.
 
-The lab uses `--vllm-enable-prefix-caching` and a `SimpleCPUOffloadConnector` configured with `cpu_to_gpu_ratio=2`, configuring host cache without an L3 storage service. Under managed PD, it enables HiCache on prefill only, matching the engine builder's behavior. It does not configure decode offload or distributed cache storage. KV represents activations under specific weights; reuse across actor weight updates needs correct invalidation. Measure useful hits within that validity window.
+The lab uses `--vllm-enable-prefix-caching` and a `SimpleCPUOffloadConnector` with an explicitly chosen native `cpu_bytes_to_use` budget, without an L3 storage service. No byte budget is inferred from an unknown GPU KV allocation; a fixed absolute budget is not equivalent to a dynamic host/device ratio. Native `cpu_bytes_to_use_per_rank` is available for explicit per-rank configuration. Under managed PD, it enables HiCache on prefill only, matching the engine builder's behavior. It does not configure decode offload or distributed cache storage. KV represents activations under specific weights; reuse across actor weight updates needs correct invalidation. Measure useful hits within that validity window.
 
 ## Debug before optimizing
 

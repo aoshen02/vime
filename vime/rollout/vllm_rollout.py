@@ -15,8 +15,8 @@ import httpx
 import numpy as np
 from tqdm import tqdm
 
-from vime.backends.vllm_utils.server_control import abort_servers_until_idle, get_live_router_workers
-from vime.data.transport import discard_rollout_group, inherit_queue_context, publish_rollout_async
+from vime.backends.vllm_utils.server_control import get_live_router_workers, set_servers_paused
+from vime.data.transport import discard_rollout_group, publish_rollout_async
 from vime.observability.trace_utils import build_vllm_meta_trace_attrs, trace_function, trace_span
 from vime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, finalize_rollout_groups
 from vime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
@@ -24,7 +24,7 @@ from vime.rollout.sample_hooks import apply_rollout_sample_hooks
 from vime.utils.async_utils import AsyncPacer, run
 from vime.utils.data import Dataset
 from vime.utils.eval_config import EvalDatasetConfig
-from vime.utils.http_utils import get, get_rollout_num_engines, post
+from vime.utils.http_utils import get, get_rollout_num_engines, is_generation_paused_error, post
 from vime.utils.misc import SingletonMeta, load_function
 from vime.utils.processing_utils import (
     build_multimodal_messages,
@@ -268,31 +268,7 @@ def _mm_render_response_to_generate_body(render_data: Any, model: str) -> dict[s
         body.setdefault("model", model)
         return body
 
-    if isinstance(render_data, list) and len(render_data) >= 2:
-        engine_prompts = render_data[1]
-        if not isinstance(engine_prompts, list) or not engine_prompts:
-            raise ValueError("chat/render: expected non-empty engine_prompts list")
-        p = engine_prompts[0]
-        if not isinstance(p, dict):
-            raise ValueError("chat/render: engine_prompts[0] must be a dict")
-        token_ids = p.get("prompt_token_ids") or p.get("token_ids")
-        if not isinstance(token_ids, list) or not token_ids:
-            raise ValueError("chat/render: missing prompt_token_ids / token_ids on engine prompt")
-        body: dict[str, Any] = {"token_ids": [int(x) for x in token_ids], "model": model}
-        if p.get("features") is not None:
-            body["features"] = p["features"]
-        elif isinstance(p.get("multi_modal_data"), dict):
-            try:
-                body["features"] = json.dumps(p["multi_modal_data"], default=str)
-            except TypeError:
-                pass
-        if p.get("cache_salt") is not None:
-            body["cache_salt"] = p["cache_salt"]
-        return body
-
-    raise ValueError(
-        "chat/render: unexpected JSON shape; expected a dict with token_ids or [conversation, engine_prompts] list"
-    )
+    raise ValueError("chat/render: unexpected JSON shape; expected a dict with token_ids")
 
 
 def _find_token_subsequence(haystack: list[int], needle: list[int], start: int = 0) -> int:
@@ -536,11 +512,17 @@ async def _run_request_abortable_generate(
 
 async def _run_server_abort_generate(
     state: GenerateState,
+    sample: Sample,
     generate_call: Awaitable[Sample | list[Sample]],
 ) -> Sample | list[Sample]:
     state.active_server_generations += 1
     try:
         return await generate_call
+    except httpx.HTTPStatusError as error:
+        if not state.aborted or not is_generation_paused_error(error):
+            raise
+        sample.status = Sample.Status.ABORTED
+        return sample
     finally:
         state.active_server_generations -= 1
 
@@ -568,6 +550,10 @@ async def generate_and_rm(
     if evaluation and getattr(args, "use_score_centering", False):
         args = copy.copy(args)
         args.use_score_centering = False
+
+    # Custom generation and sample hooks may return freshly constructed Samples.
+    # Their task authorization and requested configuration belong to the input.
+    from vime.data.transport import inherit_queue_context
 
     queue_input = copy.copy(sample)
     if hasattr(sample, "_queue_lease") or hasattr(sample, "_queue_receipt"):
@@ -602,7 +588,7 @@ async def generate_and_rm(
             if getattr(generate_func, "abort_mode", None) == "request":
                 sample = await _run_request_abortable_generate(state, sample, generate_call)
             else:
-                sample = await _run_server_abort_generate(state, generate_call)
+                sample = await _run_server_abort_generate(state, sample, generate_call)
     finally:
         state.semaphore.release()
 
@@ -622,7 +608,7 @@ async def generate_and_rm(
         samples_need_reward = [sample for sample in samples if sample.reward is None]
         with trace_span(samples_need_reward, "reward_model"):
             rewards = await batched_async_rm(args, samples_need_reward)
-        for sample, reward in zip(samples_need_reward, rewards, strict=True):
+        for sample, reward in zip(samples_need_reward, rewards, strict=False):
             sample.reward = reward
         return samples
     else:
@@ -689,7 +675,7 @@ async def generate_and_rm_group(
     if not state.aborted and args.group_rm:
         with trace_span(group, "group_reward_model"):
             rewards = await batched_async_rm(args, group)
-        for sample, reward in zip(group, rewards, strict=True):
+        for sample, reward in zip(group, rewards, strict=False):
             sample.reward = reward
 
     return group
@@ -707,6 +693,7 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     for task in cancellable_tasks:
         task.cancel()
 
+    urls = []
     if state.active_server_generations:
         router_url = f"http://{args.vllm_router_ip}:{args.vllm_router_port}"
         if args.rollout_external:
@@ -716,7 +703,7 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
             # returns. Prune dead URLs now so abort/drain itself can finish.
             workers = await get_live_router_workers(router_url, timeout=args.rollout_health_check_timeout)
         urls = [worker["url"] for worker in workers]
-        await abort_servers_until_idle(urls)
+        await set_servers_paused(urls, paused=True)
 
     await asyncio.gather(*cancellable_tasks, return_exceptions=True)
 
@@ -738,6 +725,8 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
                     sample.metadata["start_rollout_id"] = rollout_id
             aborted_samples.append(group)
             count += len(group)
+
+    await set_servers_paused(urls, paused=False)
 
     if args.partial_rollout:
         logger.info(f"Collected {count} partial samples into the data buffer")
@@ -1001,7 +990,9 @@ async def eval_rollout_single_dataset(
         if do_print:
             logged_sample = sample[0] if isinstance(sample, list) else sample
             logger.info(
-                f"eval_rollout_single_dataset example data: {[str(logged_sample.prompt) + logged_sample.response]} reward={logged_sample.reward}"
+                "eval_rollout_single_dataset example data: "
+                f"{[str(logged_sample.prompt) + logged_sample.response]} "
+                f"reward={logged_sample.reward}"
             )
             do_print = False
         if isinstance(sample, list):

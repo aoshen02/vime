@@ -178,8 +178,6 @@ def _score_centering_metadata(choice, token_ids, *, top_p, top_k):
 
 def _decode_score_centering_response_stdlib(content, k):
     """Compact score data in the HTTP worker before Ray serialization; k=0 selects top-p."""
-    import json
-
     output = json.loads(content)
     choice = output["choices"][0]
     meta = output.setdefault("meta_info", {})

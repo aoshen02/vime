@@ -118,7 +118,6 @@ VLLM_ARGS=(
    --rollout-num-gpus-per-engine 32
    --vllm-gpu-memory-utilization 0.7
    --vllm-data-parallel-size 4
-   --vllm-max-num-seqs 12
 
    # mtp
    --vllm-enable-expert-parallel

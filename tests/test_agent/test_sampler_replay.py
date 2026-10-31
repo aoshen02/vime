@@ -48,6 +48,8 @@ def capture(top_p, sc, r3, missing=None):
             payload = await request.json()
             assert payload["token_ids"] == [51, 52, 53]
             params = payload["sampling_params"]
+            assert "return_sampling_mask" not in params
+            assert "return_sampling_mask_logprobs" not in params
             assert params["top_p"] == top_p and params.get("top_k", -1) == -1
             assert (params.get("routed_experts_prompt_start") is not None) == r3
             ids = [101, 201, 102, 202]
@@ -63,10 +65,8 @@ def capture(top_p, sc, r3, missing=None):
                 "finish_reason": "stop",
             }
             if top_p < 1:
-                assert params["return_sampling_mask"]
                 choice["sampling_mask"] = [ids[:2], ids[2:]]
                 if sc:
-                    assert params["return_sampling_mask_logprobs"]
                     choice["sampling_mask_logprobs"] = [logps[:2].tolist(), logps[2:].tolist()]
             elif sc:
                 assert params["logprobs"] == 3

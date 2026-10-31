@@ -52,21 +52,32 @@ def test_isolated_server_launch_waits_for_node_zero(monkeypatch, node_rank):
     from vime.backends.vllm_utils import vllm_engine
 
     executable = "/path with spaces/serve-python.sh"
+    engine = vllm_engine.VLLMEngine(Namespace(vllm_python_executable=executable), rank=node_rank)
+    engine.node_rank = node_rank
+    engine.server_host = "[::1]"
+    engine.server_port = 15000
+    engine._register_to_router = Mock()
     process = Mock()
     process.poll.return_value = None
     launch = Mock(return_value=process)
     health = Mock()
     monkeypatch.setattr(vllm_engine, "launch_server_subprocess", launch)
     monkeypatch.setattr(vllm_engine, "_wait_server_healthy", health)
+    monkeypatch.setattr(vllm_engine, "vllm_model_config_overrides", lambda path, overrides: overrides)
     monkeypatch.setattr(vllm_engine, "prepare_server_environment", lambda environ: None)
     monkeypatch.setattr(vllm_engine, "_build_subprocess_env", lambda args: {"CUDA_VISIBLE_DEVICES": "2"})
     monkeypatch.setattr(
         vllm_engine.multiprocessing, "Process", Mock(side_effect=AssertionError("wrong Python environment"))
     )
-    args = {"model": "/checkpoint", "host": "[::1]", "port": 15000, "node_rank": node_rank}
-    result = vllm_engine.launch_server_process({**args, "_args": Namespace(vllm_python_executable=executable)})
-    assert result is process
-    launch.assert_called_once_with(executable, {**args, "host": "::1"}, environ={"CUDA_VISIBLE_DEVICES": "2"})
+    args = {"model": "/checkpoint", "host": "[::1]", "port": 15000, "node_rank": node_rank, "_args": engine.args}
+    engine._init_normal(args)
+    assert engine.process is process
+    launch.assert_called_once_with(
+        executable,
+        {key: value for key, value in {**args, "host": "::1"}.items() if not key.startswith("_")},
+        environ={"CUDA_VISIBLE_DEVICES": "2"},
+    )
+    engine._register_to_router.assert_called_once_with(args)
     if node_rank == 0:
         assert health.call_args.kwargs["base_url"] == "http://[::1]:15000"
         assert health.call_args.kwargs["is_process_alive"]()
@@ -79,6 +90,12 @@ def test_isolated_server_launch_waits_for_node_zero(monkeypatch, node_rank):
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+
+import _unit_stubs
+
+_unit_stubs.install_vllm_cli_stubs()
 
 
 def _write_yaml(data: dict) -> str:
@@ -92,8 +109,7 @@ class TestVllmConfigUpdateWeights:
     @pytest.mark.parametrize("first_model", ["regular", "pd", "epd"])
     @pytest.mark.parametrize("second_model", ["regular", "pd", "epd"])
     def test_models_starting_concurrently_use_disjoint_ports(self, monkeypatch, first_model, second_model):
-        from vime.backends.vllm_utils import deployment, disaggregation
-        from vime.backends.vllm_utils.engine_group import ServerGroup
+        from vime.backends.vllm_utils import deployment, engine_group
         from vime.backends.vllm_utils.vllm_config import ModelConfig, ServerGroupConfig, VllmConfig
 
         layouts = {
@@ -114,40 +130,59 @@ class TestVllmConfigUpdateWeights:
                 for name, layout in (("actor", first_model), ("ref", second_model))
             ]
         )
-        allocated = []
+        engines = []
 
-        def start_engines(self, port_cursors=None):
-            port = (port_cursors or {}).get(0, 15000)
-            allocated.append(port)
+        def create_engine(*args, **kwargs):
             engine = Mock()
-            engine.get_url.remote.return_value = f"http://127.0.0.1:{port}"
-            self.all_engines = [engine for _ in self.all_engines]
-            return [f"init-{port}"], {0: port + 100}
+            engine._get_current_node_ip_and_free_port.remote.side_effect = lambda start_port=10000, consecutive=1: (
+                "127.0.0.1",
+                start_port,
+            )
+            engine.get_url.remote.side_effect = (
+                lambda: f"http://127.0.0.1:{engine.init.remote.call_args.kwargs['port']}"
+            )
+            engines.append(engine)
+            return engine
 
-        monkeypatch.setattr(ServerGroup, "start_engines", start_engines)
+        actor = Mock()
+        actor.options.return_value.remote.side_effect = create_engine
+        monkeypatch.setattr(engine_group.ray, "remote", lambda cls: actor)
+        monkeypatch.setattr(engine_group.ray, "get", lambda refs: refs)
+        monkeypatch.setattr(engine_group, "PlacementGroupSchedulingStrategy", lambda **kwargs: None)
         monkeypatch.setattr(deployment, "resolve_vllm_config", lambda _args: config)
-        monkeypatch.setattr(deployment, "_start_router", lambda *_args, **_kwargs: ("127.0.0.1", 3456, None))
-        monkeypatch.setattr(deployment, "get_host_info", lambda: (None, "127.0.0.1"))
-        monkeypatch.setattr(deployment, "find_available_port", lambda _port: 3456)
-        monkeypatch.setattr(disaggregation.ray, "get", lambda refs: refs)
+        monkeypatch.setattr(
+            deployment, "_start_router", lambda args, **kwargs: ("127.0.0.1", 3456 + int(kwargs["force_new"]), None)
+        )
         args = Namespace(
             rollout_external=False,
+            rollout_num_gpus=8,
             rollout_num_gpus_per_engine=1,
             num_gpus_per_node=8,
+            vllm_dp_size=1,
             debug_train_only=False,
             debug_rollout_only=False,
-            colocate=False,
+            colocate=True,
             actor_num_nodes=1,
             actor_num_gpus_per_node=8,
-            offload_rollout=False,
+            offload_rollout=True,
             hf_checkpoint="/tmp/hf",
         )
 
-        servers, _ = deployment.start_rollout_servers(args, pg=(None, list(range(8)), list(range(8))))
+        servers, init_handles = deployment.start_rollout_servers(args, pg=(None, list(range(8)), list(range(8))))
 
         assert list(servers) == ["actor", "ref"]
-        assert len(allocated) == len(layouts[first_model]) + len(layouts[second_model])
-        assert len(allocated) == len(set(allocated))
+        assert len(engines) == 8
+        assert len(init_handles) == 8 - (first_model == "epd") - (second_model == "epd")
+        reserved = set()
+        for engine in engines:
+            ports = engine.init.remote.call_args.kwargs
+            dist_port = int(ports["dist_init_addr"].rsplit(":", 1)[1])
+            requested = [ports["port"], ports["nccl_port"], *range(dist_port, dist_port + 30 + args.vllm_dp_size)]
+            if "disaggregation_bootstrap_port" in ports:
+                requested.append(ports["disaggregation_bootstrap_port"])
+            assert len(requested) == len(set(requested))
+            assert reserved.isdisjoint(requested), f"Reused ports: {reserved.intersection(requested)}"
+            reserved.update(requested)
 
     @pytest.mark.parametrize("update_weights,level", [(True, 2), (False, 1)])
     @pytest.mark.parametrize("recover", [False, True])

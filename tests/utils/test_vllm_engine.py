@@ -323,7 +323,7 @@ def test_compute_server_args_applies_worker_type_and_bootstrap_port(vllm_args):
         disaggregation_bootstrap_port=12345,
     )
     assert sa_prefill["kv_transfer_config"] == {
-        "kv_connector": "NixlConnector",
+        "kv_connector": "MooncakeConnector",
         "kv_role": "kv_producer",
     }
 
@@ -336,7 +336,7 @@ def test_compute_server_args_applies_worker_type_and_bootstrap_port(vllm_args):
         worker_type="decode",
     )
     assert sa_decode["kv_transfer_config"] == {
-        "kv_connector": "NixlConnector",
+        "kv_connector": "MooncakeConnector",
         "kv_role": "kv_consumer",
     }
 
@@ -722,14 +722,12 @@ def test_finish_weight_update_commits_version(vllm_engine, monkeypatch):
 
     assert vllm_engine.finish_weight_update(weight_version="42") == {"done": True}
     assert calls == [("finish_weight_update", {"weight_version": "42"})]
-    assert vllm_engine._weight_version == "42"
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("status_code", [200, 400, 500])
-def test_finish_weight_update_http_result_controls_version(vllm_engine, monkeypatch, status_code):
+def test_finish_weight_update_propagates_http_result(vllm_engine, monkeypatch, status_code):
     calls = []
-    vllm_engine._weight_version = "41"
 
     def fake_post(url, *, json, timeout):
         calls.append((url, json, timeout))
@@ -738,11 +736,9 @@ def test_finish_weight_update_http_result_controls_version(vllm_engine, monkeypa
     monkeypatch.setattr(mod.requests, "post", fake_post)
     if status_code == 200:
         assert vllm_engine.finish_weight_update(weight_version="42") == {"done": True}
-        assert vllm_engine._weight_version == "42"
     else:
         with pytest.raises(requests.exceptions.HTTPError):
             vllm_engine.finish_weight_update(weight_version="42")
-        assert vllm_engine._weight_version == "41"
     assert calls == [("http://127.0.0.1:8765/finish_weight_update", {"weight_version": "42"}, None)]
 
 
@@ -755,7 +751,6 @@ def test_update_weights_posts_ipc_payload(vllm_engine, monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(vllm_engine, "_make_request", fake_post)
-    assert vllm_engine._weight_version is None
 
     vllm_engine.update_weights(
         {
@@ -776,7 +771,6 @@ def test_update_weights_posts_ipc_payload(vllm_engine, monkeypatch):
     assert sent["shapes"] == [[2], [1]]
     assert sent["tensor_sizes"] == [4, 4]
     assert "packed" not in sent
-    assert vllm_engine._weight_version is None
 
 
 @pytest.mark.unit
@@ -814,20 +808,16 @@ def test_update_weights_serializes_rank_local_payloads(vllm_engine, monkeypatch)
 
 
 @pytest.mark.unit
-def test_update_weights_does_not_advance_version_on_failure(vllm_engine, monkeypatch):
-    """Chunk POST failure must not modify the engine's committed version cache."""
-
+def test_update_weights_propagates_failure(vllm_engine, monkeypatch):
     def fake_post_fail(endpoint: str, payload: dict) -> dict:
         raise RuntimeError("simulated POST failure")
 
     monkeypatch.setattr(vllm_engine, "_make_request", fake_post_fail)
 
-    vllm_engine._weight_version = "old"
     with pytest.raises(RuntimeError, match="simulated POST failure"):
         vllm_engine.update_weights(
             {"names": [], "dtype_names": [], "shapes": [], "ipc_handles": {}, "tensor_sizes": []}
         )
-    assert vllm_engine._weight_version == "old"
 
 
 @pytest.mark.unit
@@ -839,7 +829,6 @@ def test_get_weight_version_reads_vllm_weight_info(vllm_engine, monkeypatch):
     )
 
     assert vllm_engine.get_weight_version() == "7"
-    assert vllm_engine._weight_version == "7"
 
 
 @pytest.mark.unit
@@ -851,11 +840,10 @@ def test_get_weight_version_preserves_uninitialized_none(vllm_engine, monkeypatc
     )
 
     assert vllm_engine.get_weight_version() is None
-    assert vllm_engine._weight_version is None
 
 
 @pytest.mark.unit
-def test_set_weight_version_updates_vllm_and_local_cache(vllm_engine, monkeypatch):
+def test_set_weight_version_updates_vllm(vllm_engine, monkeypatch):
     calls: list[tuple] = []
 
     def fake_post(endpoint: str, payload: dict):
@@ -866,14 +854,12 @@ def test_set_weight_version_updates_vllm_and_local_cache(vllm_engine, monkeypatc
 
     assert vllm_engine.set_weight_version("9") == {"success": True}
     assert calls == [("update_weight_version", {"new_version": "9"})]
-    assert vllm_engine._weight_version == "9"
 
 
 @pytest.mark.unit
 def test_get_weight_version_worker_rank_returns_none_without_raise(vllm_engine):
     """Worker ranks short-circuit (matches the class-wide idiom)."""
     vllm_engine.node_rank = 1
-    vllm_engine._weight_version = None
     assert vllm_engine.get_weight_version() is None
 
 
@@ -905,7 +891,6 @@ def test_update_weights_from_distributed_posts_update_weights_without_checkpoint
     assert info["shapes"] == [[2, 2]]
     assert info["packed"] is True
     assert "is_checkpoint_format" not in info
-    assert vllm_engine._weight_version is None
 
 
 @pytest.mark.unit
@@ -917,22 +902,26 @@ def test_update_weights_from_distributed_posts_update_weights_without_checkpoint
         ("[2001:db8::1]", "[2001:db8::1]"),
     ],
 )
-def test_init_formats_server_and_router_hosts_for_urls(vllm_engine, monkeypatch, host, expected_host):
+@pytest.mark.parametrize("use_args_router", [False, True])
+def test_init_formats_server_and_router_hosts_for_urls(vllm_engine, monkeypatch, host, expected_host, use_args_router):
     server_args = {}
     monkeypatch.setattr(vllm_engine, "_init_external", lambda args, **kwargs: server_args.update(args))
+    vllm_engine.args.vllm_router_ip = host
+    vllm_engine.args.vllm_router_port = 30000
 
     vllm_engine.init(
         dist_init_addr="127.0.0.1:29500",
         port=8765,
         nccl_port=None,
         host=host,
-        router_ip=host,
-        router_port=30000,
+        router_ip=None if use_args_router else host,
+        router_port=None if use_args_router else 30000,
     )
 
     assert server_args["host"] == expected_host
     assert vllm_engine.server_host == expected_host
     assert vllm_engine.router_ip == expected_host
+    assert vllm_engine.router_port == 30000
     assert vllm_engine.get_url() == f"http://{expected_host}:8765"
 
 
@@ -1084,7 +1073,8 @@ def test_resume_memory_occupation_returns_none_for_unsupported_tags(vllm_engine,
 
 
 @pytest.mark.unit
-def test_release_memory_occupation_keeps_requests_during_sleep(vllm_engine, monkeypatch):
+@pytest.mark.parametrize("node_rank", [0, 1])
+def test_release_memory_occupation_keeps_requests_during_sleep(vllm_engine, monkeypatch, node_rank):
     calls: list[str] = []
 
     def fake_post(url, *, params=None, timeout=30, json=None):
@@ -1095,14 +1085,18 @@ def test_release_memory_occupation_keeps_requests_during_sleep(vllm_engine, monk
         return _MockResponse(json_data={"ok": True, "sleep_mode": True})
 
     vllm_engine.args.vllm_enable_sleep_mode = False
+    vllm_engine.node_rank = node_rank
     monkeypatch.setattr(mod.requests, "post", fake_post)
 
-    assert vllm_engine.release_memory_occupation(level=2) == {"ok": True, "sleep_mode": True}
-    assert calls == ["http://127.0.0.1:8765/sleep"]
+    assert vllm_engine.release_memory_occupation(level=2) == (
+        {"ok": True, "sleep_mode": True} if node_rank == 0 else None
+    )
+    assert calls == (["http://127.0.0.1:8765/sleep"] if node_rank == 0 else [])
 
 
 @pytest.mark.unit
-def test_resume_memory_occupation_posts_wake_even_when_sleep_disabled(vllm_engine, monkeypatch):
+@pytest.mark.parametrize("node_rank", [0, 1])
+def test_resume_memory_occupation_posts_wake_even_when_sleep_disabled(vllm_engine, monkeypatch, node_rank):
     seen: list[tuple] = []
 
     def fake_post(url, *, params=None, timeout=30, json=None):
@@ -1110,10 +1104,11 @@ def test_resume_memory_occupation_posts_wake_even_when_sleep_disabled(vllm_engin
         return _MockResponse(json_data={"ok": True, "sleep_mode": True})
 
     vllm_engine.args.vllm_enable_sleep_mode = False
+    vllm_engine.node_rank = node_rank
     monkeypatch.setattr(mod.requests, "post", fake_post)
 
-    assert vllm_engine.resume_memory_occupation() == {"ok": True, "sleep_mode": True}
-    assert seen == [("http://127.0.0.1:8765/wake_up", None, 30, None)]
+    assert vllm_engine.resume_memory_occupation() == ({"ok": True, "sleep_mode": True} if node_rank == 0 else None)
+    assert seen == ([("http://127.0.0.1:8765/wake_up", None, 30, None)] if node_rank == 0 else [])
 
 
 @pytest.mark.unit
@@ -1157,7 +1152,6 @@ def test_update_weights_from_disk_posts_collective_rpc(vllm_engine, monkeypatch)
     assert seen[0][3]["method"] == "reload_weights"
     assert seen[1][0] == "http://127.0.0.1:8765/update_weight_version"
     assert seen[1][3] == {"new_version": "8"}
-    assert vllm_engine._weight_version == "8"
 
 
 @pytest.mark.unit
@@ -1204,7 +1198,6 @@ def test_pipeline_rl_worker_rank_does_not_send_control_requests(vllm_engine, mon
 def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
     vllm_engine.args.update_weight_local_checkpoint_dir = "/local/checkpoint"
     vllm_engine.args.update_weight_disk_dir = "/shared/checkpoints"
-    vllm_engine._weight_version = "old"
     seen = []
 
     def fake_post(url, *, json=None):
@@ -1227,7 +1220,6 @@ def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
             },
         ),
     ]
-    assert vllm_engine._weight_version == "old"
 
 
 @pytest.mark.unit
@@ -1235,7 +1227,8 @@ def test_pull_weights_posts_collective_rpc(vllm_engine, monkeypatch):
 def test_disk_update_does_not_advance_version_on_failure(vllm_engine, monkeypatch, operation):
     vllm_engine.args.update_weight_local_checkpoint_dir = "/local/checkpoint"
     vllm_engine.args.update_weight_disk_dir = "/shared/checkpoints"
-    vllm_engine._weight_version = "old"
+    set_version = Mock()
+    monkeypatch.setattr(vllm_engine, "set_weight_version", set_version)
 
     def fake_post(url, *, json=None):
         del url, json
@@ -1248,7 +1241,7 @@ def test_disk_update_does_not_advance_version_on_failure(vllm_engine, monkeypatc
             vllm_engine.pull_weights(8)
         else:
             vllm_engine.update_weights_from_disk("/local/checkpoint", weight_version="8")
-    assert vllm_engine._weight_version == "old"
+    set_version.assert_not_called()
 
 
 @pytest.mark.unit

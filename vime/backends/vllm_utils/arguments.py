@@ -12,31 +12,40 @@ from vime.utils.http_utils import _wrap_ipv6
 logger = logging.getLogger(__name__)
 
 
+# TODO: use all vllm router arguments with `--vllm-router` prefix
 def add_vllm_router_arguments(parser):
+    """
+    Add arguments to the parser for the vLLM router.
+    """
     parser.add_argument(
         "--vllm-router-ip",
         type=str,
         default=None,
-        help="IP address of the vllm router",
+        help="IP address of the vLLM router",
     )
     parser.add_argument(
         "--vllm-router-port",
         type=int,
         default=None,
-        help="Port of the vllm router",
+        help="Port of the vLLM router",
     )
     parser.add_argument(
         "--vllm-router-request-timeout-secs",
         type=int,
         default=14400,
-        help="Timeout for requests to the vllm router in seconds",
+        help="Timeout for requests to the vLLM router in seconds",
     )
     RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
-    parser.set_defaults(router_log_level="warning")
+    # Keep driver logs quiet by default while allowing --router-log-level to
+    # expose router dispatch and retry details when needed.
+    parser.set_defaults(router_log_level="warning", router_kv_connector="mooncake")
     return parser
 
 
 def add_vllm_arguments(parser):
+    """
+    Add arguments to the parser for the vLLM server.
+    """
     parser = add_vllm_router_arguments(parser)
     parser.set_defaults(router_balance_abs_threshold=10, router_balance_rel_threshold=1.2)
     parser.add_argument("--vllm-server-concurrency", type=int, default=512)

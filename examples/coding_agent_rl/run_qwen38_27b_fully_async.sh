@@ -119,7 +119,7 @@ if [[ -n ${MAX_RUNNING_REQUESTS:-} ]]; then
 fi
 if [[ ${ENABLE_HICACHE:-1} == 1 ]]; then
     VLLM_CAPACITY_ARGS+=(--vllm-kv-transfer-config
-        "{\"kv_connector\":\"SimpleCPUOffloadConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"cpu_to_gpu_ratio\":${HICACHE_RATIO:-2}}}")
+        "{\"kv_connector\":\"SimpleCPUOffloadConnector\",\"kv_role\":\"kv_both\",\"kv_connector_extra_config\":{\"cpu_bytes_to_use\":${HICACHE_CPU_BYTES_TO_USE:?Set an explicit native CPU byte budget or use ENABLE_HICACHE=0}}}")
 fi
 TRACKING_ARGS=()
 CHECKPOINT_ARGS=()

@@ -24,6 +24,7 @@ echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 source "/root/vime/scripts/models/qwen3-4B-Instruct-2507.sh"
 
+
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-4B-Instruct-2507
    --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist
@@ -54,7 +55,7 @@ RM_ARGS=(
 
 EVAL_ARGS=(
    # --eval-interval 20
-   # --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
+   # --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    # --n-samples-per-eval-prompt 16
    # --eval-max-response-len 131072
    # --eval-top-p 1
@@ -71,13 +72,15 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
 
+   # --micro-batch-size 1
    --use-dynamic-batch-size
    --log-probs-chunk-size 1024
    --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
-   --advantage-estimator grpo
+   --advantage-estimator grpo                        # Base advantage estimator (can be ppo, grpo, etc.)
+
    # OPD Configuration
    --use-opd                                          # Enable on-policy distillation
    --opd-type megatron                                # Use Megatron forward for teacher
@@ -105,7 +108,7 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    #--use-wandb
-   # --wandb-project vime-opd
+   # --wandb-project vime-dev
    # --wandb-group qwen3-8B-opd-megatron
    # --wandb-key ${WANDB_KEY}
 )
@@ -114,6 +117,7 @@ VLLM_ARGS=(
    --rollout-num-gpus-per-engine 1
    --vllm-gpu-memory-utilization 0.4
 )
+
 
 MISC_ARGS=(
    --attention-dropout 0.0
@@ -124,8 +128,13 @@ MISC_ARGS=(
    --make-vocab-size-divisible-by 128
 )
 
+
+
+
+# launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -156,7 +165,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${MISC_ARGS[@]} \
    ${RM_ARGS[@]}
 
-#### clear after training
+
+
+####clear after training
 sleep 3
 ray stop --force
 pkill -9 ray

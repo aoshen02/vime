@@ -29,6 +29,7 @@ import sys
 import types
 from collections.abc import Iterable
 from contextlib import contextmanager
+from importlib.machinery import ModuleSpec
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -36,7 +37,7 @@ from unittest.mock import MagicMock
 def real_module_available(name: str) -> bool:
     """True when the real package is importable and should not be shadowed."""
     if name in sys.modules:
-        return True
+        return isinstance(getattr(sys.modules[name], "__spec__", None), ModuleSpec)
     try:
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError):
@@ -123,6 +124,12 @@ def install_vllm_router_stub() -> None:
                 type=str,
                 default="cache_aware",
                 choices=["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash"],
+            )
+            parser.add_argument(
+                f"--{prefix}kv-connector",
+                dest=f"{dprefix}kv_connector",
+                default="nixl",
+                choices=["nixl", "mooncake"],
             )
             parser.add_argument(
                 f"--{prefix}request-timeout-secs",

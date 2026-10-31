@@ -181,18 +181,13 @@ def test_dp_worker_health_prunes_slots_and_drains_base_servers(monkeypatch, fail
         rpc_calls.append(("POST", url))
         assert payload == {}
 
-    async def get(url, **kwargs):
-        rpc_calls.append(("GET", url))
-        return {"server_load": 0}
-
     client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     monkeypatch.setattr(server_control.httpx, "AsyncClient", lambda **kwargs: client)
     monkeypatch.setattr(server_control, "post", post)
-    monkeypatch.setattr(server_control, "get", get)
 
     async def prune_and_drain():
         live = await server_control.get_live_router_workers("http://router", timeout=0.1)
-        await server_control.abort_servers_until_idle([worker["url"] for worker in live])
+        await server_control.set_servers_paused([worker["url"] for worker in live], paused=True)
         return live
 
     live = asyncio.run(prune_and_drain())
@@ -203,10 +198,7 @@ def test_dp_worker_health_prunes_slots_and_drains_base_servers(monkeypatch, fail
         if worker["worker_type"] == failed_type
     )
     live_bases = [base for worker_type, base in bases.items() if worker_type != failed_type] + ["http://plain:7000"]
-    assert sorted(rpc_calls) == sorted(
-        [("POST", f"{base}/abort_requests") for base in live_bases]
-        + [("GET", f"{base}/load?include_inflight=true&inflight_limit=100") for base in live_bases]
-    )
+    assert sorted(rpc_calls) == sorted([("POST", f"{base}/pause?mode=abort&clear_cache=false") for base in live_bases])
 
 
 def test_abort_dp_worker_list_drains_each_base_once_without_health_pruning(monkeypatch):
@@ -217,17 +209,9 @@ def test_abort_dp_worker_list_drains_each_base_once_without_health_pruning(monke
     async def post(url, payload, **kwargs):
         calls.append(("POST", url))
 
-    async def get(url, **kwargs):
-        calls.append(("GET", url))
-        return {"server_load": 0}
-
     monkeypatch.setattr(server_control, "post", post)
-    monkeypatch.setattr(server_control, "get", get)
-    asyncio.run(server_control.abort_servers_until_idle(urls))
-    assert sorted(calls) == sorted(
-        [("POST", f"{base}/abort_requests") for base in bases]
-        + [("GET", f"{base}/load?include_inflight=true&inflight_limit=100") for base in bases]
-    )
+    asyncio.run(server_control.set_servers_paused(urls, paused=True))
+    assert sorted(calls) == sorted([("POST", f"{base}/pause?mode=abort&clear_cache=false") for base in bases])
 
 
 @pytest.mark.parametrize("suffix", ["", "@0", "@+1", "@01"])
@@ -238,14 +222,9 @@ def test_abort_dp_worker_uses_ipv6_base_endpoint(monkeypatch, suffix):
     async def post(url, payload, **kwargs):
         calls.append(url)
 
-    async def get(url, **kwargs):
-        calls.append(url)
-        return {"server_load": 0}
-
     monkeypatch.setattr(server_control, "post", post)
-    monkeypatch.setattr(server_control, "get", get)
-    asyncio.run(server_control.abort_server_until_idle(base_url + suffix))
-    assert calls == [f"{base_url}/abort_requests", f"{base_url}/load?include_inflight=true&inflight_limit=100"]
+    asyncio.run(server_control.set_servers_paused([base_url + suffix], paused=True))
+    assert calls == [f"{base_url}/pause?mode=abort&clear_cache=false"]
 
 
 @pytest.mark.parametrize("shutdown_fails", [False, True])
@@ -371,107 +350,46 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
 
 
 @pytest.mark.unit
-def test_abort_uses_supported_load_sections_and_waits_for_pd_transfers(monkeypatch):
-    abort_calls = 0
-    load_calls = 0
+@pytest.mark.parametrize("paused", [False, True])
+def test_server_control_waits_for_native_completion(monkeypatch, paused):
+    completed = []
+    endpoint = "pause?mode=abort&clear_cache=false" if paused else "resume"
 
     async def post(url, payload, **kwargs):
-        nonlocal abort_calls
-        assert url == "http://engine/abort_requests"
-        assert payload == {}
-        abort_calls += 1
-
-    async def get(url, **kwargs):
-        nonlocal load_calls
-        assert url == "http://engine/load?include_inflight=true&inflight_limit=100"
-        load_calls += 1
-        return {
-            "server_load": 0,
-            "inflight": [
-                {
-                    "data_parallel_rank": 0,
-                    "has_pending_work": load_calls == 1,
-                    "queues": [{"name": "kv_holding_waiting", "num_requests": int(load_calls == 1)}],
-                }
-            ],
-        }
+        assert url == f"http://engine/{endpoint}"
+        assert payload == {} and kwargs == {"max_retries": 1, "timeout": 1}
+        await asyncio.sleep(0)
+        completed.append(url)
 
     monkeypatch.setattr(server_control, "post", post)
-    monkeypatch.setattr(server_control, "get", get)
-    asyncio.run(server_control.abort_server_until_idle("http://engine", retry_interval=0, timeout=0.1))
-    assert abort_calls == load_calls == 2
+    asyncio.run(server_control.set_servers_paused(["http://engine"], paused=paused, timeout=1))
+    assert completed == [f"http://engine/{endpoint}"]
 
 
 @pytest.mark.unit
-def test_num_requests_includes_all_dp_queues():
-    load = {
-        "server_load": 3,
-        "inflight": [
-            {
-                "data_parallel_rank": 0,
-                "queues": [{"name": "running", "num_requests": 2, "requests": ["a", "b"]}],
-            },
-            {
-                "data_parallel_rank": 1,
-                "queues": [{"name": "waiting", "num_requests": 3, "requests": ["c", "d", "e"]}],
-            },
-        ],
-    }
+def test_server_control_surfaces_partial_failure(monkeypatch):
+    completed = []
 
-    assert server_control.num_requests_from_load(load) == 5
-    assert server_control.non_idle_request_details(load) == [
-        {
-            "data_parallel_rank": 0,
-            "queue": "running",
-            "num_requests": 2,
-            "requests": ["a", "b"],
-        },
-        {
-            "data_parallel_rank": 1,
-            "queue": "waiting",
-            "num_requests": 3,
-            "requests": ["c", "d", "e"],
-        },
-    ]
+    async def post(url, payload, **kwargs):
+        if url.startswith("http://bad/"):
+            raise OSError("engine unreachable")
+        await asyncio.sleep(0)
+        completed.append(url)
+
+    monkeypatch.setattr(server_control, "post", post)
+    with pytest.raises(RuntimeError, match="bad.*engine unreachable"):
+        asyncio.run(server_control.set_servers_paused(["http://good", "http://bad"], paused=True))
+    assert completed == ["http://good/pause?mode=abort&clear_cache=false"]
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("pending_work", [False, True])
-def test_num_requests_includes_connector_activity(pending_work):
-    load = {"server_load": 0, "inflight": [{"queues": [], "has_pending_work": pending_work}]}
-    assert server_control.num_requests_from_load(load) == int(pending_work)
+def test_server_control_timeout_is_not_success(monkeypatch):
+    async def post(url, payload, **kwargs):
+        await asyncio.Event().wait()
 
-
-@pytest.mark.unit
-def test_abort_retries_load_failure_until_idle(monkeypatch):
-    calls = 0
-
-    async def abort_once(url, request_timeout):
-        return None
-
-    async def get_load(url, request_timeout):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OSError("temporary control-plane failure")
-        return {"server_load": 0, "inflight": []}
-
-    monkeypatch.setattr(server_control, "_abort_server_once", abort_once)
-    monkeypatch.setattr(server_control, "_get_server_load", get_load)
-
-    asyncio.run(server_control.abort_server_until_idle("http://engine", retry_interval=0, timeout=1))
-    assert calls == 2
-
-
-@pytest.mark.unit
-def test_abort_servers_surfaces_partial_failure(monkeypatch):
-    async def abort(url, **kwargs):
-        if url.endswith("bad"):
-            raise TimeoutError("not idle")
-
-    monkeypatch.setattr(server_control, "abort_server_until_idle", abort)
-    with pytest.raises(RuntimeError, match="bad.*not idle"):
-        asyncio.run(server_control.abort_servers_until_idle(["http://good", "http://bad"]))
+    monkeypatch.setattr(server_control, "post", post)
+    with pytest.raises(RuntimeError, match="Failed to pause"):
+        asyncio.run(server_control.set_servers_paused(["http://engine"], paused=True, timeout=0.01))
 
 
 @pytest.mark.unit
@@ -498,6 +416,24 @@ def test_http_post_forwards_timeout_and_closes_response():
 
     assert asyncio.run(http_utils._post(Client(), "http://engine", {}, max_retries=1, timeout=2.5)) == {"ok": True}
     assert response.closed
+
+
+@pytest.mark.unit
+def test_paused_generation_is_not_retried(monkeypatch):
+    calls = []
+
+    async def respond(request):
+        calls.append(request)
+        return httpx.Response(503, json={"error": {"message": "Generation is paused. Please retry after it resumes."}})
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(httpx.HTTPStatusError) as caught:
+                await http_utils._post(client, "http://engine/inference/v1/generate", {})
+            assert http_utils.is_generation_paused_error(caught.value)
+
+    asyncio.run(exercise())
+    assert len(calls) == 1
 
 
 @pytest.mark.unit

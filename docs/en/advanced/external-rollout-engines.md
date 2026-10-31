@@ -28,7 +28,6 @@ VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10090 ...
 VLLM_SERVER_DEV_MODE=1 vllm serve /path/to/model --port 10091 ...
 ```
 
-
 Then pass those addresses to the training job:
 
 ```bash

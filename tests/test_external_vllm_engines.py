@@ -158,7 +158,7 @@ def test_start_external_rollout_servers_exposes_parallel_configs(monkeypatch, wo
     assert init_handles[0]["router_port"] == 30000
 
 
-def test_get_server_info_flattens_nested_vllm_transfer_configs(monkeypatch):
+def test_get_server_info_flattens_vllm_config(monkeypatch):
     def fake_get(url, timeout):
         assert url == "http://host1:10090/server_info?config_format=json"
         assert timeout == 30.0
@@ -166,13 +166,11 @@ def test_get_server_info_flattens_nested_vllm_transfer_configs(monkeypatch):
             {
                 "vllm_config": {
                     "parallel_config": {"tensor_parallel_size": 2},
-                    "model_config": {
-                        "kv_transfer_config": {
-                            "kv_connector": "NixlConnector",
-                            "kv_role": "kv_producer",
-                        },
-                        "weight_transfer_config": {"backend": "nccl"},
+                    "kv_transfer_config": {
+                        "kv_connector": "NixlConnector",
+                        "kv_role": "kv_producer",
                     },
+                    "weight_transfer_config": {"backend": "nccl"},
                 },
                 "vllm_env": {"VLLM_NIXL_SIDE_CHANNEL_PORT": 12090},
             }

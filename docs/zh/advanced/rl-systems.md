@@ -123,7 +123,7 @@ $$\Delta t\approx h\,t_{\rm avoided\ prefill}-t_{\rm cache\ IO}-t_{\rm bookkeepi
 
 $h$ 为可复用 prefix 的命中率。命中率大于零也不证明加速，因为传输可能更贵。应测量 prefix 命中率、主机内存、cache I/O 时间和 TTFT。
 
-向导使用 `--vllm-enable-prefix-caching`，并配置 `cpu_to_gpu_ratio=2` 的 `SimpleCPUOffloadConnector`，只配置主机缓存，不创建 L3 存储服务。vime 管理的 PD 仅在 prefill 开启，与当前 engine builder 一致；不自动配置 decode offload 或分布式存储。KV 是特定权重下的激活，跨 actor 权重更新必须正确失效。因此要在有效权重窗口内测量可用命中。
+向导使用 `--vllm-enable-prefix-caching`，并为 `SimpleCPUOffloadConnector` 显式指定原生 `cpu_bytes_to_use` 字节预算，不创建 L3 存储服务。GPU KV 分配未知时不推算容量，固定绝对预算不等价于动态 host/device 比例；需要逐 rank 配置时可显式使用原生 `cpu_bytes_to_use_per_rank`。vime 管理的 PD 仅在 prefill 开启，与当前 engine builder 一致；不自动配置 decode offload 或分布式存储。KV 是特定权重下的激活，跨 actor 权重更新必须正确失效。因此要在有效权重窗口内测量可用命中。
 
 ## 先 Debug，再优化
 

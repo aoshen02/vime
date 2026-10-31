@@ -30,7 +30,7 @@ def _start_router(
     else:
         router_port = args.vllm_router_port
 
-    from vllm_router.router_args import RouterArgs
+    from vllm_router.launch_router import RouterArgs
 
     from vime.utils.http_utils import run_router
 
@@ -42,6 +42,10 @@ def _start_router(
 
     if has_pd_disaggregation:
         router_args.vllm_pd_disaggregation = True
+        if router_args.kv_connector == "mooncake":
+            router_args.intra_node_data_parallel_size = (
+                getattr(args, "vllm_dp_size", None) or args.vllm_data_parallel_size or 1
+            )
 
     # RDMA transfer timeouts are transient and should not mark decode workers dead.
     router_args.disable_circuit_breaker = True
@@ -91,6 +95,9 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
     servers: dict[str, RolloutServer] = {}
     encoder_metadata: dict[str, tuple[str, list[str]]] = {}
     pending_init_handles: list[Any] = []
+    # Models initialize concurrently, so ports allocated to earlier models may
+    # not be bound yet. Carry the cursors across every model and group.
+    port_cursors: dict[int, int] = {}
 
     for model_idx, model_config in enumerate(config.models):
         model_config.resolve(args)
@@ -105,23 +112,33 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
             args.vllm_router_port = router_port
 
         if model_config.has_encoder_disaggregation:
-            server_groups, init_handles, encoder_endpoints = start_epd_server_groups(
+            server_groups, init_handles, port_cursors, encoder_urls = start_epd_server_groups(
                 model_config,
                 placement,
                 router_ip,
                 router_port,
+                port_cursors,
             )
             encoder_metadata[model_config.name] = (
                 server_groups[0].model_path,
-                encoder_endpoints,
+                encoder_urls,
             )
-        else:
-            server_groups, init_handles = start_pd_server_groups(
+        elif model_config.has_pd_disaggregation:
+            server_groups, init_handles, port_cursors = start_pd_server_groups(
                 model_config,
                 placement,
                 router_ip,
                 router_port,
+                port_cursors,
             )
+        else:
+            server_groups = []
+            init_handles = []
+            for group_config in model_config.server_groups:
+                group = placement.create(group_config, router_ip, router_port)
+                handles, port_cursors = group.start_engines(port_cursors)
+                init_handles.extend(handles)
+                server_groups.append(group)
 
         pending_init_handles.extend(init_handles)
 

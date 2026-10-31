@@ -169,11 +169,11 @@ class _ShardedHTTPTransport(httpx.AsyncBaseTransport):
                 verify=tls,
                 trust_env=False,
                 limits=httpx.Limits(
-                    max_connections=size + (index < remainder),
-                    max_keepalive_connections=size + (index < remainder),
+                    max_connections=size + (i < remainder),
+                    max_keepalive_connections=size + (i < remainder),
                 ),
             )
-            for index in range(count)
+            for i in range(count)
         ]
         self._next = 0
 
@@ -184,6 +184,14 @@ class _ShardedHTTPTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self):
         await asyncio.gather(*(transport.aclose() for transport in self._transports))
+
+
+def is_generation_paused_error(error: Exception) -> bool:
+    return (
+        isinstance(error, httpx.HTTPStatusError)
+        and error.response.status_code == 503
+        and "Generation is paused" in error.response.text
+    )
 
 
 async def _post(client, url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
@@ -207,6 +215,8 @@ async def _post(client, url, payload, max_retries=60, headers=None, timeout=None
             except json.JSONDecodeError:
                 output = content.decode() if isinstance(content, bytes) else content
         except Exception as e:
+            if is_generation_paused_error(e):
+                raise
             retry_count += 1
 
             if isinstance(e, httpx.HTTPStatusError):
@@ -350,6 +360,8 @@ async def post(url, payload, max_retries=60, headers=None, timeout=None, score_c
                 )
                 return await obj_ref
         except Exception as e:
+            if is_generation_paused_error(e):
+                raise
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
