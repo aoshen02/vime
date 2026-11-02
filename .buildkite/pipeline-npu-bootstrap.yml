@@ -1,0 +1,8 @@
+steps:
+  - label: ":pipeline:init"
+    if: >-
+      build.pull_request.base_branch == "ascend" ||
+      (build.pull_request.id == null && build.branch == "ascend")
+    command: buildkite-agent pipeline upload .buildkite/pipeline-npu.yaml
+    agents:
+      queue: small_cpu_queue_premerge

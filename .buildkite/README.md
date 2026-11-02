@@ -73,6 +73,16 @@ pod spec).
 GPU jobs use `vllm/vime:latest`. Rebuild and publish that image before validating
 Dockerfile or vLLM patch changes.
 
+## NPU bootstrap scope
+
+The NPU test configuration lives on `ascend`, not `main`. Use the contents of
+[`pipeline-npu-bootstrap.yml`](./pipeline-npu-bootstrap.yml) as the NPU pipeline's
+Buildkite Settings → Steps YAML. Do not replace the bootstrap with an unconditional
+upload of that file: it must evaluate the condition before reading any
+branch-local NPU configuration. It allows PRs targeting `ascend` and non-PR builds
+of `ascend`; other builds skip the NPU upload step. Ascend test commands and GPU CI
+are unchanged. Committing this file alone does not update the shared pipeline.
+
 ## Keeping it in sync
 
 The test lists live in `pipeline.yml` and `gpu_suites.py`; update both together
