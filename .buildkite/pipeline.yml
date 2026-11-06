@@ -1,315 +1,97 @@
-# Buildkite CI for vime — always-on (CPU) jobs.
-#
-# This pipeline runs the always-on CPU jobs plus a manual block-step gate for
-# the GPU suites. See .buildkite/README.md for one-time setup.
-#
-# Notes that explain the otherwise-cryptic bits below:
-#   * Steps run inside containers (python:3.11 for the CPU suites) because the
-#     elastic-stack agent host's python is not pinned to 3.11.
-#   * $$PWD is escaped so the buildkite-agent expands it at run time instead of
-#     Buildkite interpolating it (to empty) at pipeline-upload time.
-#   * GIT_CONFIG_PARAMETERS marks the host-owned checkout as a safe directory so
-#     git (invoked by pre-commit) doesn't abort with "dubious ownership" when
-#     the container runs as root over a tree owned by the buildkite-agent user.
-#   * Each non-gate step depends_on the pre-commit gate, so a failing lint run
-#     skips the heavier test steps.
-#   * Test files are listed one per line on purpose: with `set -e` the run stops
-#     at the first failure and the log names it.
-
-steps:
-  - label: ":lint-roller: pre-commit"
-    key: pre-commit
-    agents:
-      queue: small_cpu_queue_premerge
-    timeout_in_minutes: 15
-    retry:
-      automatic:
-        - exit_status: -1  # agent lost (fresh instance failed to boot)
-          limit: 2
-        - exit_status: 1  # transient package-index failure
-          limit: 2
-        - exit_status: 3  # pre-commit environment install failure
-          limit: 2
-    command: |
-      docker run --rm \
-        -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
-        -v "$$PWD:/workspace" -w /workspace \
-        python:3.11 bash -c '
-          set -euo pipefail
-          pip install -q pre-commit
-          pre-commit run --all-files --show-diff-on-failure --color=always
-        '
-
-  - label: ":books: docs lab generator"
-    key: docs-lab-generator
-    depends_on: pre-commit
-    agents:
-      queue: small_cpu_queue_premerge
-    timeout_in_minutes: 10
-    command: |
-      docker run --rm -v "$$PWD:/workspace" -w /workspace \
-        node:22-bookworm bash -c '
-          set -euo pipefail
-          apt-get update
-          apt-get install -y python3 python-is-python3
-          node --test docs/tests/experiment.test.cjs
-        '
-
-  - label: ":books: docs lab browser"
-    key: docs-lab-browser
-    depends_on: pre-commit
-    agents:
-      queue: medium_cpu_queue_premerge
-    timeout_in_minutes: 30
-    command: |
-      docker run --rm --shm-size=1g -e VIME_DOC_LAYOUT=prefix \
-        -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
-        -v "$$PWD:/workspace" -w /workspace python:3.13-bookworm bash -c '
-          set -euo pipefail
-          apt-get update
-          apt-get install -y pandoc fonts-noto-cjk
-          pip install -r docs/requirements.txt -r docs/tests/requirements.txt
-          python -m playwright install --with-deps chromium
-          bash docs/build.sh en -W --keep-going
-          bash docs/build.sh zh -W --keep-going
-          python docs/tests/test_browser.py
-        '
-
-  - label: ":python: plugin contracts & CPU tests"
-    key: plugin-contracts
-    depends_on: pre-commit
-    agents:
-      queue: medium_cpu_queue_premerge
-    timeout_in_minutes: 30
-    retry:
-      automatic:
-        - exit_status: -1
-          limit: 2
-        - exit_status: 1
-          limit: 2
-    command: |
-      # GLOO/TP_SOCKET_IFNAME=lo: the torch.distributed tests (e.g.
-      # test_metric_report_dist) rendezvous over localhost; inside a
-      # bridge-network container gloo sometimes picks the wrong interface and
-      # hangs until the step times out (build #4). Pin it to loopback.
-      docker run --rm --shm-size=2g \
-        -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
-        -e GLOO_SOCKET_IFNAME=lo -e TP_SOCKET_IFNAME=lo \
-        -v "$$PWD:/workspace" -w /workspace \
-        python:3.11 bash -c '
-          set -euo pipefail
-          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q pytest numpy msgspec==0.22.0 packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil wandb
-          pip install -q --upgrade --no-deps --only-binary=straw-queue "straw-queue==0.1.6"
-          pip install -q -e . --no-deps
-          python tests/test_megatron_argument_validation.py
-          python tests/test_megatron_tokenizer_init.py
-          python tests/test_megatron_grad_sync_memory.py
-          python tests/test_qwen3_5_native_weights.py
-          python tests/test_megatron_checkpoint.py
-          python tests/test_optional_straw.py
-          python tests/test_value_temperature.py
-          python tests/test_docs_consistency.py
-          python tests/test_placement_group.py
-          python tests/test_external_vllm_engines.py
-          python tests/plugin_contracts/test_plugin_rollout_contracts.py
-          python tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
-          python tests/plugin_contracts/test_plugin_path_loading_contracts.py
-          python tests/plugin_contracts/test_plugin_generate_contracts.py
-          python tests/test_rm_deepscaler.py
-          python tests/test_rm_f1.py
-          python tests/test_rm_gpqa.py
-          python tests/test_rm_math.py
-          python tests/test_rm_math_dapo.py
-          python tests/test_dp_schedule.py
-          python tests/test_cp_utils.py
-          python tests/test_metric_report.py
-          python tests/test_metric_report_dist.py
-          python tests/test_loss_cp_invariance.py
-          python tests/test_sample.py
-          python tests/test_cispo_loss.py
-          python tests/test_logprob_response_spans.py
-          python tests/test_empty_colocated_weight_bucket.py
-          python tests/test_expert_routing.py
-          python tests/test_reloadable_process_group_memory_check.py
-          python tests/test_ppo_logprob_entropy.py
-          python tests/utils/test_hf_checkpoint_saver.py
-        '
-
-  - label: ":robot_face: agent adapter tests"
-    key: agent-adapter
-    depends_on: pre-commit
-    agents:
-      queue: small_cpu_queue_premerge
-    timeout_in_minutes: 30
-    retry:
-      automatic:
-        - exit_status: -1
-          limit: 2
-        - exit_status: 1
-          limit: 2
-    command: |
-      docker run --rm --shm-size=2g \
-        -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
-        -v "$$PWD:/workspace" -w /workspace \
-        python:3.11 bash -c '
-          set -euo pipefail
-          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q pytest numpy msgspec==0.22.0 packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard wandb
-          pip install -q openai openai-agents anthropic
-          pip install -q -e . --no-deps
-          python tests/test_agent/test_adapters.py
-          python tests/test_agent/test_harness.py
-          python tests/test_agent/test_trajectory_manager_branching.py
-          python tests/test_agent/test_agent_rollout_cpu.py
-          python tests/test_agent/test_token_contract.py
-          python tests/test_agent/test_prompt_continuity.py
-          python tests/test_agent/test_sampler_replay.py
-          python tests/test_grouped_rewards.py
-          python tests/test_agent/test_responses.py
-          python tests/test_agent/test_sandbox_exec_and_wait.py
-          python tests/test_agent/test_sunabako_provider.py
-          python tests/test_agent/test_e2e_asset_cache.py
-          python tests/test_agent/test_e2e_grpo_contract.py
-          python tests/test_agent/test_swe_workspace_diff.py
-        '
-
-  - label: ":pytest: synchronized upstream CPU tests"
-    key: upstream-sync-cpu
-    depends_on: pre-commit
-    agents:
-      queue: medium_cpu_queue_premerge
-    timeout_in_minutes: 45
-    retry:
-      automatic:
-        - exit_status: -1
-          limit: 2
-        - exit_status: 1
-          limit: 2
-    command: |
-      docker run --rm --network host --ipc=host \
-        -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
-        -e GLOO_SOCKET_IFNAME=lo -e TP_SOCKET_IFNAME=lo \
-        -v "$$PWD:/workspace" -w /workspace \
-        "$${VIME_CI_IMAGE:-vllm/vime:latest}" bash -lc '
-          set -euo pipefail
-          pip install -q --upgrade --no-deps --only-binary=straw-queue "straw-queue==0.1.6" --break-system-packages
-          pip install -q -e . --no-deps --break-system-packages
-          for test_file in \
-            tests/test_advantage_whiten_cp.py \
-            tests/test_accelerator.py \
-            tests/test_block_fp8_zero_block.py \
-            tests/test_cuda_stack_offload.py \
-            tests/test_deep_ep_tms_patch.py \
-            tests/test_distributed_rollout.py \
-            tests/test_disk_delta_recovery.py \
-            tests/test_disk_delta_checkpoint_index.py \
-            tests/test_discounted_returns.py \
-            tests/test_eval_config.py \
-            tests/test_filter_long_prompt.py \
-            tests/test_fully_async_rollout.py \
-            tests/test_queue_sample_codec.py \
-            tests/test_rollout_straw_transport.py \
-            tests/test_routed_experts_disk_layout.py \
-            tests/test_straw_fully_async_recovery.py \
-            tests/test_straw_r3.py \
-            tests/test_glm52_layerwise_comparison.py \
-            tests/test_glm5_indexer_q_norm.py \
-            tests/test_glm5_indexer_short_context.py \
-            tests/test_glm5_next_ops.py \
-            tests/test_hf_to_megatron.py \
-            tests/test_layerwise_alignment.py \
-            tests/test_model_provider_freeze.py \
-            tests/test_policy_loss.py \
-            tests/test_pipeline_rl.py \
-            tests/test_ppo_kl_metric.py \
-            tests/test_published_payload_retry.py \
-            tests/test_rollout_metadata_index.py \
-            tests/test_score_centering.py \
-            tests/test_score_centering_transport.py \
-            tests/test_process_rollout_data.py \
-            tests/test_qwen3_5_vl_native.py \
-            tests/test_qwen3_linear_attention_cu_seqlens.py \
-            tests/test_read_file_slicing.py \
-            tests/test_reference_top_p_replay.py \
-            tests/test_reloadable_process_group_world.py \
-            tests/test_reloadable_process_group_megatron_bindings.py \
-            tests/test_rollout_buffer_order.py \
-            tests/test_rollout_data_utils.py \
-            tests/test_rollout_metrics.py \
-            tests/test_rollout_sample_hooks.py \
-            tests/test_vllm_rollout.py \
-            tests/test_agent/test_sandbox_exec_and_wait.py \
-            tests/test_stateless_adam.py \
-            tests/test_training_recovery.py \
-            tests/test_rollout_manager_recovery.py \
-            tests/test_tau_bench_token_delta.py \
-            tests/test_train_data_utils.py \
-            tests/test_update_weight_factory.py \
-            tests/test_vllm_server_control.py \
-            tests/test_vllm_runtime.py \
-            tests/observability/test_trace_utils.py; do
-            python -m pytest "$$test_file"
-          done
-        '
-
-  - label: ":pytest: utils tests"
-    key: utils
-    depends_on: pre-commit
-    agents:
-      queue: medium_cpu_queue_premerge
-    timeout_in_minutes: 45
-    retry:
-      automatic:
-        - exit_status: -1
-          limit: 2
-        - exit_status: 1
-          limit: 2
-    command: |
-      docker run --rm --network host --ipc=host \
-        -e GIT_CONFIG_PARAMETERS="'safe.directory=/workspace'" \
-        -v "$$PWD:/workspace" -w /workspace \
-        python:3.11 bash -lc '
-          set -euo pipefail
-          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q pytest numpy msgspec==0.22.0 packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors transformers cloudpickle blake3 xxhash zstandard psutil pydantic wandb
-          pip install -q -e . --no-deps
-          python -m pytest tests/utils
-        '
-
-  # The GPU suites are launched from this manual gate: unblocking presents a
-  # multi-select of suites, and the follow-up step uploads only the selected
-  # ones (see gpu_suites.py). `blocked_state: passed` keeps the build green
-  # when nobody needs GPU suites on a PR.
-  - block: ":rocket: Run GPU test suites?"
-    key: gpu-gate
-    depends_on: pre-commit
-    blocked_state: passed
-    prompt: "Select the suites to run."
-    fields:
-      - select: "GPU suites"
-        key: gpu-suites
-        multiple: true
-        required: true
-        options:
-          - label: "run-ci-short — 4 GPU, 2 tests"
-            value: short
-          - label: "run-ci-vllm-config — 8 GPU, 4 tests"
-            value: vllm-config
-          - label: "run-ci-megatron — up to 8 GPU"
-            value: megatron
-          - label: "run-ci-vime-customized — 1–8 GPU, 5 tests"
-            value: vime-customized
-          - label: "run-ci-precision — 8 GPU, 1 test"
-            value: precision
-          - label: "run-ci-ckpt — 8 GPU, 5 runs"
-            value: ckpt
-
-  - label: ":pipeline: upload selected GPU suites"
-    key: gpu-suites-upload
-    depends_on: gpu-gate
-    agents:
-      queue: small_cpu_queue_premerge
-    timeout_in_minutes: 10
-    command: python3 .buildkite/gpu_suites.py | buildkite-agent pipeline upload
+{
+  "steps": [
+    {
+      "label": "R3 checkpoint storage validation: DeepEP + FP8 (not final PR candidate)",
+      "command": "PR=\"${BUILDKITE_PULL_REQUEST:-false}\"\n[ \"$PR\" = \"false\" ] && PR=\"non-pr\"\nexport GITHUB_COMMIT_NAME=\"${BUILDKITE_COMMIT}_${PR}\"\nulimit -n \"$(ulimit -Hn)\"\necho \"RLIMIT_NOFILE=$(ulimit -Sn)/$(ulimit -Hn)\"\npip install -e . --no-deps --break-system-packages\npython tests/ci/gpu_lock_exec.py --count 8 -- python tests/test_qwen3_30B_A3B_r3.py",
+      "agents": {
+        "queue": "mithril-h100-pool"
+      },
+      "timeout_in_minutes": 360,
+      "retry": {
+        "automatic": [
+          {
+            "exit_status": -1,
+            "limit": 2
+          },
+          {
+            "exit_status": 1,
+            "limit": 2
+          }
+        ]
+      },
+      "plugins": [
+        {
+          "kubernetes": {
+            "podSpec": {
+              "containers": [
+                {
+                  "image": "vllm/vime@sha256:316f66e4aed0c71fcd4c710083d8808d946cced22393289406e76ba184b9b82d",
+                  "resources": {
+                    "limits": {
+                      "nvidia.com/gpu": 8
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "name": "devshm",
+                      "mountPath": "/dev/shm"
+                    },
+                    {
+                      "name": "hf-cache",
+                      "mountPath": "/root/.cache/huggingface"
+                    }
+                  ],
+                  "env": [
+                    {
+                      "name": "HF_HOME",
+                      "value": "/root/.cache/huggingface"
+                    },
+                    {
+                      "name": "VIME_TEST_ENABLE_INFINITE_RUN",
+                      "value": "false"
+                    },
+                    {
+                      "name": "VIME_TEST_USE_DEEPEP",
+                      "value": "1"
+                    },
+                    {
+                      "name": "VIME_TEST_USE_FP8_ROLLOUT",
+                      "value": "1"
+                    },
+                    {
+                      "name": "VIME_TEST_ENABLE_EVAL",
+                      "value": "0"
+                    },
+                    {
+                      "name": "NCCL_NVLS_ENABLE",
+                      "value": "0"
+                    }
+                  ]
+                }
+              ],
+              "nodeSelector": {
+                "node.kubernetes.io/instance-type": "gpu-h100-sxm"
+              },
+              "volumes": [
+                {
+                  "name": "devshm",
+                  "emptyDir": {
+                    "medium": "Memory"
+                  }
+                },
+                {
+                  "name": "hf-cache",
+                  "hostPath": {
+                    "path": "/mnt/hf-cache",
+                    "type": "DirectoryOrCreate"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
 
